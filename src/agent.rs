@@ -11,6 +11,8 @@ use crate::config;
 use crate::profiler::{AgentProfiler, tool_signature};
 use crate::tools::{ToolResult, builtin_tools, invoke};
 
+const SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+
 pub struct AgentRunner {
     client: SparkClient,
     cwd: PathBuf,
@@ -793,6 +795,7 @@ impl TraceWriter {
                 "max_turns": metadata.max_turns,
                 "compact_after_chars": metadata.compact_after_chars,
                 "max_input_chars": metadata.max_input_chars,
+                "context_window_tokens": SPARK_CONTEXT_WINDOW_TOKENS,
             }))?,
         )?;
         eprintln!("trace: {}", dir.display());

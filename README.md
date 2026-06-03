@@ -184,6 +184,7 @@ Use `--profile` for a compact summary after a prompt:
 - request count,
 - max/average input size,
 - exact request-size sequence,
+- approximate token sequence and percent of Spark's 128k context window,
 - response text size,
 - tool count by tool,
 - tool result and failure counts by tool,
@@ -196,6 +197,8 @@ Use `--profile` for a compact summary after a prompt:
 Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`.
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
+
+Token counts are approximate and use a simple 4 chars/token estimate. They are profiling signals for comparing harness behavior, not authoritative tokenizer output.
 
 Profile summaries keep compaction reports compact by replacing raw compaction payloads with `raw_summary` metadata. The full raw compaction response remains in the separate `*-compaction.json` trace file.
 

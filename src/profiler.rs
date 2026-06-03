@@ -5,6 +5,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+const SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AgentProfiler {
     requests: usize,
@@ -155,8 +157,12 @@ impl AgentProfiler {
             "fallback_compactions": self.fallback_compactions,
             "readonly_tool_cache_hits": self.readonly_tool_cache_hits,
             "max_input_chars": self.max_input_chars,
+            "approx_context_window_tokens": SPARK_CONTEXT_WINDOW_TOKENS,
+            "max_approx_input_tokens": approx_token_count_from_chars(self.max_input_chars),
+            "max_context_window_pct": context_window_pct(self.max_input_chars),
             "average_input_chars": if self.requests == 0 { 0 } else { self.total_input_chars / self.requests },
             "input_chars_by_request": self.input_chars_by_request,
+            "approx_input_tokens_by_request": self.input_chars_by_request.iter().copied().map(approx_token_count_from_chars).collect::<Vec<_>>(),
             "response_text_chars": self.response_text_chars,
             "errors": self.errors,
             "compaction_reports": self.compaction_reports,
@@ -169,7 +175,7 @@ impl AgentProfiler {
 
     pub fn status_line(&self) -> String {
         format!(
-            "profile: requests={}, tool_calls={}, tool_failures={}, repeated_calls={}, consecutive_duplicates={}, readonly_cache_hits={}, compactions={} (remote={}, fallback={}), max_input_chars={}",
+            "profile: requests={}, tool_calls={}, tool_failures={}, repeated_calls={}, consecutive_duplicates={}, readonly_cache_hits={}, compactions={} (remote={}, fallback={}), max_input_chars={}, max_approx_input_tokens={} ({:.1}% of 128k)",
             self.requests,
             self.tool_calls,
             self.tool_failures,
@@ -179,7 +185,9 @@ impl AgentProfiler {
             self.compactions,
             self.remote_compactions,
             self.fallback_compactions,
-            self.max_input_chars
+            self.max_input_chars,
+            approx_token_count_from_chars(self.max_input_chars),
+            context_window_pct(self.max_input_chars)
         )
     }
 
@@ -303,6 +311,15 @@ impl AgentProfiler {
                 "message": "Request input approached the default max-input guard. Long-context profiling should inspect the exact input_chars_by_request sequence and compaction timing.",
                 "max_input_chars": self.max_input_chars,
             }));
+        } else if approx_token_count_from_chars(self.max_input_chars) >= 100_000 {
+            diagnostics.push(json!({
+                "level": "warning",
+                "kind": "near_context_window",
+                "message": "Estimated request tokens approached Spark's 128k context window. Inspect approx_input_tokens_by_request and compaction timing.",
+                "max_approx_input_tokens": approx_token_count_from_chars(self.max_input_chars),
+                "context_window_tokens": SPARK_CONTEXT_WINDOW_TOKENS,
+                "max_context_window_pct": context_window_pct(self.max_input_chars),
+            }));
         } else if self.max_input_chars >= 160_000 && self.compactions == 0 {
             diagnostics.push(json!({
                 "level": "info",
@@ -314,6 +331,15 @@ impl AgentProfiler {
 
         diagnostics
     }
+}
+
+fn approx_token_count_from_chars(chars: usize) -> usize {
+    chars.div_ceil(4)
+}
+
+fn context_window_pct(chars: usize) -> f64 {
+    let approx_tokens = approx_token_count_from_chars(chars) as f64;
+    (approx_tokens / SPARK_CONTEXT_WINDOW_TOKENS as f64) * 100.0
 }
 
 pub fn tool_signature(tool_name: &str, args: &Value) -> String {
@@ -708,6 +734,9 @@ mod tests {
         assert_eq!(summary["requests"], 2);
         assert_eq!(summary["max_input_chars"], 240);
         assert_eq!(summary["input_chars_by_request"], json!([120, 240]));
+        assert_eq!(summary["approx_context_window_tokens"], 128_000);
+        assert_eq!(summary["max_approx_input_tokens"], 60);
+        assert_eq!(summary["approx_input_tokens_by_request"], json!([30, 60]));
         assert_eq!(summary["errors"][0]["turn"], 2);
         assert_eq!(summary["recent_signals"][0]["kind"], "error");
         assert_eq!(summary["diagnostics"][0]["kind"], "request_failure");
@@ -736,6 +765,31 @@ mod tests {
         );
         assert!(
             diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "near_input_guard")
+        );
+    }
+
+    #[test]
+    fn profiler_diagnoses_near_context_window_before_input_guard() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_request(400_000);
+
+        let diagnostics = profiler
+            .to_json()
+            .get("diagnostics")
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("diagnostics");
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic["kind"] == "near_context_window"
+                && diagnostic["max_approx_input_tokens"] == 100_000
+                && diagnostic["context_window_tokens"] == 128_000
+        }));
+        assert!(
+            !diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic["kind"] == "near_input_guard")
         );
