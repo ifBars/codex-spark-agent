@@ -462,6 +462,10 @@ fn tool_result_is_truncated(data: &Value) -> bool {
         || data.get("stderr_truncated").and_then(Value::as_bool) == Some(true)
 }
 
+fn tool_result_timed_out(data: &Value) -> bool {
+    data.get("timed_out").and_then(Value::as_bool) == Some(true)
+}
+
 fn tool_truncation_fields(data: &Value) -> Value {
     let mut fields = Map::new();
     copy_field(data, &mut fields, "truncated");
@@ -573,6 +577,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                         "error": result.error,
                         "cached_observation": result.cached_observation,
                         "truncated": tool_result_is_truncated(&result.data),
+                        "timed_out": tool_result_timed_out(&result.data),
                     }),
                 );
             }
@@ -836,6 +841,13 @@ fn format_tool_results(results: &[Value]) -> String {
                 .unwrap_or(false)
             {
                 suffix.push("truncated");
+            }
+            if result
+                .get("timed_out")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                suffix.push("timeout");
             }
             let suffix = if suffix.is_empty() {
                 String::new()
@@ -1644,7 +1656,8 @@ mod tests {
                     "duration_ms": 9,
                     "output_chars": 512,
                     "cached_observation": true,
-                    "truncated": false
+                    "truncated": false,
+                    "timed_out": true
                 }],
                 "compactions": [{"method": "responses_compact", "before_chars": 200000, "after_chars": 90000}],
                 "errors": [{"stage": "response", "error": "stream ended without response.completed"}]
@@ -1657,7 +1670,7 @@ mod tests {
         assert!(output.contains("diagnostics: tool_failures"));
         assert!(output.contains("turn 1: input=120000 chars (~30000 tok, 23.4%)"));
         assert!(output.contains("calls=[fs.read]"));
-        assert!(output.contains("results=[fs.read:ok 9ms 512 chars cached]"));
+        assert!(output.contains("results=[fs.read:ok 9ms 512 chars cached+timeout]"));
         assert!(output.contains("compactions=[responses_compact 200000->90000]"));
         assert!(output.contains("errors=[response:stream ended without response.completed]"));
     }
@@ -1699,7 +1712,7 @@ mod tests {
                 "duration_ms": 12_345,
                 "result": {
                     "ok": false,
-                    "data": {"code": 1, "stdout_truncated": true, "stdout_chars": 40000},
+                    "data": {"code": 1, "stdout_truncated": true, "stdout_chars": 40000, "timed_out": true},
                     "error": "command failed"
                 }
             }))
@@ -1741,6 +1754,7 @@ mod tests {
         );
         assert_eq!(summary["timeline"][0]["tool_results"][0]["ok"], false);
         assert_eq!(summary["timeline"][0]["tool_results"][0]["truncated"], true);
+        assert_eq!(summary["timeline"][0]["tool_results"][0]["timed_out"], true);
         assert_eq!(summary["timeline"][0]["tool_results"][1]["tool"], "fs.read");
         assert_eq!(
             summary["timeline"][0]["tool_results"][1]["cached_observation"],

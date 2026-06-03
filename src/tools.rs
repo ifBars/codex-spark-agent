@@ -522,13 +522,29 @@ async fn cmd_exec(cwd: &Path, args: Value) -> Result<ToolResult> {
         command.current_dir(&workdir);
         command
     };
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let output = tokio::time::timeout(
+    command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    let output = match tokio::time::timeout(
         std::time::Duration::from_millis(timeout_ms),
         command.output(),
     )
     .await
-    .context("command timed out")??;
+    {
+        Ok(output) => output?,
+        Err(_) => {
+            return Ok(ToolResult {
+                ok: false,
+                data: json!({
+                    "timed_out": true,
+                    "timeout_ms": timeout_ms,
+                    "workdir": display_rel(cwd, &workdir),
+                }),
+                error: Some(format!("command timed out after {timeout_ms}ms")),
+            });
+        }
+    };
 
     let stdout = bounded_text(
         String::from_utf8_lossy(&output.stdout).as_ref(),
@@ -913,6 +929,34 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(&path).expect("read unchanged"),
             "one\ntwo\nthree\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn cmd_exec_reports_timeouts_as_tool_failures() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = if cfg!(target_os = "windows") {
+            "Start-Sleep -Milliseconds 1000"
+        } else {
+            "sleep 1"
+        };
+
+        let result = cmd_exec(
+            dir.path(),
+            json!({
+                "command": command,
+                "timeout_ms": 100
+            }),
+        )
+        .await
+        .expect("cmd result");
+
+        assert!(!result.ok);
+        assert_eq!(result.data["timed_out"], true);
+        assert_eq!(result.data["timeout_ms"], 100);
+        assert_eq!(
+            result.error.as_deref(),
+            Some("command timed out after 100ms")
         );
     }
 }
