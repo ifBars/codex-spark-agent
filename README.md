@@ -185,7 +185,9 @@ Use `--profile` for a compact summary after a prompt:
 - remote/local compaction counts,
 - derived diagnostics for request failures, repeated tool loops, weak compaction shrinkage, and near-limit context pressure.
 
-Use `--trace` to save raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`.
+Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`.
+
+Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
 
 If a run fails after starting, the harness saves a `*-error.json` trace entry and a profile summary where possible. `analyze-trace` reports those errors alongside the exact request-size sequence, which is useful when profiling long-context and max-turn failure points.
 

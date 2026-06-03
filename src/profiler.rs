@@ -245,6 +245,7 @@ pub fn tool_signature(tool_name: &str, args: &Value) -> String {
 pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let mut profiler = AgentProfiler::default();
     let mut embedded_profile_summary = None;
+    let mut trace_metadata = None;
     let mut files = std::fs::read_dir(dir)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -261,7 +262,9 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             .and_then(|(prefix, _)| prefix.parse::<usize>().ok())
             .unwrap_or(0);
 
-        if name.ends_with("-profile-summary.json") {
+        if name == "000-trace-metadata.json" {
+            trace_metadata = Some(value);
+        } else if name.ends_with("-profile-summary.json") {
             embedded_profile_summary = Some(value);
         } else if name.ends_with("-request-input.json") {
             let input_chars = value
@@ -294,10 +297,13 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     }
 
     let mut summary = profiler.to_json();
-    if let Some(embedded) = embedded_profile_summary
-        && let Some(object) = summary.as_object_mut()
-    {
-        object.insert("embedded_profile_summary".to_string(), embedded);
+    if let Some(object) = summary.as_object_mut() {
+        if let Some(metadata) = trace_metadata {
+            object.insert("trace_metadata".to_string(), metadata);
+        }
+        if let Some(embedded) = embedded_profile_summary {
+            object.insert("embedded_profile_summary".to_string(), embedded);
+        }
     }
     Ok(summary)
 }
@@ -586,6 +592,28 @@ mod tests {
         assert_eq!(summary["requests"], 1);
         assert_eq!(summary["embedded_profile_summary"]["requests"], 999);
         assert_eq!(summary["embedded_profile_summary"]["stale"], true);
+    }
+
+    #[test]
+    fn analyze_trace_includes_trace_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("000-trace-metadata.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "model": "gpt-5.3-codex-spark",
+                "compact_after_chars": 160000,
+                "max_input_chars": 500000
+            }))
+            .expect("serialize metadata"),
+        )
+        .expect("write metadata");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["trace_metadata"]["schema_version"], 1);
+        assert_eq!(summary["trace_metadata"]["model"], "gpt-5.3-codex-spark");
+        assert_eq!(summary["trace_metadata"]["compact_after_chars"], 160000);
     }
 
     #[test]

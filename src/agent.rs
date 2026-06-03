@@ -61,13 +61,21 @@ impl AgentRunner {
             config::save_auth(&auth_tokens)?;
         }
 
+        let trace_metadata = TraceMetadata {
+            cwd: cwd.clone(),
+            model: model.clone(),
+            max_turns,
+            compact_after_chars,
+            max_input_chars,
+        };
+
         Ok(Self {
             client: SparkClient::new(auth_tokens, model),
             cwd: cwd.clone(),
             input: Vec::new(),
             max_turns,
             trace: if trace {
-                Some(TraceWriter::new(cwd)?)
+                Some(TraceWriter::new(cwd, trace_metadata)?)
             } else {
                 None
             },
@@ -701,14 +709,34 @@ struct TraceWriter {
     dir: PathBuf,
 }
 
+struct TraceMetadata {
+    cwd: PathBuf,
+    model: String,
+    max_turns: Option<usize>,
+    compact_after_chars: usize,
+    max_input_chars: usize,
+}
+
 impl TraceWriter {
-    fn new(cwd: PathBuf) -> Result<Self> {
+    fn new(cwd: PathBuf, metadata: TraceMetadata) -> Result<Self> {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
         let dir = cwd.join(".spark-runs").join(format!("run-{now_ms}"));
         std::fs::create_dir_all(&dir)?;
+        std::fs::write(
+            dir.join("000-trace-metadata.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "started_at_unix_ms": now_ms,
+                "cwd": metadata.cwd,
+                "model": metadata.model,
+                "max_turns": metadata.max_turns,
+                "compact_after_chars": metadata.compact_after_chars,
+                "max_input_chars": metadata.max_input_chars,
+            }))?,
+        )?;
         eprintln!("trace: {}", dir.display());
         Ok(Self { dir })
     }
