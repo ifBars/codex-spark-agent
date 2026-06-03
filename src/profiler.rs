@@ -247,6 +247,19 @@ impl AgentProfiler {
                 .or_else(|| report.pointer("/fallback/after_chars"))
                 .and_then(Value::as_u64);
             if let (Some(before), Some(after)) = (before, after)
+                && after > before
+            {
+                diagnostics.push(json!({
+                    "level": "warning",
+                    "kind": "compaction_expanded_context",
+                    "message": "A compaction made retained history larger. This can happen on tiny forced compactions due to encrypted summary overhead; avoid relying on it as a shrink signal.",
+                    "before_chars": before,
+                    "after_chars": after,
+                    "forced": report.get("forced").and_then(Value::as_bool).unwrap_or(false),
+                    "method": report.get("method").and_then(Value::as_str).unwrap_or("unknown"),
+                }));
+            }
+            if let (Some(before), Some(after)) = (before, after)
                 && before > 0
                 && after.saturating_mul(2) > before
             {
@@ -680,6 +693,36 @@ mod tests {
             summary["diagnostics"]
                 .as_array()
                 .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "weak_compaction_shrink")
+        );
+    }
+
+    #[test]
+    fn profiler_diagnoses_compaction_expansion() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_compaction(&json!({
+            "method": "responses_compact",
+            "forced": true,
+            "before_chars": 200,
+            "after_chars": 1200
+        }));
+
+        let diagnostics = profiler
+            .to_json()
+            .get("diagnostics")
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("diagnostics");
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic["kind"] == "compaction_expanded_context"
+                && diagnostic["forced"] == true
+                && diagnostic["method"] == "responses_compact"
+        }));
+        assert!(
+            diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic["kind"] == "weak_compaction_shrink")
         );
