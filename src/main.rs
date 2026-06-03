@@ -96,6 +96,9 @@ enum Command {
         /// Maximum number of trace directories to print.
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        /// Print one compact profile row per trace.
+        #[arg(long)]
+        summary: bool,
     },
     /// Summarize a .spark-runs/run-* trace for repeated tool calls and compaction behavior.
     AnalyzeTrace {
@@ -255,10 +258,22 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Command::Traces { limit } => {
+        Command::Traces { limit, summary } => {
             let cwd = std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
             for run in list_trace_dirs(&trace_runs_root(&cwd), limit)? {
-                println!("{}", display_trace_dir(&cwd, &run).display());
+                let display = display_trace_dir(&cwd, &run);
+                if summary {
+                    let trace_summary = profiler::analyze_trace(&run)?;
+                    println!(
+                        "{}",
+                        profiler::format_trace_summary_row(
+                            &display.display().to_string(),
+                            &trace_summary
+                        )
+                    );
+                } else {
+                    println!("{}", display.display());
+                }
             }
         }
         Command::AnalyzeTrace {

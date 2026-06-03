@@ -680,6 +680,58 @@ pub fn format_trace_timeline(summary: &Value) -> String {
     format!("{}\n", lines.join("\n"))
 }
 
+pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
+    let model = summary
+        .pointer("/trace_metadata/model")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-model");
+    let requests = number_field(summary, "requests");
+    let max_tokens = number_field(summary, "max_approx_input_tokens");
+    let context_pct = summary
+        .get("max_context_window_pct")
+        .and_then(Value::as_f64)
+        .map(|value| format!("{value:.1}%"))
+        .unwrap_or_else(|| "?.?%".to_string());
+    let max_request_ms = number_field(summary, "max_request_duration_ms");
+    let tool_calls = number_field(summary, "tool_calls");
+    let tool_failures = number_field(summary, "tool_failures");
+    let compactions = number_field(summary, "compactions");
+    let remote_compactions = number_field(summary, "remote_compactions");
+    let fallback_compactions = number_field(summary, "fallback_compactions");
+    let diagnostics = diagnostic_kinds(summary);
+    let diagnostics = if diagnostics.is_empty() {
+        "none".to_string()
+    } else {
+        diagnostics.join(",")
+    };
+
+    format!(
+        "{label} | model={model} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} diagnostics={diagnostics}"
+    )
+}
+
+fn number_field(summary: &Value, key: &str) -> String {
+    summary
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "?".to_string())
+}
+
+fn diagnostic_kinds(summary: &Value) -> Vec<String> {
+    summary
+        .get("diagnostics")
+        .and_then(Value::as_array)
+        .map(|diagnostics| {
+            diagnostics
+                .iter()
+                .filter_map(|diagnostic| diagnostic.get("kind").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn format_timeline_turn(turn: &Value) -> String {
     let turn_number = turn.get("turn").and_then(Value::as_u64).unwrap_or(0);
     let input_chars = turn
@@ -1608,6 +1660,32 @@ mod tests {
         assert!(output.contains("results=[fs.read:ok 9ms 512 chars cached]"));
         assert!(output.contains("compactions=[responses_compact 200000->90000]"));
         assert!(output.contains("errors=[response:stream ended without response.completed]"));
+    }
+
+    #[test]
+    fn formats_trace_summary_row_for_run_comparison() {
+        let summary = json!({
+            "trace_metadata": {"model": "gpt-5.3-codex-spark"},
+            "requests": 3,
+            "max_approx_input_tokens": 42000,
+            "max_context_window_pct": 32.8125,
+            "max_request_duration_ms": 12345,
+            "tool_calls": 7,
+            "tool_failures": 1,
+            "compactions": 2,
+            "remote_compactions": 1,
+            "fallback_compactions": 1,
+            "diagnostics": [{"kind": "tool_failures"}, {"kind": "weak_compaction_shrink"}]
+        });
+
+        let row = format_trace_summary_row(".spark-runs/run-1", &summary);
+
+        assert!(row.contains(".spark-runs/run-1 | model=gpt-5.3-codex-spark"));
+        assert!(row.contains("requests=3"));
+        assert!(row.contains("max_tokens=42000 (32.8%)"));
+        assert!(row.contains("tools=7 failures=1"));
+        assert!(row.contains("compactions=2 remote=1 fallback=1"));
+        assert!(row.contains("diagnostics=tool_failures,weak_compaction_shrink"));
     }
 
     #[test]
