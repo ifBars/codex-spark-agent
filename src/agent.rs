@@ -246,21 +246,11 @@ impl AgentRunner {
                 return Ok(());
             }
 
-            let mut complete = false;
             for (call_id, tool_name, args) in calls {
                 self.profiler
                     .record_tool_call(self.request_seq, &tool_name, &args);
                 println!("\n> {tool_name} {}", serde_json::to_string(&args)?);
                 let result = self.invoke_with_cache(&tool_name, args.clone()).await;
-                if tool_name == "agent.complete" && result.ok {
-                    let summary = result
-                        .data
-                        .get("summary")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Task complete.");
-                    println!("{summary}");
-                    complete = true;
-                }
 
                 let output = serde_json::to_string(&result)?;
                 if let Some(trace) = &mut self.trace {
@@ -275,11 +265,6 @@ impl AgentRunner {
                     "call_id": call_id,
                     "output": output,
                 }));
-            }
-
-            if complete {
-                self.emit_profile_summary()?;
-                return Ok(());
             }
         }
     }

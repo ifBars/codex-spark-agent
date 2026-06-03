@@ -433,7 +433,6 @@ fn wire_tool_name_to_local(name: &str) -> String {
         "fs_replace" => "fs.replace",
         "fs_edit" => "fs.edit",
         "cmd_exec" => "cmd.exec",
-        "agent_complete" => "agent.complete",
         other => other,
     }
     .to_string()
@@ -487,7 +486,7 @@ fn spark_system_prompt() -> &'static str {
     r#"You are GPT-5.3-Codex-Spark running inside a compact coding agent harness.
 
 Use the available native tools when they help. Answer directly when they do not.
-When finished, either answer normally or call agent.complete."#
+When finished, provide the final answer as a normal assistant message."#
 }
 
 fn skill_compiler_prompt() -> &'static str {

@@ -152,7 +152,6 @@ If the source skill changes, Spark recompiles the compact skill cache on first l
 - `fs.replace`
 - `fs.edit`
 - `cmd.exec`
-- `agent.complete`
 
 Tool schemas are intentionally small. The harness accepts JSON-string or object arguments, reports bad arguments as tool observations, and preserves function-call outputs in the next request.
 
@@ -194,6 +193,7 @@ These are observations from local profiling and may change:
 - `response.completed.response.output` can be empty even when stream events include completed output items, so the client reconstructs output from `response.output_item.done`.
 - With `store: false`, prior reasoning/message IDs should not be replayed. The harness carries forward minimal assistant messages, function calls, and matching function outputs.
 - Tool names are normalized for the backend, so local names like `fs.read` become wire names like `fs_read`.
+- Turns finish when Spark returns a normal assistant message without further function calls; there is no synthetic completion tool.
 - Targeted tools such as `fs.search`, `fs.replace`, and `fs.edit` reduce repeated broad listing/reading behavior compared with only exposing generic read/write/shell tools.
 
 ## Security Notes

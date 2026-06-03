@@ -125,18 +125,6 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 "additionalProperties": false
             }),
         },
-        ToolDescriptor {
-            name: "agent.complete".to_string(),
-            description: "Finish the task with a short summary.".to_string(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "summary": {"type": "string"}
-                },
-                "required": ["summary"],
-                "additionalProperties": false
-            }),
-        },
     ]
 }
 
@@ -160,11 +148,6 @@ async fn invoke_inner(cwd: &Path, tool_name: &str, args: Value) -> Result<ToolRe
         "fs.replace" => fs_replace(cwd, args),
         "fs.edit" => fs_edit(cwd, args),
         "cmd.exec" => cmd_exec(cwd, args).await,
-        "agent.complete" => Ok(ToolResult {
-            ok: true,
-            data: args,
-            error: None,
-        }),
         _ => anyhow::bail!("unknown tool: {tool_name}"),
     }
 }
@@ -605,6 +588,18 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn builtin_tools_do_not_include_synthetic_completion_tool() {
+        let names = builtin_tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names.len(), 7);
+        assert!(!names.iter().any(|name| name == "agent.complete"));
+        assert!(names.iter().any(|name| name == "cmd.exec"));
+    }
 
     #[test]
     fn fs_search_returns_matching_line_snippets() {
