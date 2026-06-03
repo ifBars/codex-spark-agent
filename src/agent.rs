@@ -906,10 +906,12 @@ fn compact_message_item(item: &mut Value, max_chars: usize) -> Result<bool> {
             continue;
         }
         let preview = compact_text(raw, max_chars);
+        let retained_intent = retained_intent_block(raw);
         *text = Value::String(format!(
-            "[spark local message compaction]\noriginal_chars={}\npreview_chars={}\nretained=head+tail\nexact_content=omitted; rerun/read the relevant source if exact text matters\n[/spark local message compaction]\n{}",
+            "[spark local message compaction]\noriginal_chars={}\npreview_chars={}\nretained=head+tail\nexact_content=omitted; rerun/read the relevant source if exact text matters\n{}\n[/spark local message compaction]\n{}",
             raw.len(),
             preview.len(),
+            retained_intent,
             preview
         ));
         changed = true;
@@ -924,6 +926,55 @@ fn compact_text(raw: &str, max_chars: usize) -> String {
     let tail_vec = raw.chars().rev().take(tail_len).collect::<Vec<_>>();
     let tail = tail_vec.into_iter().rev().collect::<String>();
     format!("{head}\n...[compacted]...\n{tail}")
+}
+
+fn retained_intent_block(raw: &str) -> String {
+    let lines = retained_intent_lines(raw, 12);
+    if lines.is_empty() {
+        return "retained_intent_lines=0".to_string();
+    }
+
+    let mut block = format!("retained_intent_lines={}", lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        block.push('\n');
+        block.push_str(&format!("intent_{}={}", index + 1, line));
+    }
+    block
+}
+
+fn retained_intent_lines(raw: &str, max_lines: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("row ") {
+            continue;
+        }
+        if line
+            == "Synthetic payload follows. Preserve the high-level instruction above; payload rows are intentionally repetitive profiling filler."
+        {
+            break;
+        }
+        if is_high_signal_intent_line(line) {
+            lines.push(line.to_string());
+            if lines.len() >= max_lines {
+                break;
+            }
+        }
+    }
+    lines
+}
+
+fn is_high_signal_intent_line(line: &str) -> bool {
+    line.starts_with("Profile scenario:")
+        || line.starts_with("This prompt")
+        || line.starts_with("Let the harness")
+        || line.starts_with("Do not ")
+        || line.starts_with("After any compaction")
+        || line.starts_with("- ")
+        || line.chars().next().is_some_and(|ch| ch.is_ascii_digit())
 }
 
 struct TraceWriter {
@@ -1250,6 +1301,33 @@ mod tests {
 
         assert_eq!(once, twice);
         assert!(once.contains("preview_chars="));
+    }
+
+    #[test]
+    fn local_compaction_handoff_retains_intent_lines_without_filler_rows() {
+        let raw = format!(
+            "Profile scenario: compaction-pressure.\n\
+             This prompt intentionally creates long-context pressure below Spark's 128k context window.\n\
+             Let the harness compact automatically if its threshold is crossed.\n\
+             Do not restate the synthetic payload. After any compaction, use fs.list on src with recursive=false, then answer with:\n\
+             - whether the task remained understandable,\n\
+             - which tool you used,\n\
+             Synthetic payload follows. Preserve the high-level instruction above; payload rows are intentionally repetitive profiling filler.\n\
+             row 00001: {}\n\
+             row 00002: {}\n",
+            "x".repeat(4000),
+            "y".repeat(4000)
+        );
+
+        let lines = retained_intent_lines(&raw, 12);
+        let block = retained_intent_block(&raw);
+
+        assert!(lines.iter().any(|line| line.contains("Profile scenario")));
+        assert!(lines.iter().any(|line| line.contains("fs.list on src")));
+        assert!(lines.iter().any(|line| line.contains("which tool")));
+        assert!(!lines.iter().any(|line| line.starts_with("row ")));
+        assert!(block.contains("retained_intent_lines="));
+        assert!(block.contains("intent_1=Profile scenario: compaction-pressure."));
     }
 
     #[test]
