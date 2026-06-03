@@ -9,6 +9,8 @@ use serde_json::{Map, Value, json};
 pub struct AgentProfiler {
     requests: usize,
     tool_calls: usize,
+    tool_results: usize,
+    tool_failures: usize,
     repeated_tool_calls: usize,
     consecutive_duplicate_tool_calls: usize,
     compactions: usize,
@@ -22,6 +24,7 @@ pub struct AgentProfiler {
     errors: Vec<Value>,
     compaction_reports: Vec<Value>,
     tool_counts: BTreeMap<String, usize>,
+    tool_failure_counts: BTreeMap<String, usize>,
     signature_counts: BTreeMap<String, usize>,
     last_signature: Option<String>,
     signals: Vec<Value>,
@@ -71,6 +74,31 @@ impl AgentProfiler {
         self.last_signature = Some(signature);
     }
 
+    pub fn record_tool_result(
+        &mut self,
+        turn: usize,
+        tool_name: &str,
+        ok: bool,
+        output_chars: usize,
+        error: Option<&str>,
+    ) {
+        self.tool_results += 1;
+        if !ok {
+            self.tool_failures += 1;
+            *self
+                .tool_failure_counts
+                .entry(tool_name.to_string())
+                .or_default() += 1;
+            self.push_signal(json!({
+                "kind": "tool_failure",
+                "turn": turn,
+                "tool": tool_name,
+                "output_chars": output_chars,
+                "error": error,
+            }));
+        }
+    }
+
     pub fn record_compaction(&mut self, report: &Value) {
         self.compactions += 1;
         match report.get("method").and_then(Value::as_str) {
@@ -117,6 +145,8 @@ impl AgentProfiler {
         json!({
             "requests": self.requests,
             "tool_calls": self.tool_calls,
+            "tool_results": self.tool_results,
+            "tool_failures": self.tool_failures,
             "repeated_tool_calls": self.repeated_tool_calls,
             "consecutive_duplicate_tool_calls": self.consecutive_duplicate_tool_calls,
             "compactions": self.compactions,
@@ -130,6 +160,7 @@ impl AgentProfiler {
             "errors": self.errors,
             "compaction_reports": self.compaction_reports,
             "tool_counts": self.tool_counts,
+            "tool_failure_counts": self.tool_failure_counts,
             "diagnostics": diagnostics,
             "recent_signals": self.signals,
         })
@@ -137,9 +168,10 @@ impl AgentProfiler {
 
     pub fn status_line(&self) -> String {
         format!(
-            "profile: requests={}, tool_calls={}, repeated_calls={}, consecutive_duplicates={}, readonly_cache_hits={}, compactions={} (remote={}, fallback={}), max_input_chars={}",
+            "profile: requests={}, tool_calls={}, tool_failures={}, repeated_calls={}, consecutive_duplicates={}, readonly_cache_hits={}, compactions={} (remote={}, fallback={}), max_input_chars={}",
             self.requests,
             self.tool_calls,
+            self.tool_failures,
             self.repeated_tool_calls,
             self.consecutive_duplicate_tool_calls,
             self.readonly_tool_cache_hits,
@@ -175,6 +207,16 @@ impl AgentProfiler {
                 "kind": "consecutive_duplicate_tool_calls",
                 "message": "Spark repeated the same tool call back-to-back. Consider tightening tool observations, adding cache hints, or exposing a more targeted tool.",
                 "count": self.consecutive_duplicate_tool_calls,
+            }));
+        }
+
+        if self.tool_failures > 0 {
+            diagnostics.push(json!({
+                "level": "warning",
+                "kind": "tool_failures",
+                "message": "One or more native tools returned a failure observation. Inspect recent_signals and tool_failure_counts before changing prompts or model settings.",
+                "count": self.tool_failures,
+                "tool_failure_counts": self.tool_failure_counts,
             }));
         }
 
@@ -303,6 +345,10 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             if let Some(text) = response_text_from_trace_response(&value) {
                 profiler.record_response_text(&text);
             }
+        } else if is_tool_result_trace_file(name) {
+            if let Some((tool_name, ok, output_chars, error)) = tool_result_from_trace(&value)? {
+                profiler.record_tool_result(turn, &tool_name, ok, output_chars, error.as_deref());
+            }
         } else if name.ends_with("-compaction.json") {
             profiler.record_compaction(&value);
         } else if name.ends_with("-error.json") {
@@ -328,6 +374,26 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         }
     }
     Ok(summary)
+}
+
+fn is_tool_result_trace_file(name: &str) -> bool {
+    name.ends_with("-tool-result.json") || name.contains("-tool-result-")
+}
+
+fn tool_result_from_trace(value: &Value) -> Result<Option<(String, bool, usize, Option<String>)>> {
+    let Some(tool_name) = value.get("tool").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let Some(result) = value.get("result") else {
+        return Ok(None);
+    };
+    let ok = result.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let output_chars = serde_json::to_string(result)?.len();
+    let error = result
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Ok(Some((tool_name.to_string(), ok, output_chars, error)))
 }
 
 fn function_calls_from_trace_response(value: &Value) -> Vec<(String, Value)> {
@@ -476,6 +542,33 @@ mod tests {
     }
 
     #[test]
+    fn profiler_records_tool_failures() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_tool_result(
+            1,
+            "cmd.exec",
+            false,
+            128,
+            Some("command exited with code 1"),
+        );
+
+        let summary = profiler.to_json();
+
+        assert_eq!(summary["tool_results"], 1);
+        assert_eq!(summary["tool_failures"], 1);
+        assert_eq!(summary["tool_failure_counts"]["cmd.exec"], 1);
+        assert_eq!(summary["recent_signals"][0]["kind"], "tool_failure");
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "tool_failures")
+        );
+    }
+
+    #[test]
     fn profiler_records_input_size_sequence_and_errors() {
         let mut profiler = AgentProfiler::default();
 
@@ -617,6 +710,45 @@ mod tests {
         assert_eq!(summary["tool_calls"], 1);
         assert_eq!(summary["tool_counts"]["fs.read"], 1);
         assert_eq!(summary["response_text_chars"], 4);
+    }
+
+    #[test]
+    fn analyze_trace_reconstructs_tool_result_failures() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("001-tool-result.json"),
+            serde_json::to_vec_pretty(&json!({
+                "call_id": "call_1",
+                "tool": "cmd.exec",
+                "result": {
+                    "ok": false,
+                    "data": {"code": 1},
+                    "error": "command failed"
+                }
+            }))
+            .expect("serialize first result"),
+        )
+        .expect("write first result");
+        std::fs::write(
+            dir.path().join("001-tool-result-002.json"),
+            serde_json::to_vec_pretty(&json!({
+                "call_id": "call_2",
+                "tool": "fs.read",
+                "result": {
+                    "ok": true,
+                    "data": {"path": "README.md"},
+                    "error": null
+                }
+            }))
+            .expect("serialize second result"),
+        )
+        .expect("write second result");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["tool_results"], 2);
+        assert_eq!(summary["tool_failures"], 1);
+        assert_eq!(summary["tool_failure_counts"]["cmd.exec"], 1);
     }
 
     #[test]

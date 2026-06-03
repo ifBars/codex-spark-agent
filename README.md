@@ -181,6 +181,7 @@ Use `--profile` for a compact summary after a prompt:
 - exact request-size sequence,
 - response text size,
 - tool count by tool,
+- tool result and failure counts by tool,
 - repeated tool call signatures,
 - consecutive duplicate calls,
 - read-only cache hits,
@@ -190,6 +191,8 @@ Use `--profile` for a compact summary after a prompt:
 Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`.
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
+
+Multiple tool results from the same Spark response are kept as separate trace files instead of overwriting each other. `analyze-trace` reconstructs both successful and failed tool observations from those files.
 
 If a run fails after starting, the harness saves a `*-error.json` trace entry and a profile summary where possible. `analyze-trace` reports those errors alongside the exact request-size sequence, which is useful when profiling long-context and max-turn failure points.
 

@@ -268,6 +268,13 @@ impl AgentRunner {
                 let result = self.invoke_with_cache(&tool_name, args.clone()).await;
 
                 let output = serde_json::to_string(&result)?;
+                self.profiler.record_tool_result(
+                    self.request_seq,
+                    &tool_name,
+                    result.ok,
+                    output.len(),
+                    result.error.as_deref(),
+                );
                 if let Some(trace) = &mut self.trace {
                     trace.write(
                         self.request_seq,
@@ -737,6 +744,7 @@ fn compact_text(raw: &str, max_chars: usize) -> String {
 
 struct TraceWriter {
     dir: PathBuf,
+    file_counts: HashMap<String, usize>,
 }
 
 struct TraceMetadata {
@@ -768,11 +776,22 @@ impl TraceWriter {
             }))?,
         )?;
         eprintln!("trace: {}", dir.display());
-        Ok(Self { dir })
+        Ok(Self {
+            dir,
+            file_counts: HashMap::new(),
+        })
     }
 
     fn write(&mut self, turn: usize, kind: &str, value: &Value) -> Result<()> {
-        let path = self.dir.join(format!("{turn:03}-{kind}.json"));
+        let key = format!("{turn:03}-{kind}");
+        let count = self.file_counts.entry(key.clone()).or_insert(0);
+        *count += 1;
+        let filename = if *count == 1 {
+            format!("{key}.json")
+        } else {
+            format!("{key}-{count:03}.json")
+        };
+        let path = self.dir.join(filename);
         std::fs::write(path, serde_json::to_vec_pretty(value)?)?;
         Ok(())
     }
@@ -910,6 +929,25 @@ mod tests {
             pressure["final_chars"].as_u64().expect("final chars") as usize,
             final_chars
         );
+    }
+
+    #[test]
+    fn trace_writer_keeps_multiple_same_turn_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut writer = TraceWriter {
+            dir: dir.path().to_path_buf(),
+            file_counts: HashMap::new(),
+        };
+
+        writer
+            .write(1, "tool-result", &json!({"tool": "fs.read"}))
+            .expect("write first");
+        writer
+            .write(1, "tool-result", &json!({"tool": "cmd.exec"}))
+            .expect("write second");
+
+        assert!(dir.path().join("001-tool-result.json").exists());
+        assert!(dir.path().join("001-tool-result-002.json").exists());
     }
 
     #[test]
