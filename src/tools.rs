@@ -266,7 +266,8 @@ fn fs_list(cwd: &Path, args: Value) -> Result<ToolResult> {
 fn fs_write(cwd: &Path, args: Value) -> Result<ToolResult> {
     let path = required_str(&args, "path")?;
     let content = required_str(&args, "content")?;
-    let full = resolve_under(cwd, path)?;
+    let full = resolve_under_for_write(cwd, path)?;
+    let previous_bytes = std::fs::metadata(&full).ok().map(|metadata| metadata.len());
     if let Some(parent) = full.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -274,7 +275,12 @@ fn fs_write(cwd: &Path, args: Value) -> Result<ToolResult> {
         .with_context(|| format!("failed to write {}", full.display()))?;
     Ok(ToolResult {
         ok: true,
-        data: json!({"path": display_rel(cwd, &full), "bytes": content.len()}),
+        data: json!({
+            "path": display_rel(cwd, &full),
+            "bytes": content.len(),
+            "previous_bytes": previous_bytes,
+            "created": previous_bytes.is_none(),
+        }),
         error: None,
     })
 }
@@ -657,6 +663,29 @@ fn resolve_under(cwd: &Path, raw: &str) -> Result<PathBuf> {
     Ok(resolved)
 }
 
+fn resolve_under_for_write(cwd: &Path, raw: &str) -> Result<PathBuf> {
+    let cwd = std::fs::canonicalize(cwd)
+        .with_context(|| format!("failed to resolve workspace {}", cwd.display()))?;
+    let raw_path = Path::new(raw);
+    if raw_path.is_absolute() {
+        anyhow::bail!("path escapes workspace: {}", raw);
+    }
+
+    let mut relative = PathBuf::new();
+    for component in raw_path.components() {
+        match component {
+            std::path::Component::Normal(part) => relative.push(part),
+            std::path::Component::CurDir => {}
+            _ => anyhow::bail!("path escapes workspace: {}", raw),
+        }
+    }
+    if relative.as_os_str().is_empty() {
+        anyhow::bail!("path is required");
+    }
+
+    Ok(cwd.join(relative))
+}
+
 fn display_rel(cwd: &Path, path: &Path) -> String {
     let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     path.strip_prefix(&cwd)
@@ -788,6 +817,71 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(paths, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn fs_write_reports_created_file_and_creates_parent_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let result = fs_write(
+            dir.path(),
+            json!({
+                "path": "nested/sample.txt",
+                "content": "hello"
+            }),
+        )
+        .expect("write");
+
+        assert!(result.ok);
+        assert!(
+            result.data["path"]
+                .as_str()
+                .expect("path")
+                .ends_with("sample.txt")
+        );
+        assert_eq!(result.data["bytes"], 5);
+        assert_eq!(result.data["previous_bytes"], Value::Null);
+        assert_eq!(result.data["created"], true);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("nested/sample.txt")).expect("read"),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn fs_write_reports_overwritten_file_size() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("sample.txt"), "old").expect("write old");
+
+        let result = fs_write(
+            dir.path(),
+            json!({
+                "path": "sample.txt",
+                "content": "new content"
+            }),
+        )
+        .expect("write");
+
+        assert!(result.ok);
+        assert_eq!(result.data["bytes"], 11);
+        assert_eq!(result.data["previous_bytes"], 3);
+        assert_eq!(result.data["created"], false);
+    }
+
+    #[test]
+    fn fs_write_rejects_parent_dir_escape_for_missing_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let error = fs_write(
+            dir.path(),
+            json!({
+                "path": "../outside.txt",
+                "content": "bad"
+            }),
+        )
+        .expect_err("escape should fail");
+
+        assert!(error.to_string().contains("path escapes workspace"));
     }
 
     #[test]

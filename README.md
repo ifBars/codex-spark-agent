@@ -183,6 +183,8 @@ Tool schemas are intentionally small. The harness accepts JSON-string or object 
 
 `fs.list` and `fs.search` skip generated/runtime directories such as `target/`, `.git/`, `node_modules/`, `.spark/`, `.spark-runs/`, and `.spark-profile/` during recursive discovery. Direct paths remain readable, so profiling artifacts can still be inspected explicitly. `fs.read` returns line-window metadata (`returned_lines`, `total_lines`, `has_more`, and `next_offset`) so Spark can choose the next chunk without guessing.
 
+`fs.write` creates parent directories when needed and reports whether the file was newly created, plus previous and new byte counts. That makes overwrite behavior visible in traces and profile timelines.
+
 Repeated read-only observations from `fs.read`, `fs.list`, and `fs.search` are served from a per-run cache, including failed observations such as missing files. File mutation tools and `cmd.exec` clear that cache so Spark can retry after the workspace may have changed.
 
 `cmd.exec` bounds stdout and stderr before returning them to Spark. Long streams keep their head and tail plus `stdout_chars`/`stderr_chars` and truncation flags, which keeps command-heavy runs from poisoning the next request with accidental massive output. Timed-out commands are returned as failed tool observations with `timed_out` and `timeout_ms` fields. Non-zero exits keep stdout/stderr and add an explicit error such as `command exited with code 7` so Spark can recover or choose a narrower command.
