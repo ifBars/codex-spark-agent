@@ -197,6 +197,8 @@ Use `--trace` to save run metadata, raw request, response, tool-result, compacti
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
 
+Profile summaries keep compaction reports compact by replacing raw compaction payloads with `raw_summary` metadata. The full raw compaction response remains in the separate `*-compaction.json` trace file.
+
 Multiple tool results from the same Spark response are kept as separate trace files instead of overwriting each other. `analyze-trace` reconstructs both successful and failed tool observations from those files.
 
 If a run fails after starting, the harness saves a `*-error.json` trace entry and a profile summary where possible. `analyze-trace` reports those errors alongside the exact request-size sequence, which is useful when profiling long-context and max-turn failure points.

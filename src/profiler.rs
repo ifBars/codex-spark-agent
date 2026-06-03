@@ -106,7 +106,8 @@ impl AgentProfiler {
             Some("local_fallback") => self.fallback_compactions += 1,
             _ => {}
         }
-        self.compaction_reports.push(report.clone());
+        self.compaction_reports
+            .push(summarize_compaction_report(report));
         self.push_signal(json!({
             "kind": "compaction",
             "method": report.get("method").and_then(Value::as_str).unwrap_or("unknown"),
@@ -397,7 +398,10 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             object.insert("trace_metadata".to_string(), metadata);
         }
         if let Some(embedded) = embedded_profile_summary {
-            object.insert("embedded_profile_summary".to_string(), embedded);
+            object.insert(
+                "embedded_profile_summary".to_string(),
+                sanitize_profile_summary(embedded),
+            );
         }
     }
     Ok(summary)
@@ -405,6 +409,66 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
 
 fn is_tool_result_trace_file(name: &str) -> bool {
     name.ends_with("-tool-result.json") || name.contains("-tool-result-")
+}
+
+fn summarize_compaction_report(report: &Value) -> Value {
+    let mut summary = Map::new();
+    copy_field(report, &mut summary, "method");
+    copy_field(report, &mut summary, "forced");
+    copy_field(report, &mut summary, "before_chars");
+    copy_field(report, &mut summary, "compact_request_chars");
+    copy_field(report, &mut summary, "after_chars");
+    copy_field(report, &mut summary, "threshold_chars");
+    copy_field(report, &mut summary, "remote_error");
+    copy_field(report, &mut summary, "fallback");
+    copy_field(report, &mut summary, "local_pressure");
+
+    if let Some(raw) = report.get("raw") {
+        let mut raw_summary = Map::new();
+        copy_field(raw, &mut raw_summary, "object");
+        copy_field(raw, &mut raw_summary, "id");
+        copy_field(raw, &mut raw_summary, "created_at");
+        copy_field(raw, &mut raw_summary, "usage");
+        if let Some(output) = raw.get("output").and_then(Value::as_array) {
+            raw_summary.insert("output_items".to_string(), json!(output.len()));
+            raw_summary.insert(
+                "output_types".to_string(),
+                Value::Array(
+                    output
+                        .iter()
+                        .filter_map(|item| item.get("type").and_then(Value::as_str))
+                        .map(|kind| Value::String(kind.to_string()))
+                        .collect(),
+                ),
+            );
+        }
+        if !raw_summary.is_empty() {
+            summary.insert("raw_summary".to_string(), Value::Object(raw_summary));
+        }
+    }
+
+    Value::Object(summary)
+}
+
+fn sanitize_profile_summary(mut summary: Value) -> Value {
+    let Some(object) = summary.as_object_mut() else {
+        return summary;
+    };
+    if let Some(reports) = object
+        .get_mut("compaction_reports")
+        .and_then(Value::as_array_mut)
+    {
+        for report in reports {
+            *report = summarize_compaction_report(report);
+        }
+    }
+    summary
+}
+
+fn copy_field(source: &Value, target: &mut Map<String, Value>, key: &str) {
+    if let Some(value) = source.get(key) {
+        target.insert(key.to_string(), value.clone());
+    }
 }
 
 fn is_profile_summary_trace_file(name: &str) -> bool {
@@ -729,6 +793,44 @@ mod tests {
     }
 
     #[test]
+    fn profiler_summarizes_compaction_reports_without_raw_payload() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_compaction(&json!({
+            "method": "responses_compact",
+            "forced": true,
+            "before_chars": 200,
+            "after_chars": 1200,
+            "raw": {
+                "id": "resp_123",
+                "object": "response.compaction",
+                "created_at": 12345,
+                "usage": {"total_tokens": 42},
+                "output": [
+                    {
+                        "type": "compaction_summary",
+                        "encrypted_content": "very-secret-large-payload"
+                    }
+                ]
+            }
+        }));
+
+        let summary = profiler.to_json();
+        let report = &summary["compaction_reports"][0];
+
+        assert!(report.get("raw").is_none());
+        assert_eq!(report["method"], "responses_compact");
+        assert_eq!(report["forced"], true);
+        assert_eq!(report["raw_summary"]["id"], "resp_123");
+        assert_eq!(report["raw_summary"]["output_items"], 1);
+        assert_eq!(
+            report["raw_summary"]["output_types"],
+            json!(["compaction_summary"])
+        );
+        assert_eq!(report["raw_summary"]["usage"]["total_tokens"], 42);
+    }
+
+    #[test]
     fn profiler_reports_remote_compaction_local_pressure() {
         let mut profiler = AgentProfiler::default();
 
@@ -871,7 +973,19 @@ mod tests {
             dir.path().join("001-profile-summary-002.json"),
             serde_json::to_vec_pretty(&json!({
                 "requests": 1,
-                "stale": false
+                "stale": false,
+                "compaction_reports": [{
+                    "method": "responses_compact",
+                    "before_chars": 10,
+                    "after_chars": 20,
+                    "raw": {
+                        "id": "resp_old",
+                        "output": [{
+                            "type": "compaction_summary",
+                            "encrypted_content": "old-raw"
+                        }]
+                    }
+                }]
             }))
             .expect("serialize latest profile"),
         )
@@ -882,6 +996,15 @@ mod tests {
         assert_eq!(summary["requests"], 1);
         assert_eq!(summary["embedded_profile_summary"]["requests"], 1);
         assert_eq!(summary["embedded_profile_summary"]["stale"], false);
+        assert!(
+            summary["embedded_profile_summary"]["compaction_reports"][0]
+                .get("raw")
+                .is_none()
+        );
+        assert_eq!(
+            summary["embedded_profile_summary"]["compaction_reports"][0]["raw_summary"]["id"],
+            "resp_old"
+        );
     }
 
     #[test]
