@@ -607,15 +607,25 @@ fn compact_input_locally(input: &mut Vec<Value>, max_chars: usize) -> Result<Opt
 
     let mid = serde_json::to_string(input)?.len();
     if mid > max_chars {
+        let has_compaction_summary = input.iter().any(|item| {
+            matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("compaction" | "context_compaction")
+            )
+        });
         let message_indexes = input
             .iter()
             .enumerate()
             .filter(|(_, item)| item.get("role").and_then(Value::as_str).is_some())
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
-        let keep_messages_from = message_indexes.len().saturating_sub(8);
+        let keep_messages_from = if has_compaction_summary {
+            message_indexes.len()
+        } else {
+            message_indexes.len().saturating_sub(8)
+        };
         for (ordinal, index) in message_indexes.iter().copied().enumerate() {
-            if ordinal >= keep_messages_from {
+            if !has_compaction_summary && ordinal >= keep_messages_from {
                 continue;
             }
             if compact_message_item(&mut input[index], 800)? {
@@ -1096,6 +1106,42 @@ mod tests {
             pressure["final_chars"].as_u64().expect("final chars") as usize,
             final_chars
         );
+    }
+
+    #[test]
+    fn remote_compaction_summary_compacts_replayed_large_user_message() {
+        let remote_output = vec![
+            json!({
+                "type": "message",
+                "role": "user",
+                "status": "completed",
+                "id": "msg_replayed",
+                "content": [{
+                    "type": "input_text",
+                    "text": format!("important instruction\n{}\nfinal instruction", "x".repeat(180_000))
+                }]
+            }),
+            json!({
+                "type": "compaction_summary",
+                "encrypted_content": "encrypted-summary",
+            }),
+        ];
+
+        let (replacement, pressure) =
+            compact_remote_history_to_threshold(&[], remote_output, 160_000)
+                .expect("compact remote history");
+        let pressure = pressure.expect("local pressure report");
+        let final_chars = serde_json::to_string(&replacement)
+            .expect("serialize replacement")
+            .len();
+
+        assert_eq!(pressure["made_progress"], true);
+        assert!(final_chars < 160_000);
+        assert_eq!(replacement[1]["type"], "compaction");
+        let retained = message_text_from_value(&replacement[0]);
+        assert!(retained.contains("important instruction"));
+        assert!(retained.contains("final instruction"));
+        assert!(retained.contains("[older conversation turn compacted;"));
     }
 
     #[test]

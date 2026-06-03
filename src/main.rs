@@ -10,12 +10,14 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 const DEFAULT_MODEL: &str = "gpt-5.3-codex-spark";
 const DEFAULT_COMPACT_AFTER_CHARS: usize = 160_000;
 const DEFAULT_MAX_INPUT_CHARS: usize = 500_000;
 const APPROX_CHARS_PER_TOKEN: usize = 4;
+const DEFAULT_SCENARIO_TARGET_TOKENS: usize = 45_000;
+const MAX_SCENARIO_TARGET_TOKENS: usize = 120_000;
 
 #[derive(Debug, Parser)]
 #[command(name = "spark")]
@@ -111,6 +113,50 @@ enum Command {
         #[arg(long)]
         timeline: bool,
     },
+    /// Run a repeatable Spark profiling scenario through the real agent loop.
+    ProfileScenario {
+        /// Scenario to run.
+        #[arg(value_enum)]
+        scenario: ProfileScenarioKind,
+        /// Workspace root for filesystem and command tools.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Model slug to use.
+        #[arg(long, default_value = DEFAULT_MODEL)]
+        model: String,
+        /// Maximum agent/tool turns. Omit to let Spark run until it completes.
+        #[arg(long)]
+        max_turns: Option<usize>,
+        /// Target prompt size for long-context scenarios, in approximate tokens.
+        #[arg(long, default_value_t = DEFAULT_SCENARIO_TARGET_TOKENS)]
+        target_tokens: usize,
+        /// Disable trace files for this scenario.
+        #[arg(long)]
+        no_trace: bool,
+        /// Disable printed profile JSON for this scenario.
+        #[arg(long)]
+        no_profile: bool,
+        /// Compact older context once request JSON exceeds this many characters.
+        #[arg(long)]
+        compact_after_chars: Option<usize>,
+        /// Compact older context once estimated input exceeds this many tokens.
+        #[arg(long)]
+        compact_after_tokens: Option<usize>,
+        /// Refuse to send request JSON above this many characters.
+        #[arg(long)]
+        max_input_chars: Option<usize>,
+        /// Refuse to send a request once estimated input exceeds this many tokens.
+        #[arg(long)]
+        max_input_tokens: Option<usize>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ProfileScenarioKind {
+    /// Small repo survey that usually exercises read/list/search without edits.
+    RepoSurvey,
+    /// Long prompt that crosses compaction pressure while staying below 128k tokens.
+    CompactionPressure,
 }
 
 #[tokio::main]
@@ -300,6 +346,69 @@ async fn main() -> Result<()> {
                 print!("{}", profiler::format_trace_timeline(&summary));
             } else {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
+            }
+        }
+        Command::ProfileScenario {
+            scenario,
+            cwd,
+            model,
+            max_turns,
+            target_tokens,
+            no_trace,
+            no_profile,
+            compact_after_chars,
+            compact_after_tokens,
+            max_input_chars,
+            max_input_tokens,
+        } => {
+            let cwd = std::fs::canonicalize(&cwd)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
+            let compact_after_chars = resolve_char_threshold(
+                "compact-after",
+                compact_after_chars,
+                compact_after_tokens,
+                DEFAULT_COMPACT_AFTER_CHARS,
+            )?;
+            let max_input_chars = resolve_char_threshold(
+                "max-input",
+                max_input_chars,
+                max_input_tokens,
+                DEFAULT_MAX_INPUT_CHARS,
+            )?;
+            let prompt = profile_scenario_prompt(scenario, target_tokens)?;
+            println!(
+                "scenario={:?} prompt_chars={} approx_tokens={} compact_after_chars={} max_input_chars={}",
+                scenario,
+                prompt.len(),
+                prompt.len() / APPROX_CHARS_PER_TOKEN,
+                compact_after_chars,
+                max_input_chars
+            );
+            let auth = config::load_auth()?;
+            let mut runner = agent::AgentRunner::new(
+                auth,
+                cwd.clone(),
+                model,
+                max_turns,
+                !no_trace,
+                !no_profile,
+                compact_after_chars,
+                max_input_chars,
+                false,
+                None,
+                false,
+            )?;
+            runner.run(&prompt).await?;
+            if !no_trace {
+                let latest = latest_trace_dir(&trace_runs_root(&cwd))?;
+                let summary = profiler::analyze_trace(&latest)?;
+                println!(
+                    "{}",
+                    profiler::format_trace_summary_row(
+                        &display_trace_dir(&cwd, &latest).display().to_string(),
+                        &summary,
+                    )
+                );
             }
         }
     }
@@ -571,6 +680,51 @@ fn timestamp_session_name() -> String {
     format!("chat-{now_secs}")
 }
 
+fn profile_scenario_prompt(scenario: ProfileScenarioKind, target_tokens: usize) -> Result<String> {
+    if target_tokens == 0 {
+        anyhow::bail!("--target-tokens must be greater than 0");
+    }
+    if target_tokens > MAX_SCENARIO_TARGET_TOKENS {
+        anyhow::bail!(
+            "--target-tokens must be <= {MAX_SCENARIO_TARGET_TOKENS} so the prompt stays below Spark's 128k context window with JSON overhead"
+        );
+    }
+
+    match scenario {
+        ProfileScenarioKind::RepoSurvey => Ok(
+            "Profile scenario: repo-survey.\n\
+             Inspect this repository like a coding agent. Use targeted native tools, not broad command output.\n\
+             1. List the repository root.\n\
+             2. Read Cargo.toml and README.md with bounded windows.\n\
+             3. Search src for tool and compaction surfaces.\n\
+             4. Finish with a concise harness-risk summary and one next profiling recommendation."
+                .to_string(),
+        ),
+        ProfileScenarioKind::CompactionPressure => {
+            let target_chars = target_tokens.saturating_mul(APPROX_CHARS_PER_TOKEN);
+            let mut prompt = String::from(
+                "Profile scenario: compaction-pressure.\n\
+                 This prompt intentionally creates long-context pressure below Spark's 128k context window.\n\
+                 Let the harness compact automatically if its threshold is crossed.\n\
+                 Do not restate the synthetic payload. After any compaction, use fs.list on src with recursive=false, then answer with:\n\
+                 - whether the task remained understandable,\n\
+                 - which tool you used,\n\
+                 - any missing information caused by compaction,\n\
+                 - one concrete harness change that would make this scenario more reliable.\n\n\
+                 Synthetic payload follows. Preserve the high-level instruction above; payload rows are intentionally repetitive profiling filler.\n",
+            );
+            let mut row = 0usize;
+            while prompt.len() < target_chars {
+                row += 1;
+                prompt.push_str(&format!(
+                    "row {row:05}: spark compaction profiling filler; keep task intent, discard repetition, prefer native tools over shell floods, report uncertainty plainly.\n"
+                ));
+            }
+            Ok(prompt)
+        }
+    }
+}
+
 async fn handle_skill_command(
     runner: &mut agent::AgentRunner,
     cwd: &PathBuf,
@@ -755,8 +909,9 @@ fn list_trace_dirs(root: &Path, limit: usize) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_COMPACT_AFTER_CHARS, command_args, contains_skill_mention, latest_trace_dir,
-        list_trace_dirs, mentioned_skill_names, resolve_char_threshold, trace_runs_root,
+        APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, ProfileScenarioKind, command_args,
+        contains_skill_mention, latest_trace_dir, list_trace_dirs, mentioned_skill_names,
+        profile_scenario_prompt, resolve_char_threshold, trace_runs_root,
     };
 
     #[test]
@@ -861,6 +1016,39 @@ mod tests {
                 .to_string()
                 .contains("pass either --max-input-chars or --max-input-tokens")
         );
+    }
+
+    #[test]
+    fn compaction_pressure_scenario_targets_prompt_size() {
+        let prompt = profile_scenario_prompt(ProfileScenarioKind::CompactionPressure, 45_000)
+            .expect("scenario prompt");
+
+        assert!(prompt.contains("Profile scenario: compaction-pressure"));
+        assert!(prompt.contains("Synthetic payload follows"));
+        assert!(prompt.len() >= 45_000 * APPROX_CHARS_PER_TOKEN);
+        assert!(prompt.len() < 46_000 * APPROX_CHARS_PER_TOKEN);
+    }
+
+    #[test]
+    fn compaction_pressure_scenario_caps_below_context_window() {
+        let error = profile_scenario_prompt(ProfileScenarioKind::CompactionPressure, 120_001)
+            .expect_err("scenario should reject oversized target");
+
+        assert!(
+            error
+                .to_string()
+                .contains("below Spark's 128k context window")
+        );
+    }
+
+    #[test]
+    fn repo_survey_scenario_is_small_and_tool_directed() {
+        let prompt =
+            profile_scenario_prompt(ProfileScenarioKind::RepoSurvey, 45_000).expect("scenario");
+
+        assert!(prompt.contains("Profile scenario: repo-survey"));
+        assert!(prompt.contains("Use targeted native tools"));
+        assert!(prompt.len() < 1_000);
     }
 }
 

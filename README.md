@@ -118,6 +118,13 @@ Compare recent traces:
 cargo run --bin spark -- traces --summary --limit 10
 ```
 
+Run a repeatable profiling scenario through the real agent loop:
+
+```powershell
+cargo run --bin spark -- profile-scenario repo-survey
+cargo run --bin spark -- profile-scenario compaction-pressure --target-tokens 45000
+```
+
 By default each user message loops until Spark finishes. `--max-turns <n>` is available as an optional safety cap.
 
 ## Interactive Commands
@@ -239,6 +246,8 @@ Use `--profile` for a compact summary after a prompt:
 Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`. Use `spark traces` to list recent trace directories, or `spark traces --summary` to compare recent runs by request size, latency, tools, compactions, and diagnostics. Use `spark analyze-trace` without a path to summarize the latest trace.
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, profile flag, interactive/session mode, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
+
+`spark profile-scenario <name>` runs a canned prompt through the same `AgentRunner` used by `spark chat`, with tracing and profile output enabled by default. `repo-survey` exercises normal read/list/search behavior. `compaction-pressure` generates a synthetic long-context prompt, defaulting to about 45k estimated tokens, which is below Spark's 128k context window but above the default compaction threshold. Use it to compare whether Spark keeps task intent after auto compaction, whether remote compaction needs local pressure, and whether failures cluster around request size, latency, or tool loops.
 
 Token counts are approximate and use a simple 4 chars/token estimate. They are profiling signals for comparing harness behavior, not authoritative tokenizer output.
 
