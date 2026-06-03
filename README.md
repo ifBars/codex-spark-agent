@@ -94,6 +94,18 @@ Analyze a saved trace:
 cargo run --bin spark -- analyze-trace .spark-runs\run-1780481349210
 ```
 
+Analyze the latest local trace:
+
+```powershell
+cargo run --bin spark -- analyze-trace
+```
+
+List recent traces:
+
+```powershell
+cargo run --bin spark -- traces
+```
+
 By default each user message loops until Spark finishes. `--max-turns <n>` is available as an optional safety cap.
 
 ## Interactive Commands
@@ -198,7 +210,7 @@ Use `--profile` for a compact summary after a prompt:
 - remote/local compaction counts,
 - derived diagnostics for request failures, repeated tool loops, weak or expanding compaction, and near-limit context pressure.
 
-Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`.
+Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`. Use `spark traces` to list recent trace directories. Use `spark analyze-trace` without a path to summarize the latest trace.
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
 

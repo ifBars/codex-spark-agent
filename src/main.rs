@@ -7,7 +7,7 @@ mod skills;
 mod tools;
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -82,10 +82,19 @@ enum Command {
         #[arg(long)]
         refresh: bool,
     },
+    /// List saved trace runs under .spark-runs/.
+    Traces {
+        /// Maximum number of trace directories to print.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Summarize a .spark-runs/run-* trace for repeated tool calls and compaction behavior.
     AnalyzeTrace {
-        /// Trace directory to analyze.
-        dir: PathBuf,
+        /// Trace directory to analyze. Defaults to the latest .spark-runs/run-* directory.
+        dir: Option<PathBuf>,
+        /// Analyze the latest .spark-runs/run-* directory.
+        #[arg(long)]
+        latest: bool,
     },
 }
 
@@ -220,7 +229,21 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Command::AnalyzeTrace { dir } => {
+        Command::Traces { limit } => {
+            let cwd = std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
+            for run in list_trace_dirs(&trace_runs_root(&cwd), limit)? {
+                println!("{}", display_trace_dir(&cwd, &run).display());
+            }
+        }
+        Command::AnalyzeTrace { dir, latest } => {
+            if latest && dir.is_some() {
+                anyhow::bail!("pass either a trace directory or --latest, not both");
+            }
+            let cwd = std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
+            let dir = match dir {
+                Some(dir) => dir,
+                None => latest_trace_dir(&trace_runs_root(&cwd))?,
+            };
             let summary = profiler::analyze_trace(&dir)?;
             println!("{}", serde_json::to_string_pretty(&summary)?);
         }
@@ -601,9 +624,63 @@ fn is_skill_name_boundary_continuation(ch: char, next: Option<char>) -> bool {
         || (ch == '.' && next.is_some_and(|next| next.is_ascii_alphanumeric()))
 }
 
+fn trace_runs_root(cwd: &Path) -> PathBuf {
+    cwd.join(".spark-runs")
+}
+
+fn display_trace_dir(cwd: &Path, path: &Path) -> PathBuf {
+    path.strip_prefix(cwd)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn latest_trace_dir(root: &Path) -> Result<PathBuf> {
+    list_trace_dirs(root, 1)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("no trace directories found under {}", root.display()))
+}
+
+fn list_trace_dirs(root: &Path, limit: usize) -> Result<Vec<PathBuf>> {
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut runs = Vec::new();
+    for entry in std::fs::read_dir(root)
+        .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", root.display()))?
+    {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Some(suffix) = name.strip_prefix("run-") else {
+            continue;
+        };
+        let order = suffix.parse::<u128>().unwrap_or(0);
+        runs.push((order, entry.path()));
+    }
+
+    runs.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| right.1.file_name().cmp(&left.1.file_name()))
+    });
+    runs.truncate(limit);
+    Ok(runs.into_iter().map(|(_, path)| path).collect())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{command_args, contains_skill_mention, mentioned_skill_names};
+    use super::{
+        command_args, contains_skill_mention, latest_trace_dir, list_trace_dirs,
+        mentioned_skill_names, trace_runs_root,
+    };
 
     #[test]
     fn slash_commands_match_exactly_or_with_whitespace() {
@@ -651,6 +728,37 @@ mod tests {
             "Please use @demo-skill-extra.",
             "@demo-skill"
         ));
+    }
+
+    #[test]
+    fn trace_dirs_are_listed_newest_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = trace_runs_root(dir.path());
+        std::fs::create_dir_all(root.join("run-100")).expect("create old trace");
+        std::fs::create_dir_all(root.join("run-300")).expect("create new trace");
+        std::fs::create_dir_all(root.join("run-200")).expect("create middle trace");
+        std::fs::create_dir_all(root.join("other")).expect("create ignored dir");
+        std::fs::write(root.join("run-400"), "{}").expect("create ignored file");
+
+        let runs = list_trace_dirs(&root, 2).expect("list trace dirs");
+        let names = runs
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["run-300", "run-200"]);
+    }
+
+    #[test]
+    fn latest_trace_dir_uses_highest_run_suffix() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = trace_runs_root(dir.path());
+        std::fs::create_dir_all(root.join("run-1")).expect("create old trace");
+        std::fs::create_dir_all(root.join("run-2")).expect("create latest trace");
+
+        let latest = latest_trace_dir(&root).expect("latest trace");
+
+        assert_eq!(latest.file_name().unwrap(), "run-2");
     }
 }
 
