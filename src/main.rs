@@ -162,6 +162,8 @@ enum Command {
 enum ProfileScenarioKind {
     /// Small repo survey that usually exercises read/list/search without edits.
     RepoSurvey,
+    /// Multi-turn conversation that crosses auto-compaction pressure naturally.
+    NaturalCompaction,
     /// Long prompt that crosses compaction pressure while staying below 128k tokens.
     CompactionPressure,
     /// Scratch-file coding task that exercises read, edit, write, and verification tools.
@@ -172,6 +174,7 @@ impl ProfileScenarioKind {
     fn name(self) -> &'static str {
         match self {
             Self::RepoSurvey => "repo-survey",
+            Self::NaturalCompaction => "natural-compaction",
             Self::CompactionPressure => "compaction-pressure",
             Self::FileEdit => "file-edit",
         }
@@ -428,12 +431,14 @@ async fn main() -> Result<()> {
                 DEFAULT_MAX_INPUT_CHARS,
             )?;
             prepare_profile_scenario(&cwd, scenario)?;
-            let prompt = profile_scenario_prompt(scenario, target_tokens)?;
+            let prompts = profile_scenario_prompts(scenario, target_tokens)?;
+            let total_prompt_chars = prompts.iter().map(String::len).sum::<usize>();
             println!(
-                "scenario={:?} prompt_chars={} approx_tokens={} compact_after_chars={} max_input_chars={}",
+                "scenario={:?} prompts={} prompt_chars={} approx_tokens={} compact_after_chars={} max_input_chars={}",
                 scenario,
-                prompt.len(),
-                prompt.len() / APPROX_CHARS_PER_TOKEN,
+                prompts.len(),
+                total_prompt_chars,
+                total_prompt_chars / APPROX_CHARS_PER_TOKEN,
                 compact_after_chars,
                 max_input_chars
             );
@@ -454,12 +459,26 @@ async fn main() -> Result<()> {
                     "profile_scenario": {
                         "name": scenario.name(),
                         "target_tokens": target_tokens,
-                        "prompt_chars": prompt.len(),
-                        "approx_prompt_tokens": prompt.len() / APPROX_CHARS_PER_TOKEN,
+                        "prompt_count": prompts.len(),
+                        "prompt_chars": total_prompt_chars,
+                        "approx_prompt_tokens": total_prompt_chars / APPROX_CHARS_PER_TOKEN,
                     }
                 })),
             )?;
-            let run_result = runner.run(&prompt).await;
+            let mut run_result = Ok(());
+            for (index, prompt) in prompts.iter().enumerate() {
+                println!(
+                    "scenario_turn={}/{} prompt_chars={} approx_tokens={}",
+                    index + 1,
+                    prompts.len(),
+                    prompt.len(),
+                    prompt.len() / APPROX_CHARS_PER_TOKEN
+                );
+                if let Err(error) = runner.run(prompt).await {
+                    run_result = Err(error);
+                    break;
+                }
+            }
             if !no_trace {
                 match latest_trace_dir(&trace_runs_root(&cwd)).and_then(|latest| {
                     let summary = profiler::analyze_trace(&latest)?;
@@ -775,7 +794,10 @@ fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind) -> Result
     Ok(())
 }
 
-fn profile_scenario_prompt(scenario: ProfileScenarioKind, target_tokens: usize) -> Result<String> {
+fn profile_scenario_prompts(
+    scenario: ProfileScenarioKind,
+    target_tokens: usize,
+) -> Result<Vec<String>> {
     if target_tokens == 0 {
         anyhow::bail!("--target-tokens must be greater than 0");
     }
@@ -786,7 +808,7 @@ fn profile_scenario_prompt(scenario: ProfileScenarioKind, target_tokens: usize) 
     }
 
     match scenario {
-        ProfileScenarioKind::RepoSurvey => Ok(
+        ProfileScenarioKind::RepoSurvey => Ok(vec![
             "Profile scenario: repo-survey.\n\
              Inspect this repository like a coding agent. Use targeted native tools, not broad command output.\n\
              1. List the repository root.\n\
@@ -794,8 +816,8 @@ fn profile_scenario_prompt(scenario: ProfileScenarioKind, target_tokens: usize) 
              3. Search src for tool and compaction surfaces.\n\
              4. Finish with a concise harness-risk summary and one next profiling recommendation."
                 .to_string(),
-        ),
-        ProfileScenarioKind::FileEdit => Ok(
+        ]),
+        ProfileScenarioKind::FileEdit => Ok(vec![
             "Profile scenario: file-edit.\n\
              Work only under .spark-scenarios/file-edit.\n\
              Use native file tools, not cmd.exec, unless verification cannot be done otherwise.\n\
@@ -806,7 +828,8 @@ fn profile_scenario_prompt(scenario: ProfileScenarioKind, target_tokens: usize) 
              4. Use fs.read on both changed files to verify the final contents.\n\
              Finish with the tools used, whether verification passed, and any harness behavior that made the task easier or harder."
                 .to_string(),
-        ),
+        ]),
+        ProfileScenarioKind::NaturalCompaction => natural_compaction_scenario_prompts(target_tokens),
         ProfileScenarioKind::CompactionPressure => {
             let target_chars = target_tokens.saturating_mul(APPROX_CHARS_PER_TOKEN);
             let mut prompt = String::from(
@@ -827,9 +850,45 @@ fn profile_scenario_prompt(scenario: ProfileScenarioKind, target_tokens: usize) 
                     "row {row:05}: spark compaction profiling filler; keep task intent, discard repetition, prefer native tools over shell floods, report uncertainty plainly.\n"
                 ));
             }
-            Ok(prompt)
+            Ok(vec![prompt])
         }
     }
+}
+
+fn natural_compaction_scenario_prompts(target_tokens: usize) -> Result<Vec<String>> {
+    let turn_count = 3usize;
+    let target_chars = target_tokens.saturating_mul(APPROX_CHARS_PER_TOKEN);
+    let target_chars_per_turn = target_chars.div_ceil(turn_count);
+    let mut prompts = Vec::with_capacity(turn_count);
+
+    for turn in 1..=turn_count {
+        let mut prompt = format!(
+            "Profile scenario: natural-compaction turn {turn}/{turn_count}.\n\
+             This is a scripted multi-turn chat profiling run. Treat each message as normal conversation history and do not restate the filler rows.\n"
+        );
+        match turn {
+            1 => prompt.push_str(
+                "Answer with one sentence confirming you are tracking the harness context pressure.\n",
+            ),
+            2 => prompt.push_str(
+                "Answer with one sentence naming one risk signal you would watch in the trace.\n",
+            ),
+            _ => prompt.push_str(
+                "After the harness has a chance to compact naturally, use fs.list on src with recursive=false, then answer with whether compaction preserved the task intent and whether any required information was missing.\n",
+            ),
+        }
+
+        let mut row = 0usize;
+        while prompt.len() < target_chars_per_turn {
+            row += 1;
+            prompt.push_str(&format!(
+                "turn {turn} row {row:05}: conversational long-context filler; retain the current turn objective, discard repetition, prefer native tools after compaction, and report uncertainty plainly.\n"
+            ));
+        }
+        prompts.push(prompt);
+    }
+
+    Ok(prompts)
 }
 
 async fn handle_skill_command(
@@ -1018,7 +1077,8 @@ mod tests {
     use super::{
         APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, ProfileScenarioKind, command_args,
         contains_skill_mention, latest_trace_dir, list_trace_dirs, mentioned_skill_names,
-        prepare_profile_scenario, profile_scenario_prompt, resolve_char_threshold, trace_runs_root,
+        prepare_profile_scenario, profile_scenario_prompts, resolve_char_threshold,
+        trace_runs_root,
     };
 
     #[test]
@@ -1127,8 +1187,9 @@ mod tests {
 
     #[test]
     fn compaction_pressure_scenario_targets_prompt_size() {
-        let prompt = profile_scenario_prompt(ProfileScenarioKind::CompactionPressure, 45_000)
+        let prompts = profile_scenario_prompts(ProfileScenarioKind::CompactionPressure, 45_000)
             .expect("scenario prompt");
+        let prompt = prompts.first().expect("prompt");
 
         assert!(prompt.contains("Profile scenario: compaction-pressure"));
         assert!(prompt.contains("Synthetic payload follows"));
@@ -1138,7 +1199,7 @@ mod tests {
 
     #[test]
     fn compaction_pressure_scenario_caps_below_context_window() {
-        let error = profile_scenario_prompt(ProfileScenarioKind::CompactionPressure, 120_001)
+        let error = profile_scenario_prompts(ProfileScenarioKind::CompactionPressure, 120_001)
             .expect_err("scenario should reject oversized target");
 
         assert!(
@@ -1150,8 +1211,9 @@ mod tests {
 
     #[test]
     fn repo_survey_scenario_is_small_and_tool_directed() {
-        let prompt =
-            profile_scenario_prompt(ProfileScenarioKind::RepoSurvey, 45_000).expect("scenario");
+        let prompts =
+            profile_scenario_prompts(ProfileScenarioKind::RepoSurvey, 45_000).expect("scenario");
+        let prompt = prompts.first().expect("prompt");
 
         assert!(prompt.contains("Profile scenario: repo-survey"));
         assert!(prompt.contains("Use targeted native tools"));
@@ -1160,8 +1222,9 @@ mod tests {
 
     #[test]
     fn file_edit_scenario_is_scoped_to_scratch_files() {
-        let prompt =
-            profile_scenario_prompt(ProfileScenarioKind::FileEdit, 45_000).expect("scenario");
+        let prompts =
+            profile_scenario_prompts(ProfileScenarioKind::FileEdit, 45_000).expect("scenario");
+        let prompt = prompts.first().expect("prompt");
 
         assert!(prompt.contains("Profile scenario: file-edit"));
         assert!(prompt.contains("Work only under .spark-scenarios/file-edit"));
@@ -1193,6 +1256,20 @@ mod tests {
 
         assert!(notes.contains("TODO: replace this line"));
         assert!(config.contains("mode = \"draft\""));
+    }
+
+    #[test]
+    fn natural_compaction_scenario_uses_multiple_chat_turns() {
+        let prompts = profile_scenario_prompts(ProfileScenarioKind::NaturalCompaction, 45_000)
+            .expect("scenario");
+        let total_chars = prompts.iter().map(String::len).sum::<usize>();
+
+        assert_eq!(prompts.len(), 3);
+        assert!(total_chars >= DEFAULT_COMPACT_AFTER_CHARS);
+        assert!(total_chars / APPROX_CHARS_PER_TOKEN < 120_000);
+        assert!(prompts[0].contains("turn 1/3"));
+        assert!(prompts[1].contains("turn 2/3"));
+        assert!(prompts[2].contains("fs.list on src with recursive=false"));
     }
 }
 
