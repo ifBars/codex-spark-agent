@@ -113,6 +113,7 @@ impl AgentProfiler {
     }
 
     pub fn to_json(&self) -> Value {
+        let diagnostics = self.diagnostics();
         json!({
             "requests": self.requests,
             "tool_calls": self.tool_calls,
@@ -129,6 +130,7 @@ impl AgentProfiler {
             "errors": self.errors,
             "compaction_reports": self.compaction_reports,
             "tool_counts": self.tool_counts,
+            "diagnostics": diagnostics,
             "recent_signals": self.signals,
         })
     }
@@ -155,6 +157,85 @@ impl AgentProfiler {
             self.signals.remove(0);
         }
     }
+
+    fn diagnostics(&self) -> Vec<Value> {
+        let mut diagnostics = Vec::new();
+        if !self.errors.is_empty() {
+            diagnostics.push(json!({
+                "level": "error",
+                "kind": "request_failure",
+                "message": "One or more Spark requests failed. Inspect response-error trace files and the input size sequence around the failing turn.",
+                "count": self.errors.len(),
+            }));
+        }
+
+        if self.consecutive_duplicate_tool_calls > 0 {
+            diagnostics.push(json!({
+                "level": "warning",
+                "kind": "consecutive_duplicate_tool_calls",
+                "message": "Spark repeated the same tool call back-to-back. Consider tightening tool observations, adding cache hints, or exposing a more targeted tool.",
+                "count": self.consecutive_duplicate_tool_calls,
+            }));
+        }
+
+        if self.repeated_tool_calls > 2 {
+            diagnostics.push(json!({
+                "level": "warning",
+                "kind": "repeated_tool_calls",
+                "message": "Spark repeated exact tool-call signatures several times. Compare the repeated arguments in recent_signals before changing prompts.",
+                "count": self.repeated_tool_calls,
+            }));
+        }
+
+        if self.compactions > 0 && self.remote_compactions == 0 {
+            diagnostics.push(json!({
+                "level": "warning",
+                "kind": "no_remote_compaction",
+                "message": "Compaction happened without a successful remote Codex compaction. Treat local fallback summaries as profiling data, not the preferred steady state.",
+            }));
+        }
+
+        for report in &self.compaction_reports {
+            let before = report
+                .get("before_chars")
+                .or_else(|| report.pointer("/fallback/before_chars"))
+                .and_then(Value::as_u64);
+            let after = report
+                .get("after_chars")
+                .or_else(|| report.pointer("/fallback/after_chars"))
+                .and_then(Value::as_u64);
+            if let (Some(before), Some(after)) = (before, after)
+                && before > 0
+                && after.saturating_mul(2) > before
+            {
+                diagnostics.push(json!({
+                    "level": "warning",
+                    "kind": "weak_compaction_shrink",
+                    "message": "A compaction reduced history by less than 50%. Inspect retained items before relying on it for long-context runs.",
+                    "before_chars": before,
+                    "after_chars": after,
+                }));
+            }
+        }
+
+        if self.max_input_chars >= 450_000 {
+            diagnostics.push(json!({
+                "level": "warning",
+                "kind": "near_input_guard",
+                "message": "Request input approached the default max-input guard. Long-context profiling should inspect the exact input_chars_by_request sequence and compaction timing.",
+                "max_input_chars": self.max_input_chars,
+            }));
+        } else if self.max_input_chars >= 160_000 && self.compactions == 0 {
+            diagnostics.push(json!({
+                "level": "info",
+                "kind": "large_uncompacted_context",
+                "message": "Request input exceeded the default compaction threshold without a recorded compaction. Check whether compaction was disabled or traces are incomplete.",
+                "max_input_chars": self.max_input_chars,
+            }));
+        }
+
+        diagnostics
+    }
 }
 
 pub fn tool_signature(tool_name: &str, args: &Value) -> String {
@@ -163,7 +244,7 @@ pub fn tool_signature(tool_name: &str, args: &Value) -> String {
 
 pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let mut profiler = AgentProfiler::default();
-    let mut latest_profile_summary = None;
+    let mut embedded_profile_summary = None;
     let mut files = std::fs::read_dir(dir)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -181,7 +262,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             .unwrap_or(0);
 
         if name.ends_with("-profile-summary.json") {
-            latest_profile_summary = Some(value);
+            embedded_profile_summary = Some(value);
         } else if name.ends_with("-request-input.json") {
             let input_chars = value
                 .get("input")
@@ -208,7 +289,13 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         }
     }
 
-    Ok(latest_profile_summary.unwrap_or_else(|| profiler.to_json()))
+    let mut summary = profiler.to_json();
+    if let Some(embedded) = embedded_profile_summary
+        && let Some(object) = summary.as_object_mut()
+    {
+        object.insert("embedded_profile_summary".to_string(), embedded);
+    }
+    Ok(summary)
 }
 
 fn function_calls_from_trace_response(value: &Value) -> Vec<(String, Value)> {
@@ -218,7 +305,7 @@ fn function_calls_from_trace_response(value: &Value) -> Vec<(String, Value)> {
             if item.get("type").and_then(Value::as_str) != Some("function_call") {
                 return None;
             }
-            let name = item.get("name").and_then(Value::as_str)?.to_string();
+            let name = wire_tool_name_to_local(item.get("name").and_then(Value::as_str)?);
             let args = match item.get("arguments") {
                 Some(Value::String(raw)) => {
                     serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone()))
@@ -229,6 +316,20 @@ fn function_calls_from_trace_response(value: &Value) -> Vec<(String, Value)> {
             Some((name, args))
         })
         .collect()
+}
+
+fn wire_tool_name_to_local(name: &str) -> String {
+    match name {
+        "fs_read" => "fs.read",
+        "fs_list" => "fs.list",
+        "fs_write" => "fs.write",
+        "fs_search" => "fs.search",
+        "fs_replace" => "fs.replace",
+        "fs_edit" => "fs.edit",
+        "cmd_exec" => "cmd.exec",
+        other => other,
+    }
+    .to_string()
 }
 
 fn output_items_from_trace_response(value: &Value) -> Vec<Value> {
@@ -356,6 +457,56 @@ mod tests {
         assert_eq!(summary["input_chars_by_request"], json!([120, 240]));
         assert_eq!(summary["errors"][0]["turn"], 2);
         assert_eq!(summary["recent_signals"][0]["kind"], "error");
+        assert_eq!(summary["diagnostics"][0]["kind"], "request_failure");
+    }
+
+    #[test]
+    fn profiler_diagnoses_duplicate_tool_loops_and_input_pressure() {
+        let args = json!({"path": "a.txt"});
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_request(470_000);
+        profiler.record_tool_call(1, "fs.read", &args);
+        profiler.record_tool_call(2, "fs.read", &args);
+
+        let diagnostics = profiler
+            .to_json()
+            .get("diagnostics")
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("diagnostics");
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "consecutive_duplicate_tool_calls")
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "near_input_guard")
+        );
+    }
+
+    #[test]
+    fn profiler_diagnoses_weak_compaction() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_compaction(&json!({
+            "method": "responses_compact",
+            "before_chars": 100_000,
+            "after_chars": 75_000
+        }));
+
+        let summary = profiler.to_json();
+        assert_eq!(summary["remote_compactions"], 1);
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "weak_compaction_shrink")
+        );
     }
 
     #[test]
@@ -401,8 +552,36 @@ mod tests {
 
         assert_eq!(summary["requests"], 1);
         assert_eq!(summary["tool_calls"], 1);
-        assert_eq!(summary["tool_counts"]["fs_read"], 1);
+        assert_eq!(summary["tool_counts"]["fs.read"], 1);
         assert_eq!(summary["response_text_chars"], 4);
+    }
+
+    #[test]
+    fn analyze_trace_recomputes_even_when_profile_summary_exists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("001-request-input.json"),
+            serde_json::to_vec_pretty(&json!({
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": "read"}]}]
+            }))
+            .expect("serialize request"),
+        )
+        .expect("write request");
+        std::fs::write(
+            dir.path().join("001-profile-summary.json"),
+            serde_json::to_vec_pretty(&json!({
+                "requests": 999,
+                "stale": true
+            }))
+            .expect("serialize profile"),
+        )
+        .expect("write profile");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["requests"], 1);
+        assert_eq!(summary["embedded_profile_summary"]["requests"], 999);
+        assert_eq!(summary["embedded_profile_summary"]["stale"], true);
     }
 
     #[test]

@@ -172,16 +172,20 @@ Use `--profile` for a compact summary after a prompt:
 
 - request count,
 - max/average input size,
+- exact request-size sequence,
 - response text size,
 - tool count by tool,
 - repeated tool call signatures,
 - consecutive duplicate calls,
 - read-only cache hits,
-- remote/local compaction counts.
+- remote/local compaction counts,
+- derived diagnostics for request failures, repeated tool loops, weak compaction shrinkage, and near-limit context pressure.
 
 Use `--trace` to save raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`.
 
 If a Spark request fails after the request input is written, the harness saves a `*-response-error.json` trace entry. `analyze-trace` reports those errors alongside the exact request-size sequence, which is useful when profiling long-context failure points.
+
+`analyze-trace` recomputes its summary from raw trace files, so older embedded `*-profile-summary.json` files do not mask newer diagnostics.
 
 `.spark-runs/`, `.spark-profile/`, `.spark/`, `target/`, and local auth/session state are ignored by git.
 
