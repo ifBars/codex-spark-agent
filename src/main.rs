@@ -282,7 +282,7 @@ async fn run_interactive_chat(
             "/exit" | "/quit" => return Ok(()),
             "/help" => {
                 println!(
-                    "Commands: /help, /status, /compact, /session, /new, /skill, /skills, /save, /clear, /exit"
+                    "Commands: /help, /status, /profile, /compact, /session, /new, /skill, /skills, /save, /clear, /exit"
                 );
                 println!(
                     "Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>"
@@ -295,6 +295,13 @@ async fn run_interactive_chat(
             "/status" => {
                 println!("conversation input JSON chars: {}", runner.input_chars()?);
                 println!("{}", runner.profile_status());
+                continue;
+            }
+            "/profile" => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&runner.profile_summary())?
+                );
                 continue;
             }
             "/compact" => {
@@ -608,6 +615,8 @@ mod tests {
         assert_eq!(command_args("/compact", "/compact"), Some(""));
         assert_eq!(command_args("/compact now", "/compact"), Some("now"));
         assert_eq!(command_args("/compaction", "/compact"), None);
+        assert_eq!(command_args("/profile", "/profile"), Some(""));
+        assert_eq!(command_args("/profiles", "/profile"), None);
         assert_eq!(command_args("/skills", "/skill"), None);
         assert_eq!(command_args("/sessions", "/session"), None);
     }

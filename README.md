@@ -102,6 +102,7 @@ Inside `spark chat`:
 
 - `/help` shows commands.
 - `/status` prints conversation/profile status.
+- `/profile` prints the full live profiler JSON.
 - `/compact` manually runs Codex-like compaction on the active conversation.
 - `/session` shows the active session.
 - `/session list` lists saved sessions.

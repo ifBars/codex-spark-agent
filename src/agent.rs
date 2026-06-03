@@ -112,6 +112,10 @@ impl AgentRunner {
         self.profiler.status_line()
     }
 
+    pub fn profile_summary(&self) -> Value {
+        self.profiler.to_json()
+    }
+
     pub fn snapshot(&self) -> AgentSnapshot {
         AgentSnapshot {
             input: self.input.clone(),
