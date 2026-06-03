@@ -391,7 +391,7 @@ impl AgentRunner {
     }
 
     fn emit_profile_summary(&mut self) -> Result<()> {
-        let summary = self.profiler.to_json();
+        let summary = self.profile_summary();
         if let Some(trace) = &mut self.trace {
             trace.write(self.request_seq, "profile-summary", &summary)?;
         }
