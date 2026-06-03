@@ -537,6 +537,13 @@ struct ObservedToolCall {
     args: Value,
 }
 
+#[derive(Debug, Clone)]
+struct ObservedToolResult {
+    turn: usize,
+    tool_name: String,
+    ok: bool,
+}
+
 #[derive(Debug)]
 struct RequiredActionReport {
     actions: Vec<RequiredAction>,
@@ -553,6 +560,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let mut timeline = BTreeMap::<usize, Map<String, Value>>::new();
     let mut retained_required_actions = Vec::<RequiredAction>::new();
     let mut observed_tool_calls = Vec::<ObservedToolCall>::new();
+    let mut observed_tool_results = Vec::<ObservedToolResult>::new();
     let mut files = std::fs::read_dir(dir)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -625,6 +633,11 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             }
         } else if is_tool_result_trace_file(name) {
             if let Some(result) = tool_result_from_trace(&value)? {
+                observed_tool_results.push(ObservedToolResult {
+                    turn,
+                    tool_name: result.tool_name.clone(),
+                    ok: result.ok,
+                });
                 profiler.record_tool_result(
                     turn,
                     &result.tool_name,
@@ -647,6 +660,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                         "duration_ms": result.duration_ms,
                         "output_chars": result.output_chars,
                         "error": result.error,
+                        "error_kind": result.data.get("error_kind").cloned().unwrap_or(Value::Null),
                         "cached_observation": result.cached_observation,
                         "truncated": tool_result_is_truncated(&result.data),
                         "timed_out": tool_result_timed_out(&result.data),
@@ -701,6 +715,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         scenario_tool_expectation_report(trace_metadata.as_ref(), &observed_tool_calls);
     let scenario_call_expectation_report =
         scenario_tool_call_expectation_report(trace_metadata.as_ref(), &observed_tool_calls);
+    let tool_failure_recovery_report = tool_failure_recovery_report(&observed_tool_results);
     if let Some(object) = summary.as_object_mut() {
         object.insert(
             "timeline".to_string(),
@@ -742,6 +757,9 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 "profile_scenario_call_expectations".to_string(),
                 report.clone(),
             );
+        }
+        if let Some(report) = &tool_failure_recovery_report {
+            object.insert("tool_failure_recovery".to_string(), report.clone());
         }
         if let Some(diagnostics) = object.get_mut("diagnostics").and_then(Value::as_array_mut) {
             if !required_action_report.missing.is_empty() {
@@ -785,6 +803,34 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                     "message": "The trace did not include all exact native tool calls expected for this profiling scenario.",
                     "missing_calls": report.get("missing_calls").cloned().unwrap_or_else(|| json!([])),
                 }));
+            }
+            if let Some(report) = &tool_failure_recovery_report {
+                if report
+                    .get("recovered_failures")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| count > 0)
+                {
+                    diagnostics.push(json!({
+                        "level": "info",
+                        "kind": "tool_failure_recovered",
+                        "message": "Spark recovered from one or more failed native tool observations later in the trace.",
+                        "recovered_failures": report.get("recovered_failures").cloned().unwrap_or_else(|| json!(0)),
+                        "failed_tool_results": report.get("failed_tool_results").cloned().unwrap_or_else(|| json!(0)),
+                    }));
+                }
+                if report
+                    .get("unrecovered_failures")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| count > 0)
+                {
+                    diagnostics.push(json!({
+                        "level": "warning",
+                        "kind": "tool_failure_unrecovered",
+                        "message": "One or more failed native tool observations had no later successful observation from the same tool.",
+                        "unrecovered_failures": report.get("unrecovered_failures").cloned().unwrap_or_else(|| json!(0)),
+                        "failed_tool_results": report.get("failed_tool_results").cloned().unwrap_or_else(|| json!(0)),
+                    }));
+                }
             }
         }
     }
@@ -841,6 +887,9 @@ pub fn format_trace_timeline(summary: &Value) -> String {
     if let Some(scenario_calls) = format_scenario_call_expectations(summary) {
         lines.push(scenario_calls);
     }
+    if let Some(tool_recovery) = format_tool_failure_recovery(summary) {
+        lines.push(tool_recovery);
+    }
 
     let Some(timeline) = summary.get("timeline").and_then(Value::as_array) else {
         lines.push("timeline: none".to_string());
@@ -885,6 +934,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     let local_pressure_compactions = compactions_with_local_pressure(summary);
     let scenario_tools = format_scenario_tools_for_summary_row(summary);
     let scenario_calls = format_scenario_calls_for_summary_row(summary);
+    let recoveries = format_tool_failure_recovery_for_summary_row(summary);
     let diagnostics = diagnostic_kinds(summary);
     let diagnostics = if diagnostics.is_empty() {
         "none".to_string()
@@ -893,7 +943,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     };
 
     format!(
-        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{scenario_tools}{scenario_calls} diagnostics={diagnostics}"
+        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures}{recoveries} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{scenario_tools}{scenario_calls} diagnostics={diagnostics}"
     )
 }
 
@@ -1150,6 +1200,61 @@ fn format_scenario_calls_for_summary_row(summary: &Value) -> String {
     format!(" scenario_calls={satisfied}/{total}")
 }
 
+fn format_tool_failure_recovery(summary: &Value) -> Option<String> {
+    let report = summary.get("tool_failure_recovery")?;
+    let failed = report
+        .get("failed_tool_results")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if failed == 0 {
+        return None;
+    }
+    let recovered = report
+        .get("recovered_failures")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unrecovered = report
+        .get("unrecovered_failures")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let by_tool = report
+        .get("by_tool")
+        .and_then(Value::as_object)
+        .map(|tools| {
+            tools
+                .iter()
+                .map(|(tool, counts)| {
+                    let recovered = counts.get("recovered").and_then(Value::as_u64).unwrap_or(0);
+                    let failed = counts.get("failed").and_then(Value::as_u64).unwrap_or(0);
+                    format!("{tool}:{recovered}/{failed}")
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    Some(format!(
+        "tool-recovery: recovered={recovered}/{failed} unrecovered={unrecovered} by_tool=[{by_tool}]"
+    ))
+}
+
+fn format_tool_failure_recovery_for_summary_row(summary: &Value) -> String {
+    let Some(report) = summary.get("tool_failure_recovery") else {
+        return String::new();
+    };
+    let failed = report
+        .get("failed_tool_results")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if failed == 0 {
+        return String::new();
+    }
+    let recovered = report
+        .get("recovered_failures")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    format!(" recoveries={recovered}/{failed}")
+}
+
 fn format_tool_group(group: &Value) -> Option<String> {
     let tools = group.as_array()?;
     if tools.is_empty() {
@@ -1318,6 +1423,9 @@ fn format_tool_results(results: &[Value]) -> String {
                 .unwrap_or(false)
             {
                 suffix.push("timeout");
+            }
+            if let Some(error_kind) = result.get("error_kind").and_then(Value::as_str) {
+                suffix.push(error_kind);
             }
             let parent_suffix = result
                 .get("created_parent_dirs")
@@ -1824,6 +1932,66 @@ fn scenario_tool_call_expectation_report(
         "satisfied_calls": satisfied.len(),
         "missing_calls": missing,
         "satisfied_tool_calls": satisfied,
+    }))
+}
+
+fn tool_failure_recovery_report(results: &[ObservedToolResult]) -> Option<Value> {
+    let failures = results
+        .iter()
+        .enumerate()
+        .filter(|(_, result)| !result.ok)
+        .collect::<Vec<_>>();
+    if failures.is_empty() {
+        return None;
+    }
+
+    let mut recovered = Vec::new();
+    let mut unrecovered = Vec::new();
+    let mut by_tool = BTreeMap::<String, (usize, usize)>::new();
+    for (index, failure) in failures {
+        let entry = by_tool.entry(failure.tool_name.clone()).or_default();
+        entry.1 += 1;
+        let recovery = results
+            .iter()
+            .skip(index + 1)
+            .find(|candidate| candidate.ok && candidate.tool_name == failure.tool_name);
+        let record = json!({
+            "turn": failure.turn,
+            "tool": failure.tool_name,
+        });
+        if let Some(recovery) = recovery {
+            entry.0 += 1;
+            recovered.push(json!({
+                "turn": failure.turn,
+                "tool": failure.tool_name,
+                "recovered_at_turn": recovery.turn,
+            }));
+        } else {
+            unrecovered.push(record);
+        }
+    }
+
+    let by_tool = by_tool
+        .into_iter()
+        .map(|(tool, (recovered, failed))| {
+            (
+                tool,
+                json!({
+                    "recovered": recovered,
+                    "failed": failed,
+                    "unrecovered": failed.saturating_sub(recovered),
+                }),
+            )
+        })
+        .collect::<Map<_, _>>();
+
+    Some(json!({
+        "failed_tool_results": recovered.len() + unrecovered.len(),
+        "recovered_failures": recovered.len(),
+        "unrecovered_failures": unrecovered.len(),
+        "recovered": recovered,
+        "unrecovered": unrecovered,
+        "by_tool": by_tool,
     }))
 }
 
@@ -3023,6 +3191,82 @@ mod tests {
             summary["timeline"][0]["tool_results"][1]["created_parent_dirs"],
             json!(["nested"])
         );
+    }
+
+    #[test]
+    fn analyze_trace_reports_recovered_tool_failures() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("001-tool-result.json"),
+            serde_json::to_vec_pretty(&json!({
+                "call_id": "call_1",
+                "tool": "fs.read",
+                "args": {"path": "missing.md"},
+                "duration_ms": 2,
+                "result": {
+                    "ok": false,
+                    "data": {
+                        "error_kind": "not_found_or_unavailable",
+                        "message": "failed to read missing.md"
+                    },
+                    "error": "failed to read missing.md"
+                }
+            }))
+            .expect("serialize failed result"),
+        )
+        .expect("write failed result");
+        std::fs::write(
+            dir.path().join("002-tool-result.json"),
+            serde_json::to_vec_pretty(&json!({
+                "call_id": "call_2",
+                "tool": "fs.read",
+                "args": {"path": "README.md"},
+                "duration_ms": 3,
+                "result": {
+                    "ok": true,
+                    "data": {"path": "README.md"},
+                    "error": null
+                }
+            }))
+            .expect("serialize recovered result"),
+        )
+        .expect("write recovered result");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["tool_failures"], 1);
+        assert_eq!(summary["tool_failure_recovery"]["failed_tool_results"], 1);
+        assert_eq!(summary["tool_failure_recovery"]["recovered_failures"], 1);
+        assert_eq!(summary["tool_failure_recovery"]["unrecovered_failures"], 0);
+        assert_eq!(
+            summary["tool_failure_recovery"]["by_tool"]["fs.read"]["recovered"],
+            1
+        );
+        assert_eq!(
+            summary["timeline"][0]["tool_results"][0]["error_kind"],
+            "not_found_or_unavailable"
+        );
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "tool_failure_recovered")
+        );
+        assert!(
+            !summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "tool_failure_unrecovered")
+        );
+        assert!(
+            format_trace_timeline(&summary)
+                .contains("tool-recovery: recovered=1/1 unrecovered=0 by_tool=[fs.read:1/1]")
+        );
+        assert!(format_trace_timeline(&summary).contains("results=[fs.read:fail 2ms"));
+        assert!(format_trace_timeline(&summary).contains("not_found_or_unavailable"));
+        assert!(format_trace_summary_row(".spark-runs/run-1", &summary).contains("recoveries=1/1"));
     }
 
     #[test]

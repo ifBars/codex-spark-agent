@@ -267,7 +267,9 @@ If a run fails after starting, the harness saves a `*-error.json` trace entry an
 
 `analyze-trace` recomputes its summary from raw trace files, so older embedded `*-profile-summary.json` files do not mask newer diagnostics.
 
-`analyze-trace` also emits a compact `timeline` array with per-turn request size, approximate token pressure, response latency, response text size, tool-call signatures, tool-result status, timeout/truncation markers, compactions, and terminal errors. Use `spark analyze-trace --timeline` for a human-readable version that correlates Spark failures with context growth, slow requests, repeated tools, and compaction boundaries before opening the raw JSON files.
+`analyze-trace` also emits a compact `timeline` array with per-turn request size, approximate token pressure, response latency, response text size, tool-call signatures, tool-result status, timeout/truncation/error-kind markers, compactions, and terminal errors. Use `spark analyze-trace --timeline` for a human-readable version that correlates Spark failures with context growth, slow requests, repeated tools, and compaction boundaries before opening the raw JSON files.
+
+When a native tool observation fails, `analyze-trace` reports whether Spark later recovered with a successful observation from the same tool. Summary rows include `recoveries=<recovered>/<failed>`, and timeline output prints a `tool-recovery` header. This helps distinguish clean runs, recovered path drift, and unrecovered tool failures.
 
 When local compaction retained required native file-tool actions, `analyze-trace` compares those actions with observed tool calls and reports executed, missing, and delayed required actions. `spark analyze-trace --timeline` also prints a `required-actions` header so post-compaction detours are visible without opening raw JSON.
 
