@@ -388,11 +388,17 @@ async fn run_interactive_chat(
             _ => {}
         }
 
+        let mut save_after_run = false;
         if let Err(error) = load_skill_mentions(runner, &cwd, input).await {
             eprintln!("error: {error:#}");
         } else if let Err(error) = runner.run(input).await {
             eprintln!("error: {error:#}");
-        } else if let Some(path) = &session_path {
+            save_after_run = true;
+        } else {
+            save_after_run = true;
+        }
+
+        if save_after_run && let Some(path) = &session_path {
             runner.save_session(path)?;
         }
     }

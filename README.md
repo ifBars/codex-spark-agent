@@ -130,7 +130,7 @@ Inside `spark chat`:
 - `/skill refresh` force-rebuilds compiled skill caches.
 - `/exit` quits.
 
-Interactive chat defaults to `~/.spark-codex/sessions/default.json`. One-shot prompts only persist when `--session <name>` is supplied.
+Interactive chat defaults to `~/.spark-codex/sessions/default.json`. One-shot prompts only persist when `--session <name>` is supplied. Interactive sessions autosave after completed prompts and after agent-loop errors, so failed long-context runs can still be inspected, compacted, or resumed.
 
 ## Skills
 
