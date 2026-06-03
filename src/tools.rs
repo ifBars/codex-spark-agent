@@ -115,6 +115,19 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
             }),
         },
         ToolDescriptor {
+            name: "fs.rename".to_string(),
+            description: "Rename or move one file or directory inside the workspace. Refuses to overwrite an existing destination.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "from": {"type": "string"},
+                    "to": {"type": "string"}
+                },
+                "required": ["from", "to"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDescriptor {
             name: "cmd.exec".to_string(),
             description: "Execute a shell command in the workspace. Use PowerShell-compatible commands on Windows.".to_string(),
             input_schema: json!({
@@ -149,6 +162,7 @@ async fn invoke_inner(cwd: &Path, tool_name: &str, args: Value) -> Result<ToolRe
         "fs.search" => fs_search(cwd, args),
         "fs.replace" => fs_replace(cwd, args),
         "fs.edit" => fs_edit(cwd, args),
+        "fs.rename" => fs_rename(cwd, args),
         "cmd.exec" => cmd_exec(cwd, args).await,
         _ => anyhow::bail!("unknown tool: {tool_name}"),
     }
@@ -577,6 +591,40 @@ fn fs_edit(cwd: &Path, args: Value) -> Result<ToolResult> {
     })
 }
 
+fn fs_rename(cwd: &Path, args: Value) -> Result<ToolResult> {
+    let from = required_str(&args, "from")?;
+    let to = required_str(&args, "to")?;
+    let source = resolve_under(cwd, from)?;
+    let destination = resolve_under_for_write(cwd, to)?;
+    if destination.exists() {
+        anyhow::bail!("destination already exists; nothing was moved");
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let metadata = std::fs::metadata(&source)
+        .with_context(|| format!("failed to inspect {}", source.display()))?;
+    std::fs::rename(&source, &destination).with_context(|| {
+        format!(
+            "failed to rename {} to {}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    Ok(ToolResult {
+        ok: true,
+        data: json!({
+            "from": display_rel(cwd, &source),
+            "to": display_rel(cwd, &destination),
+            "is_file": metadata.is_file(),
+            "is_dir": metadata.is_dir(),
+            "bytes": metadata.len(),
+        }),
+        error: None,
+    })
+}
+
 async fn cmd_exec(cwd: &Path, args: Value) -> Result<ToolResult> {
     let workdir = args
         .get("workdir")
@@ -797,8 +845,9 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
 
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 8);
         assert!(!names.iter().any(|name| name == "agent.complete"));
+        assert!(names.iter().any(|name| name == "fs.rename"));
         assert!(names.iter().any(|name| name == "cmd.exec"));
     }
 
@@ -981,6 +1030,48 @@ mod tests {
         assert_eq!(result.data["bytes"], 11);
         assert_eq!(result.data["previous_bytes"], 3);
         assert_eq!(result.data["created"], false);
+    }
+
+    #[test]
+    fn fs_rename_moves_file_and_creates_parent_dirs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("old.txt"), "hello").expect("write old");
+
+        let result = fs_rename(
+            dir.path(),
+            json!({"from": "old.txt", "to": "nested/new.txt"}),
+        )
+        .expect("rename");
+
+        assert!(result.ok);
+        assert_eq!(result.data["from"], "old.txt");
+        assert_eq!(result.data["to"], "nested/new.txt");
+        assert_eq!(result.data["is_file"], true);
+        assert!(!dir.path().join("old.txt").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("nested/new.txt")).expect("read new"),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn fs_rename_refuses_to_overwrite_destination() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("old.txt"), "old").expect("write old");
+        std::fs::write(dir.path().join("new.txt"), "new").expect("write new");
+
+        let error = fs_rename(dir.path(), json!({"from": "old.txt", "to": "new.txt"}))
+            .expect_err("rename should fail");
+
+        assert!(error.to_string().contains("destination already exists"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("old.txt")).expect("read old"),
+            "old"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("new.txt")).expect("read new"),
+            "new"
+        );
     }
 
     #[test]

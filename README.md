@@ -13,7 +13,7 @@ It is intentionally simpler than the official Codex CLI: one binary, ChatGPT/Cod
 This repo is built to profile and iterate on that harness shape:
 
 - direct streamed calls to the Codex Responses backend,
-- native function tools for file, command, and completion actions,
+- native function tools for file and command actions,
 - Codex-like remote compaction support,
 - trace files for debugging model/tool loops,
 - small profiling summaries for repeated calls, compaction, and cache hits,
@@ -187,13 +187,14 @@ If the source skill changes, Spark recompiles the compact skill cache on first l
 - `fs.write`
 - `fs.replace`
 - `fs.edit`
+- `fs.rename`
 - `cmd.exec`
 
 Tool schemas are intentionally small. The harness accepts JSON-string or object arguments, reports bad arguments as tool observations, and preserves function-call outputs in the next request.
 
 `fs.list` and `fs.search` skip generated/runtime directories such as `target/`, `.git/`, `node_modules/`, `.spark/`, `.spark-runs/`, and `.spark-profile/` during recursive discovery. Direct paths remain readable, so profiling artifacts can still be inspected explicitly. `fs.read` returns line-window metadata (`returned_lines`, `total_lines`, `has_more`, and `next_offset`) so Spark can choose the next chunk without guessing.
 
-`fs.write` creates parent directories when needed and reports whether the file was newly created, plus previous and new byte counts. That makes overwrite behavior visible in traces and profile timelines.
+`fs.write` creates parent directories when needed and reports whether the file was newly created, plus previous and new byte counts. `fs.rename` moves one file or directory inside the workspace, creates destination parents, and refuses to overwrite an existing destination. That makes common file mutations visible in traces and profile timelines without falling back to shell commands.
 
 Repeated read-only observations from `fs.read`, `fs.list`, and `fs.search` are served from a per-run cache, including failed observations such as missing files. File mutation tools and `cmd.exec` clear that cache so Spark can retry after the workspace may have changed.
 

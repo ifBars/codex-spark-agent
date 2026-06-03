@@ -1552,6 +1552,7 @@ fn wire_tool_name_to_local(name: &str) -> String {
         "fs_search" => "fs.search",
         "fs_replace" => "fs.replace",
         "fs_edit" => "fs.edit",
+        "fs_rename" => "fs.rename",
         "cmd_exec" => "cmd.exec",
         other => other,
     }

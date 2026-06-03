@@ -677,7 +677,7 @@ fn should_cache_readonly_result(result: &ToolResult) -> bool {
 fn invalidates_readonly_tool_cache(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "fs.write" | "fs.replace" | "fs.edit" | "cmd.exec"
+        "fs.write" | "fs.replace" | "fs.edit" | "fs.rename" | "cmd.exec"
     )
 }
 
