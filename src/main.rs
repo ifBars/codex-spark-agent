@@ -104,6 +104,9 @@ enum Command {
         /// Analyze the latest .spark-runs/run-* directory.
         #[arg(long)]
         latest: bool,
+        /// Print a compact human-readable timeline instead of full JSON.
+        #[arg(long)]
+        timeline: bool,
     },
 }
 
@@ -258,7 +261,11 @@ async fn main() -> Result<()> {
                 println!("{}", display_trace_dir(&cwd, &run).display());
             }
         }
-        Command::AnalyzeTrace { dir, latest } => {
+        Command::AnalyzeTrace {
+            dir,
+            latest,
+            timeline,
+        } => {
             if latest && dir.is_some() {
                 anyhow::bail!("pass either a trace directory or --latest, not both");
             }
@@ -268,7 +275,11 @@ async fn main() -> Result<()> {
                 None => latest_trace_dir(&trace_runs_root(&cwd))?,
             };
             let summary = profiler::analyze_trace(&dir)?;
-            println!("{}", serde_json::to_string_pretty(&summary)?);
+            if timeline {
+                print!("{}", profiler::format_trace_timeline(&summary));
+            } else {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            }
         }
     }
 
