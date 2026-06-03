@@ -17,6 +17,7 @@ const DEFAULT_MODEL: &str = "gpt-5.3-codex-spark";
 const DEFAULT_COMPACT_AFTER_CHARS: usize = 160_000;
 const DEFAULT_MAX_INPUT_CHARS: usize = 500_000;
 const APPROX_CHARS_PER_TOKEN: usize = 4;
+const DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS: usize = 12;
 const DEFAULT_SCENARIO_TARGET_TOKENS: usize = 45_000;
 const MAX_SCENARIO_TARGET_TOKENS: usize = 120_000;
 const MAX_SCENARIO_REPEAT: usize = 50;
@@ -78,6 +79,9 @@ enum Command {
         /// Compact older tool outputs once estimated input exceeds this many tokens.
         #[arg(long)]
         compact_after_tokens: Option<usize>,
+        /// Force compaction after this many consecutive tool-only turns. Use 0 to disable.
+        #[arg(long, default_value_t = DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS)]
+        compact_after_tool_only_turns: usize,
         /// Refuse to send request JSON above this many characters.
         #[arg(long)]
         max_input_chars: Option<usize>,
@@ -174,6 +178,9 @@ enum Command {
         /// Compact older context once estimated input exceeds this many tokens.
         #[arg(long)]
         compact_after_tokens: Option<usize>,
+        /// Force compaction after this many consecutive tool-only turns. Use 0 to disable.
+        #[arg(long, default_value_t = DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS)]
+        compact_after_tool_only_turns: usize,
         /// Refuse to send request JSON above this many characters.
         #[arg(long)]
         max_input_chars: Option<usize>,
@@ -269,6 +276,7 @@ async fn main() -> Result<()> {
             new_session,
             compact_after_chars,
             compact_after_tokens,
+            compact_after_tool_only_turns,
             max_input_chars,
             max_input_tokens,
         } => {
@@ -306,6 +314,7 @@ async fn main() -> Result<()> {
                 trace,
                 profile,
                 compact_after_chars,
+                compact_after_tool_only_turns,
                 max_input_chars,
                 interactive,
                 session_name.clone(),
@@ -362,6 +371,7 @@ async fn main() -> Result<()> {
                     false,
                     false,
                     DEFAULT_COMPACT_AFTER_CHARS,
+                    DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS,
                     DEFAULT_MAX_INPUT_CHARS,
                     false,
                     None,
@@ -577,6 +587,7 @@ async fn main() -> Result<()> {
             no_profile,
             compact_after_chars,
             compact_after_tokens,
+            compact_after_tool_only_turns,
             max_input_chars,
             max_input_tokens,
         } => {
@@ -598,13 +609,14 @@ async fn main() -> Result<()> {
             let prompts = profile_scenario_prompts(scenario, target_tokens)?;
             let total_prompt_chars = prompts.iter().map(String::len).sum::<usize>();
             println!(
-                "scenario={:?} repeat={} prompts={} prompt_chars={} approx_tokens={} compact_after_chars={} max_input_chars={}",
+                "scenario={:?} repeat={} prompts={} prompt_chars={} approx_tokens={} compact_after_chars={} compact_after_tool_only_turns={} max_input_chars={}",
                 scenario,
                 repeat,
                 prompts.len(),
                 total_prompt_chars,
                 total_prompt_chars / APPROX_CHARS_PER_TOKEN,
                 compact_after_chars,
+                compact_after_tool_only_turns,
                 max_input_chars
             );
             let auth = config::load_auth()?;
@@ -623,6 +635,7 @@ async fn main() -> Result<()> {
                     !no_trace,
                     !no_profile,
                     compact_after_chars,
+                    compact_after_tool_only_turns,
                     max_input_chars,
                     false,
                     None,

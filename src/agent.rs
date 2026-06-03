@@ -15,6 +15,7 @@ use crate::profiler::{
 use crate::tools::{ToolResult, builtin_tools, invoke};
 
 const AGENT_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+const TOOL_ONLY_STREAK_COMPACTION_TRIGGER: &str = "tool_only_streak";
 
 pub struct AgentRunner {
     client: SparkClient,
@@ -23,6 +24,7 @@ pub struct AgentRunner {
     max_turns: Option<usize>,
     trace: Option<TraceWriter>,
     compact_after_chars: usize,
+    compact_after_tool_only_turns: usize,
     max_input_chars: usize,
     request_seq: usize,
     profile: bool,
@@ -58,6 +60,7 @@ impl AgentRunner {
         trace: bool,
         profile: bool,
         compact_after_chars: usize,
+        compact_after_tool_only_turns: usize,
         max_input_chars: usize,
         interactive: bool,
         session_name: Option<String>,
@@ -77,6 +80,7 @@ impl AgentRunner {
             model: model.clone(),
             max_turns,
             compact_after_chars,
+            compact_after_tool_only_turns,
             max_input_chars,
             profile,
             interactive,
@@ -96,6 +100,7 @@ impl AgentRunner {
                 None
             },
             compact_after_chars,
+            compact_after_tool_only_turns,
             max_input_chars,
             request_seq: 0,
             profile,
@@ -139,12 +144,13 @@ impl AgentRunner {
             .and_then(Value::as_f64)
             .unwrap_or_default();
         format!(
-            "{}; live_input_chars={}, live_approx_input_tokens={} ({:.1}% of 128k), compact_after_chars={}, max_input_chars={}",
+            "{}; live_input_chars={}, live_approx_input_tokens={} ({:.1}% of 128k), compact_after_chars={}, compact_after_tool_only_turns={}, max_input_chars={}",
             self.profiler.status_line(),
             live_input_chars,
             live_approx_tokens,
             live_context_pct,
             self.compact_after_chars,
+            self.compact_after_tool_only_turns,
             self.max_input_chars
         )
     }
@@ -185,7 +191,7 @@ impl AgentRunner {
 
     pub async fn compact_now(&mut self) -> Result<Option<Value>> {
         let tools = builtin_tools();
-        let report = self.compact_once(&tools, true).await?;
+        let report = self.compact_once(&tools, true, Some("manual")).await?;
         if let Some(report) = &report {
             self.profiler.record_compaction(report);
             if let Some(trace) = &mut self.trace {
@@ -253,6 +259,7 @@ impl AgentRunner {
         let tools = builtin_tools();
 
         let mut turn = 0usize;
+        let mut last_tool_only_compaction_streak = 0usize;
         loop {
             turn += 1;
             if let Some(max_turns) = self.max_turns
@@ -263,8 +270,25 @@ impl AgentRunner {
                 anyhow::bail!(message);
             }
 
-            match self.compact_once(&tools, false).await {
+            let tool_only_streak = self.profiler.current_tool_only_turn_streak();
+            let compaction_trigger = compaction_trigger_for_turn(
+                self.compact_after_chars,
+                self.compact_after_tool_only_turns,
+                tool_only_streak,
+                last_tool_only_compaction_streak,
+                &self.input,
+            )?;
+
+            match self
+                .compact_once(&tools, compaction_trigger.is_some(), compaction_trigger)
+                .await
+            {
                 Ok(Some(report)) => {
+                    if report.get("trigger").and_then(Value::as_str)
+                        == Some(TOOL_ONLY_STREAK_COMPACTION_TRIGGER)
+                    {
+                        last_tool_only_compaction_streak = tool_only_streak;
+                    }
                     self.profiler.record_compaction(&report);
                     if let Some(trace) = &mut self.trace {
                         trace.write(self.request_seq + 1, "compaction", &report)?;
@@ -332,6 +356,9 @@ impl AgentRunner {
             let calls = function_calls(&response);
             self.profiler
                 .record_turn_activity(self.request_seq, !calls.is_empty(), text.len());
+            if !text.is_empty() {
+                last_tool_only_compaction_streak = 0;
+            }
             if calls.is_empty() {
                 self.emit_profile_summary()?;
                 return Ok(());
@@ -434,6 +461,7 @@ impl AgentRunner {
         &mut self,
         tools: &[crate::tools::ToolDescriptor],
         force: bool,
+        trigger: Option<&'static str>,
     ) -> Result<Option<Value>> {
         if self.input.is_empty() {
             return Ok(None);
@@ -460,6 +488,7 @@ impl AgentRunner {
                 Ok(Some(json!({
                     "method": "responses_compact",
                     "forced": force,
+                    "trigger": trigger,
                     "duration_ms": duration_ms,
                     "before_chars": before,
                     "compact_request_chars": serde_json::to_string(&compact_input)?.len(),
@@ -476,6 +505,7 @@ impl AgentRunner {
                     Ok(Some(json!({
                         "method": "local_fallback",
                         "forced": force,
+                        "trigger": trigger,
                         "duration_ms": duration_ms,
                         "remote_error": error.to_string(),
                         "fallback": report,
@@ -492,6 +522,26 @@ impl AgentRunner {
 
 fn default_agent_snapshot_schema_version() -> u32 {
     AGENT_SNAPSHOT_SCHEMA_VERSION
+}
+
+fn compaction_trigger_for_turn(
+    compact_after_chars: usize,
+    compact_after_tool_only_turns: usize,
+    tool_only_streak: usize,
+    last_tool_only_compaction_streak: usize,
+    input: &[Value],
+) -> Result<Option<&'static str>> {
+    let input_chars = serde_json::to_string(input)?.len();
+    if compact_after_chars != 0 && input_chars > compact_after_chars {
+        return Ok(Some("size_threshold"));
+    }
+    if compact_after_tool_only_turns != 0
+        && tool_only_streak >= compact_after_tool_only_turns
+        && last_tool_only_compaction_streak == 0
+    {
+        return Ok(Some(TOOL_ONLY_STREAK_COMPACTION_TRIGGER));
+    }
+    Ok(None)
 }
 
 fn compact_remote_history_to_threshold(
@@ -1124,6 +1174,7 @@ struct TraceMetadata {
     model: String,
     max_turns: Option<usize>,
     compact_after_chars: usize,
+    compact_after_tool_only_turns: usize,
     max_input_chars: usize,
     profile: bool,
     interactive: bool,
@@ -1155,6 +1206,7 @@ impl TraceWriter {
                 "context": metadata.context,
                 "compact_after_chars": metadata.compact_after_chars,
                 "compact_after_approx_tokens": approx_token_count_from_chars(metadata.compact_after_chars),
+                "compact_after_tool_only_turns": metadata.compact_after_tool_only_turns,
                 "max_input_chars": metadata.max_input_chars,
                 "max_input_approx_tokens": approx_token_count_from_chars(metadata.max_input_chars),
                 "context_window_tokens": SPARK_CONTEXT_WINDOW_TOKENS,
@@ -1615,6 +1667,7 @@ mod tests {
                 model: "gpt-5.3-codex-spark".to_string(),
                 max_turns: None,
                 compact_after_chars: 120_000,
+                compact_after_tool_only_turns: 12,
                 max_input_chars: 480_000,
                 profile: true,
                 interactive: true,
@@ -1635,6 +1688,7 @@ mod tests {
         let metadata = serde_json::from_str::<Value>(&metadata).expect("parse metadata");
 
         assert_eq!(metadata["compact_after_approx_tokens"], 30_000);
+        assert_eq!(metadata["compact_after_tool_only_turns"], 12);
         assert_eq!(metadata["max_input_approx_tokens"], 120_000);
         assert_eq!(metadata["context_window_tokens"], 128_000);
         assert_eq!(metadata["profile"], true);
@@ -1645,6 +1699,29 @@ mod tests {
             metadata["context"]["profile_scenario"]["name"],
             "compaction-pressure"
         );
+    }
+
+    #[test]
+    fn compaction_trigger_prefers_size_then_tool_only_streak() {
+        let input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "x".repeat(120)}]
+        })];
+
+        let trigger = compaction_trigger_for_turn(40, 12, 12, 0, &input).expect("trigger decision");
+        assert_eq!(trigger, Some("size_threshold"));
+
+        let trigger =
+            compaction_trigger_for_turn(10_000, 12, 12, 0, &input).expect("trigger decision");
+        assert_eq!(trigger, Some(TOOL_ONLY_STREAK_COMPACTION_TRIGGER));
+
+        let trigger =
+            compaction_trigger_for_turn(10_000, 12, 12, 12, &input).expect("trigger decision");
+        assert_eq!(trigger, None);
+
+        let trigger =
+            compaction_trigger_for_turn(10_000, 0, 100, 0, &input).expect("trigger decision");
+        assert_eq!(trigger, None);
     }
 
     #[test]

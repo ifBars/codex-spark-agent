@@ -80,6 +80,10 @@ impl AgentProfiler {
         self.response_text_chars = self.response_text_chars.saturating_add(text.len());
     }
 
+    pub fn current_tool_only_turn_streak(&self) -> usize {
+        self.current_consecutive_tool_only_turns
+    }
+
     pub fn record_tool_call(&mut self, turn: usize, tool_name: &str, args: &Value) {
         self.tool_calls += 1;
         *self.tool_counts.entry(tool_name.to_string()).or_default() += 1;
@@ -2002,6 +2006,9 @@ fn format_compactions(compactions: &[Value]) -> String {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "?".to_string());
             let mut parts = vec![format!("{method} {before}->{after}")];
+            if let Some(trigger) = compaction.get("trigger").and_then(Value::as_str) {
+                parts.push(format!("trigger={trigger}"));
+            }
             if let Some(remote_after) = compaction.get("remote_after_chars").and_then(Value::as_u64)
             {
                 let remote_pct = compaction
@@ -2119,6 +2126,7 @@ fn summarize_compaction_report(report: &Value) -> Value {
     let mut summary = Map::new();
     copy_field(report, &mut summary, "method");
     copy_field(report, &mut summary, "forced");
+    copy_field(report, &mut summary, "trigger");
     copy_field(report, &mut summary, "duration_ms");
     copy_field(report, &mut summary, "before_chars");
     copy_field(report, &mut summary, "compact_request_chars");
@@ -3967,6 +3975,7 @@ mod tests {
                 }],
                 "compactions": [{
                     "method": "responses_compact",
+                    "trigger": "tool_only_streak",
                     "before_chars": 200000,
                     "after_chars": 90000,
                     "remote_after_chars": 210000,
@@ -3988,7 +3997,7 @@ mod tests {
             output.contains("results=[fs.read:ok 9ms 512 chars cached+timeout parents=nested]")
         );
         assert!(output.contains(
-            "compactions=[responses_compact 200000->90000 remote=210000 105.0% local_pressure=210000->90000]"
+            "compactions=[responses_compact 200000->90000 trigger=tool_only_streak remote=210000 105.0% local_pressure=210000->90000]"
         ));
         assert!(output.contains("errors=[response:stream ended without response.completed]"));
     }
@@ -3997,6 +4006,7 @@ mod tests {
     fn compaction_summary_reports_remote_replay_pressure_metrics() {
         let summary = summarize_compaction_report(&json!({
             "method": "responses_compact",
+            "trigger": "tool_only_streak",
             "before_chars": 181900,
             "after_chars": 5430,
             "local_pressure": {
@@ -4006,6 +4016,7 @@ mod tests {
             }
         }));
 
+        assert_eq!(summary["trigger"], "tool_only_streak");
         assert_eq!(summary["remote_after_chars"], 183238);
         assert_eq!(summary["local_pressure_final_chars"], 5430);
         assert!(
