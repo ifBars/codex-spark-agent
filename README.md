@@ -188,6 +188,7 @@ Use `--profile` for a compact summary after a prompt:
 - response text size,
 - tool count by tool,
 - tool result and failure counts by tool,
+- tool duration totals and max duration by tool,
 - tool output truncation counts,
 - repeated tool call signatures,
 - consecutive duplicate calls,

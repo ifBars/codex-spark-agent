@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 const SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+const SLOW_TOOL_RESULT_MS: u64 = 10_000;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct AgentProfiler {
@@ -14,6 +15,8 @@ pub struct AgentProfiler {
     tool_results: usize,
     tool_failures: usize,
     truncated_tool_results: usize,
+    total_tool_duration_ms: u64,
+    max_tool_duration_ms: u64,
     repeated_tool_calls: usize,
     consecutive_duplicate_tool_calls: usize,
     compactions: usize,
@@ -29,6 +32,8 @@ pub struct AgentProfiler {
     tool_counts: BTreeMap<String, usize>,
     tool_failure_counts: BTreeMap<String, usize>,
     tool_truncation_counts: BTreeMap<String, usize>,
+    tool_duration_ms_by_tool: BTreeMap<String, u64>,
+    max_tool_duration_ms_by_tool: BTreeMap<String, u64>,
     signature_counts: BTreeMap<String, usize>,
     last_signature: Option<String>,
     signals: Vec<Value>,
@@ -85,9 +90,29 @@ impl AgentProfiler {
         ok: bool,
         data: &Value,
         output_chars: usize,
+        duration_ms: u64,
         error: Option<&str>,
     ) {
         self.tool_results += 1;
+        self.total_tool_duration_ms = self.total_tool_duration_ms.saturating_add(duration_ms);
+        self.max_tool_duration_ms = self.max_tool_duration_ms.max(duration_ms);
+        *self
+            .tool_duration_ms_by_tool
+            .entry(tool_name.to_string())
+            .or_default() += duration_ms;
+        let max_by_tool = self
+            .max_tool_duration_ms_by_tool
+            .entry(tool_name.to_string())
+            .or_default();
+        *max_by_tool = (*max_by_tool).max(duration_ms);
+        if duration_ms >= SLOW_TOOL_RESULT_MS {
+            self.push_signal(json!({
+                "kind": "slow_tool_result",
+                "turn": turn,
+                "tool": tool_name,
+                "duration_ms": duration_ms,
+            }));
+        }
         if tool_result_is_truncated(data) {
             self.truncated_tool_results += 1;
             *self
@@ -168,6 +193,9 @@ impl AgentProfiler {
             "tool_results": self.tool_results,
             "tool_failures": self.tool_failures,
             "truncated_tool_results": self.truncated_tool_results,
+            "total_tool_duration_ms": self.total_tool_duration_ms,
+            "max_tool_duration_ms": self.max_tool_duration_ms,
+            "average_tool_duration_ms": if self.tool_results == 0 { 0 } else { self.total_tool_duration_ms / self.tool_results as u64 },
             "repeated_tool_calls": self.repeated_tool_calls,
             "consecutive_duplicate_tool_calls": self.consecutive_duplicate_tool_calls,
             "compactions": self.compactions,
@@ -187,6 +215,8 @@ impl AgentProfiler {
             "tool_counts": self.tool_counts,
             "tool_failure_counts": self.tool_failure_counts,
             "tool_truncation_counts": self.tool_truncation_counts,
+            "tool_duration_ms_by_tool": self.tool_duration_ms_by_tool,
+            "max_tool_duration_ms_by_tool": self.max_tool_duration_ms_by_tool,
             "diagnostics": diagnostics,
             "recent_signals": self.signals,
         })
@@ -255,6 +285,16 @@ impl AgentProfiler {
                 "message": "One or more tool observations were truncated before being returned to Spark. Inspect recent_signals and rerun narrower commands or searches when exact output matters.",
                 "count": self.truncated_tool_results,
                 "tool_truncation_counts": self.tool_truncation_counts,
+            }));
+        }
+
+        if self.max_tool_duration_ms >= SLOW_TOOL_RESULT_MS {
+            diagnostics.push(json!({
+                "level": "info",
+                "kind": "slow_tool_results",
+                "message": "One or more native tools took at least 10 seconds. Inspect tool_duration_ms_by_tool and recent_signals to decide whether the harness needs a narrower tool or timeout tuning.",
+                "max_tool_duration_ms": self.max_tool_duration_ms,
+                "max_tool_duration_ms_by_tool": self.max_tool_duration_ms_by_tool,
             }));
         }
 
@@ -443,6 +483,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                     result.ok,
                     &result.data,
                     result.output_chars,
+                    result.duration_ms,
                     result.error.as_deref(),
                 );
                 if result.cached_observation {
@@ -565,6 +606,7 @@ struct TraceToolResult {
     ok: bool,
     data: Value,
     output_chars: usize,
+    duration_ms: u64,
     error: Option<String>,
     cached_observation: bool,
 }
@@ -579,6 +621,10 @@ fn tool_result_from_trace(value: &Value) -> Result<Option<TraceToolResult>> {
     let args = value.get("args").cloned().unwrap_or_else(|| json!({}));
     let ok = result.get("ok").and_then(Value::as_bool).unwrap_or(false);
     let data = result.get("data").cloned().unwrap_or_else(|| json!({}));
+    let duration_ms = value
+        .get("duration_ms")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let output_chars = serde_json::to_string(result)?.len();
     let error = result
         .get("error")
@@ -594,6 +640,7 @@ fn tool_result_from_trace(value: &Value) -> Result<Option<TraceToolResult>> {
         ok,
         data,
         output_chars,
+        duration_ms,
         error,
         cached_observation,
     }))
@@ -754,6 +801,7 @@ mod tests {
             false,
             &json!({"code": 1}),
             128,
+            250,
             Some("command exited with code 1"),
         );
 
@@ -787,6 +835,7 @@ mod tests {
                 "stderr_chars": 0
             }),
             24_512,
+            400,
             None,
         );
 
@@ -808,6 +857,29 @@ mod tests {
                 .expect("diagnostics")
                 .iter()
                 .any(|diagnostic| diagnostic["kind"] == "tool_result_truncation")
+        );
+    }
+
+    #[test]
+    fn profiler_records_tool_duration_and_slow_diagnostics() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_tool_result(1, "cmd.exec", true, &json!({}), 64, 12_345, None);
+
+        let summary = profiler.to_json();
+
+        assert_eq!(summary["total_tool_duration_ms"], 12_345);
+        assert_eq!(summary["max_tool_duration_ms"], 12_345);
+        assert_eq!(summary["average_tool_duration_ms"], 12_345);
+        assert_eq!(summary["tool_duration_ms_by_tool"]["cmd.exec"], 12_345);
+        assert_eq!(summary["max_tool_duration_ms_by_tool"]["cmd.exec"], 12_345);
+        assert_eq!(summary["recent_signals"][0]["kind"], "slow_tool_result");
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "slow_tool_results")
         );
     }
 
@@ -1059,6 +1131,7 @@ mod tests {
             serde_json::to_vec_pretty(&json!({
                 "call_id": "call_1",
                 "tool": "cmd.exec",
+                "duration_ms": 12_345,
                 "result": {
                     "ok": false,
                     "data": {"code": 1, "stdout_truncated": true, "stdout_chars": 40000},
@@ -1074,6 +1147,7 @@ mod tests {
                 "call_id": "call_2",
                 "tool": "fs.read",
                 "args": {"path": "README.md"},
+                "duration_ms": 4,
                 "result": {
                     "ok": true,
                     "data": {"path": "README.md", "cached_observation": true},
@@ -1092,6 +1166,10 @@ mod tests {
         assert_eq!(summary["readonly_tool_cache_hits"], 1);
         assert_eq!(summary["tool_failure_counts"]["cmd.exec"], 1);
         assert_eq!(summary["tool_truncation_counts"]["cmd.exec"], 1);
+        assert_eq!(summary["total_tool_duration_ms"], 12_349);
+        assert_eq!(summary["max_tool_duration_ms"], 12_345);
+        assert_eq!(summary["tool_duration_ms_by_tool"]["cmd.exec"], 12_345);
+        assert_eq!(summary["tool_duration_ms_by_tool"]["fs.read"], 4);
     }
 
     #[test]

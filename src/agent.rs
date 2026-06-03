@@ -280,7 +280,9 @@ impl AgentRunner {
                 self.profiler
                     .record_tool_call(self.request_seq, &tool_name, &args);
                 println!("\n> {tool_name} {}", serde_json::to_string(&args)?);
+                let tool_started = std::time::Instant::now();
                 let result = self.invoke_with_cache(&tool_name, args.clone()).await;
+                let duration_ms = tool_started.elapsed().as_millis() as u64;
 
                 let output = serde_json::to_string(&result)?;
                 self.profiler.record_tool_result(
@@ -289,13 +291,14 @@ impl AgentRunner {
                     result.ok,
                     &result.data,
                     output.len(),
+                    duration_ms,
                     result.error.as_deref(),
                 );
                 if let Some(trace) = &mut self.trace {
                     trace.write(
                         self.request_seq,
                         "tool-result",
-                        &json!({"call_id": call_id, "tool": tool_name, "args": args, "result": result}),
+                        &json!({"call_id": call_id, "tool": tool_name, "args": args, "duration_ms": duration_ms, "result": result}),
                     )?;
                 }
                 self.input.push(json!({
