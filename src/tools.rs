@@ -354,6 +354,7 @@ fn fs_write(cwd: &Path, args: Value) -> Result<ToolResult> {
     let content = required_str(&args, "content")?;
     let full = resolve_under_for_write(cwd, path)?;
     let previous_bytes = std::fs::metadata(&full).ok().map(|metadata| metadata.len());
+    let created_parent_dirs = missing_parent_dirs(cwd, &full);
     if let Some(parent) = full.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -366,6 +367,7 @@ fn fs_write(cwd: &Path, args: Value) -> Result<ToolResult> {
             "bytes": content.len(),
             "previous_bytes": previous_bytes,
             "created": previous_bytes.is_none(),
+            "created_parent_dirs": created_parent_dirs,
         }),
         error: None,
     })
@@ -599,6 +601,7 @@ fn fs_rename(cwd: &Path, args: Value) -> Result<ToolResult> {
     if destination.exists() {
         anyhow::bail!("destination already exists; nothing was moved");
     }
+    let created_parent_dirs = missing_parent_dirs(cwd, &destination);
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -620,6 +623,7 @@ fn fs_rename(cwd: &Path, args: Value) -> Result<ToolResult> {
             "is_file": metadata.is_file(),
             "is_dir": metadata.is_dir(),
             "bytes": metadata.len(),
+            "created_parent_dirs": created_parent_dirs,
         }),
         error: None,
     })
@@ -804,6 +808,26 @@ fn resolve_under_for_write(cwd: &Path, raw: &str) -> Result<PathBuf> {
     }
 
     Ok(cwd.join(relative))
+}
+
+fn missing_parent_dirs(cwd: &Path, target: &Path) -> Vec<String> {
+    let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let mut missing = Vec::<PathBuf>::new();
+    let Some(mut current) = target.parent() else {
+        return Vec::new();
+    };
+    while current.starts_with(&cwd) && !current.exists() {
+        missing.push(current.to_path_buf());
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent;
+    }
+    missing.reverse();
+    missing
+        .into_iter()
+        .map(|path| display_rel(&cwd, &path))
+        .collect()
 }
 
 fn display_rel(cwd: &Path, path: &Path) -> String {
@@ -1006,6 +1030,7 @@ mod tests {
         assert_eq!(result.data["bytes"], 5);
         assert_eq!(result.data["previous_bytes"], Value::Null);
         assert_eq!(result.data["created"], true);
+        assert_eq!(result.data["created_parent_dirs"], json!(["nested"]));
         assert_eq!(
             std::fs::read_to_string(dir.path().join("nested/sample.txt")).expect("read"),
             "hello"
@@ -1030,6 +1055,7 @@ mod tests {
         assert_eq!(result.data["bytes"], 11);
         assert_eq!(result.data["previous_bytes"], 3);
         assert_eq!(result.data["created"], false);
+        assert_eq!(result.data["created_parent_dirs"], json!([]));
     }
 
     #[test]
@@ -1047,6 +1073,7 @@ mod tests {
         assert_eq!(result.data["from"], "old.txt");
         assert_eq!(result.data["to"], "nested/new.txt");
         assert_eq!(result.data["is_file"], true);
+        assert_eq!(result.data["created_parent_dirs"], json!(["nested"]));
         assert!(!dir.path().join("old.txt").exists());
         assert_eq!(
             std::fs::read_to_string(dir.path().join("nested/new.txt")).expect("read new"),
