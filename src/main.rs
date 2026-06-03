@@ -164,6 +164,8 @@ enum ProfileScenarioKind {
     RepoSurvey,
     /// Long prompt that crosses compaction pressure while staying below 128k tokens.
     CompactionPressure,
+    /// Scratch-file coding task that exercises read, edit, write, and verification tools.
+    FileEdit,
 }
 
 impl ProfileScenarioKind {
@@ -171,6 +173,7 @@ impl ProfileScenarioKind {
         match self {
             Self::RepoSurvey => "repo-survey",
             Self::CompactionPressure => "compaction-pressure",
+            Self::FileEdit => "file-edit",
         }
     }
 }
@@ -424,6 +427,7 @@ async fn main() -> Result<()> {
                 max_input_tokens,
                 DEFAULT_MAX_INPUT_CHARS,
             )?;
+            prepare_profile_scenario(&cwd, scenario)?;
             let prompt = profile_scenario_prompt(scenario, target_tokens)?;
             println!(
                 "scenario={:?} prompt_chars={} approx_tokens={} compact_after_chars={} max_input_chars={}",
@@ -746,6 +750,31 @@ fn timestamp_session_name() -> String {
     format!("chat-{now_secs}")
 }
 
+fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind) -> Result<()> {
+    if !matches!(scenario, ProfileScenarioKind::FileEdit) {
+        return Ok(());
+    }
+
+    let dir = cwd.join(".spark-scenarios").join("file-edit");
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)
+            .map_err(|error| anyhow::anyhow!("failed to reset {}: {error}", dir.display()))?;
+    }
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| anyhow::anyhow!("failed to create {}: {error}", dir.display()))?;
+    std::fs::write(
+        dir.join("notes.md"),
+        "# Spark File Edit Fixture\n\n- status: draft\n- owner: spark\n\nTODO: replace this line with a concise final note.\n",
+    )
+    .map_err(|error| anyhow::anyhow!("failed to write fixture notes.md: {error}"))?;
+    std::fs::write(
+        dir.join("config.toml"),
+        "name = \"spark-fixture\"\nmode = \"draft\"\n",
+    )
+    .map_err(|error| anyhow::anyhow!("failed to write fixture config.toml: {error}"))?;
+    Ok(())
+}
+
 fn profile_scenario_prompt(scenario: ProfileScenarioKind, target_tokens: usize) -> Result<String> {
     if target_tokens == 0 {
         anyhow::bail!("--target-tokens must be greater than 0");
@@ -764,6 +793,18 @@ fn profile_scenario_prompt(scenario: ProfileScenarioKind, target_tokens: usize) 
              2. Read Cargo.toml and README.md with bounded windows.\n\
              3. Search src for tool and compaction surfaces.\n\
              4. Finish with a concise harness-risk summary and one next profiling recommendation."
+                .to_string(),
+        ),
+        ProfileScenarioKind::FileEdit => Ok(
+            "Profile scenario: file-edit.\n\
+             Work only under .spark-scenarios/file-edit.\n\
+             Use native file tools, not cmd.exec, unless verification cannot be done otherwise.\n\
+             Required actions:\n\
+             1. Use fs.read on .spark-scenarios/file-edit/notes.md.\n\
+             2. Use fs.edit or fs.replace on .spark-scenarios/file-edit/notes.md to replace the TODO line with: Final note: Spark edited this fixture with native tools.\n\
+             3. Use fs.write on .spark-scenarios/file-edit/summary.txt with a one-line summary of what changed.\n\
+             4. Use fs.read on both changed files to verify the final contents.\n\
+             Finish with the tools used, whether verification passed, and any harness behavior that made the task easier or harder."
                 .to_string(),
         ),
         ProfileScenarioKind::CompactionPressure => {
@@ -977,7 +1018,7 @@ mod tests {
     use super::{
         APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, ProfileScenarioKind, command_args,
         contains_skill_mention, latest_trace_dir, list_trace_dirs, mentioned_skill_names,
-        profile_scenario_prompt, resolve_char_threshold, trace_runs_root,
+        prepare_profile_scenario, profile_scenario_prompt, resolve_char_threshold, trace_runs_root,
     };
 
     #[test]
@@ -1115,6 +1156,43 @@ mod tests {
         assert!(prompt.contains("Profile scenario: repo-survey"));
         assert!(prompt.contains("Use targeted native tools"));
         assert!(prompt.len() < 1_000);
+    }
+
+    #[test]
+    fn file_edit_scenario_is_scoped_to_scratch_files() {
+        let prompt =
+            profile_scenario_prompt(ProfileScenarioKind::FileEdit, 45_000).expect("scenario");
+
+        assert!(prompt.contains("Profile scenario: file-edit"));
+        assert!(prompt.contains("Work only under .spark-scenarios/file-edit"));
+        assert!(prompt.contains("Use fs.edit or fs.replace"));
+        assert!(prompt.contains("Use fs.write"));
+    }
+
+    #[test]
+    fn file_edit_scenario_prepares_scratch_fixture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        prepare_profile_scenario(dir.path(), ProfileScenarioKind::FileEdit)
+            .expect("prepare scenario");
+
+        let notes = std::fs::read_to_string(
+            dir.path()
+                .join(".spark-scenarios")
+                .join("file-edit")
+                .join("notes.md"),
+        )
+        .expect("read notes");
+        let config = std::fs::read_to_string(
+            dir.path()
+                .join(".spark-scenarios")
+                .join("file-edit")
+                .join("config.toml"),
+        )
+        .expect("read config");
+
+        assert!(notes.contains("TODO: replace this line"));
+        assert!(config.contains("mode = \"draft\""));
     }
 }
 

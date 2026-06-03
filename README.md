@@ -124,6 +124,7 @@ Run a repeatable profiling scenario through the real agent loop:
 ```powershell
 cargo run --bin spark -- profile-scenario repo-survey
 cargo run --bin spark -- profile-scenario compaction-pressure --target-tokens 45000
+cargo run --bin spark -- profile-scenario file-edit
 ```
 
 By default each user message loops until Spark finishes. `--max-turns <n>` is available as an optional safety cap.
@@ -248,7 +249,7 @@ Use `--trace` to save run metadata, raw request, response, tool-result, compacti
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, profile flag, interactive/session mode, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
 
-`spark profile-scenario <name>` runs a canned prompt through the same `AgentRunner` used by `spark chat`, with tracing and profile output enabled by default. `repo-survey` exercises normal read/list/search behavior. `compaction-pressure` generates a synthetic long-context prompt, defaulting to about 45k estimated tokens, which is below Spark's 128k context window but above the default compaction threshold. Scenario runs store their name and prompt sizing in trace metadata, and they print a trace summary row even when Spark fails. Use `spark traces --summary --scenario <name> --aggregate` to compare recent matching runs by success/failure count, max context pressure, latency, tools, compactions, and diagnostics.
+`spark profile-scenario <name>` runs a canned prompt through the same `AgentRunner` used by `spark chat`, with tracing and profile output enabled by default. `repo-survey` exercises normal read/list/search behavior. `file-edit` creates an ignored `.spark-scenarios/file-edit/` scratch fixture and exercises native read/edit/write verification. `compaction-pressure` generates a synthetic long-context prompt, defaulting to about 45k estimated tokens, which is below Spark's 128k context window but above the default compaction threshold. Scenario runs store their name and prompt sizing in trace metadata, and they print a trace summary row even when Spark fails. Use `spark traces --summary --scenario <name> --aggregate` to compare recent matching runs by success/failure count, max context pressure, latency, tools, compactions, and diagnostics.
 
 Token counts are approximate and use a simple 4 chars/token estimate. They are profiling signals for comparing harness behavior, not authoritative tokenizer output.
 

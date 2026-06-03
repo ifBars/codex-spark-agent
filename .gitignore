@@ -6,6 +6,7 @@
 /.spark-runs/
 /.spark-profile/
 /.spark-codex/
+/.spark-scenarios/
 
 # Local secrets and environment overrides
 .env
