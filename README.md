@@ -182,6 +182,8 @@ Use `--profile` for a compact summary after a prompt:
 
 Use `--trace` to save raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`.
 
+If a Spark request fails after the request input is written, the harness saves a `*-response-error.json` trace entry. `analyze-trace` reports those errors alongside the exact request-size sequence, which is useful when profiling long-context failure points.
+
 `.spark-runs/`, `.spark-profile/`, `.spark/`, `target/`, and local auth/session state are ignored by git.
 
 ## Observed Spark Notes

@@ -213,7 +213,21 @@ impl AgentRunner {
                 )?;
             }
 
-            let (response, raw) = self.client.responses_create(&self.input, &tools).await?;
+            let (response, raw) = match self.client.responses_create(&self.input, &tools).await {
+                Ok(result) => result,
+                Err(error) => {
+                    self.profiler
+                        .record_error(self.request_seq, "response", &error.to_string());
+                    if let Some(trace) = &mut self.trace {
+                        trace.write(
+                            self.request_seq,
+                            "response-error",
+                            &json!({"stage": "response", "error": error.to_string()}),
+                        )?;
+                    }
+                    return Err(error);
+                }
+            };
             if let Some(trace) = &mut self.trace {
                 trace.write(self.request_seq, "response", &raw)?;
             }

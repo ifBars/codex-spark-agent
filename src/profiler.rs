@@ -17,7 +17,10 @@ pub struct AgentProfiler {
     readonly_tool_cache_hits: usize,
     max_input_chars: usize,
     total_input_chars: usize,
+    input_chars_by_request: Vec<usize>,
     response_text_chars: usize,
+    errors: Vec<Value>,
+    compaction_reports: Vec<Value>,
     tool_counts: BTreeMap<String, usize>,
     signature_counts: BTreeMap<String, usize>,
     last_signature: Option<String>,
@@ -29,6 +32,7 @@ impl AgentProfiler {
         self.requests += 1;
         self.max_input_chars = self.max_input_chars.max(input_chars);
         self.total_input_chars = self.total_input_chars.saturating_add(input_chars);
+        self.input_chars_by_request.push(input_chars);
     }
 
     pub fn record_response_text(&mut self, text: &str) {
@@ -74,6 +78,13 @@ impl AgentProfiler {
             Some("local_fallback") => self.fallback_compactions += 1,
             _ => {}
         }
+        self.compaction_reports.push(report.clone());
+        self.push_signal(json!({
+            "kind": "compaction",
+            "method": report.get("method").and_then(Value::as_str).unwrap_or("unknown"),
+            "before_chars": report.get("before_chars").or_else(|| report.pointer("/fallback/before_chars")).cloned(),
+            "after_chars": report.get("after_chars").or_else(|| report.pointer("/fallback/after_chars")).cloned(),
+        }));
     }
 
     pub fn record_readonly_tool_cache_hit(&mut self, turn: usize, tool_name: &str, args: &Value) {
@@ -83,6 +94,21 @@ impl AgentProfiler {
             "turn": turn,
             "tool": tool_name,
             "args": args,
+        }));
+    }
+
+    pub fn record_error(&mut self, turn: usize, stage: &str, error: &str) {
+        let value = json!({
+            "turn": turn,
+            "stage": stage,
+            "error": error,
+        });
+        self.errors.push(value.clone());
+        self.push_signal(json!({
+            "kind": "error",
+            "turn": turn,
+            "stage": stage,
+            "error": error,
         }));
     }
 
@@ -98,7 +124,10 @@ impl AgentProfiler {
             "readonly_tool_cache_hits": self.readonly_tool_cache_hits,
             "max_input_chars": self.max_input_chars,
             "average_input_chars": if self.requests == 0 { 0 } else { self.total_input_chars / self.requests },
+            "input_chars_by_request": self.input_chars_by_request,
             "response_text_chars": self.response_text_chars,
+            "errors": self.errors,
+            "compaction_reports": self.compaction_reports,
             "tool_counts": self.tool_counts,
             "recent_signals": self.signals,
         })
@@ -170,6 +199,12 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             }
         } else if name.ends_with("-compaction.json") {
             profiler.record_compaction(&value);
+        } else if name.ends_with("-response-error.json") {
+            let error = value
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error");
+            profiler.record_error(turn, "response", error);
         }
     }
 
@@ -308,6 +343,22 @@ mod tests {
     }
 
     #[test]
+    fn profiler_records_input_size_sequence_and_errors() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_request(120);
+        profiler.record_request(240);
+        profiler.record_error(2, "response", "stream ended without response.completed");
+
+        let summary = profiler.to_json();
+        assert_eq!(summary["requests"], 2);
+        assert_eq!(summary["max_input_chars"], 240);
+        assert_eq!(summary["input_chars_by_request"], json!([120, 240]));
+        assert_eq!(summary["errors"][0]["turn"], 2);
+        assert_eq!(summary["recent_signals"][0]["kind"], "error");
+    }
+
+    #[test]
     fn analyze_trace_reconstructs_tool_calls_from_stream_events() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
@@ -352,5 +403,38 @@ mod tests {
         assert_eq!(summary["tool_calls"], 1);
         assert_eq!(summary["tool_counts"]["fs_read"], 1);
         assert_eq!(summary["response_text_chars"], 4);
+    }
+
+    #[test]
+    fn analyze_trace_reports_response_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("001-request-input.json"),
+            serde_json::to_vec_pretty(&json!({
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": "large prompt"}]}]
+            }))
+            .expect("serialize request"),
+        )
+        .expect("write request");
+        std::fs::write(
+            dir.path().join("001-response-error.json"),
+            serde_json::to_vec_pretty(&json!({
+                "stage": "response",
+                "error": "Spark stream ended without response.completed"
+            }))
+            .expect("serialize error"),
+        )
+        .expect("write error");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["requests"], 1);
+        assert_eq!(summary["errors"][0]["stage"], "response");
+        assert!(
+            summary["errors"][0]["error"]
+                .as_str()
+                .expect("error text")
+                .contains("without response.completed")
+        );
     }
 }
