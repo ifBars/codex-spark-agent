@@ -279,7 +279,7 @@ impl AgentRunner {
                     trace.write(
                         self.request_seq,
                         "tool-result",
-                        &json!({"call_id": call_id, "tool": tool_name, "result": result}),
+                        &json!({"call_id": call_id, "tool": tool_name, "args": args, "result": result}),
                     )?;
                 }
                 self.input.push(json!({
@@ -312,7 +312,7 @@ impl AgentRunner {
         }
 
         let result = invoke(&self.cwd, tool_name, args).await;
-        if is_cacheable_readonly_tool(tool_name) && result.ok {
+        if is_cacheable_readonly_tool(tool_name) && should_cache_readonly_result(&result) {
             self.readonly_tool_cache.insert(
                 signature,
                 CachedToolObservation {
@@ -490,6 +490,10 @@ fn compact_input_locally(input: &mut Vec<Value>, max_chars: usize) -> Result<Opt
 
 fn is_cacheable_readonly_tool(tool_name: &str) -> bool {
     matches!(tool_name, "fs.read" | "fs.list" | "fs.search")
+}
+
+fn should_cache_readonly_result(result: &ToolResult) -> bool {
+    result.ok || result.error.is_some()
 }
 
 fn invalidates_readonly_tool_cache(tool_name: &str) -> bool {
@@ -948,6 +952,25 @@ mod tests {
 
         assert!(dir.path().join("001-tool-result.json").exists());
         assert!(dir.path().join("001-tool-result-002.json").exists());
+    }
+
+    #[test]
+    fn readonly_cache_policy_keeps_successes_and_failures() {
+        assert!(should_cache_readonly_result(&ToolResult {
+            ok: true,
+            data: json!({"path": "README.md"}),
+            error: None,
+        }));
+        assert!(should_cache_readonly_result(&ToolResult {
+            ok: false,
+            data: json!({}),
+            error: Some("failed to read missing.txt".to_string()),
+        }));
+        assert!(!should_cache_readonly_result(&ToolResult {
+            ok: false,
+            data: json!({}),
+            error: None,
+        }));
     }
 
     #[test]

@@ -346,8 +346,17 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 profiler.record_response_text(&text);
             }
         } else if is_tool_result_trace_file(name) {
-            if let Some((tool_name, ok, output_chars, error)) = tool_result_from_trace(&value)? {
-                profiler.record_tool_result(turn, &tool_name, ok, output_chars, error.as_deref());
+            if let Some(result) = tool_result_from_trace(&value)? {
+                profiler.record_tool_result(
+                    turn,
+                    &result.tool_name,
+                    result.ok,
+                    result.output_chars,
+                    result.error.as_deref(),
+                );
+                if result.cached_observation {
+                    profiler.record_readonly_tool_cache_hit(turn, &result.tool_name, &result.args);
+                }
             }
         } else if name.ends_with("-compaction.json") {
             profiler.record_compaction(&value);
@@ -380,20 +389,41 @@ fn is_tool_result_trace_file(name: &str) -> bool {
     name.ends_with("-tool-result.json") || name.contains("-tool-result-")
 }
 
-fn tool_result_from_trace(value: &Value) -> Result<Option<(String, bool, usize, Option<String>)>> {
+struct TraceToolResult {
+    tool_name: String,
+    args: Value,
+    ok: bool,
+    output_chars: usize,
+    error: Option<String>,
+    cached_observation: bool,
+}
+
+fn tool_result_from_trace(value: &Value) -> Result<Option<TraceToolResult>> {
     let Some(tool_name) = value.get("tool").and_then(Value::as_str) else {
         return Ok(None);
     };
     let Some(result) = value.get("result") else {
         return Ok(None);
     };
+    let args = value.get("args").cloned().unwrap_or_else(|| json!({}));
     let ok = result.get("ok").and_then(Value::as_bool).unwrap_or(false);
     let output_chars = serde_json::to_string(result)?.len();
     let error = result
         .get("error")
         .and_then(Value::as_str)
         .map(str::to_string);
-    Ok(Some((tool_name.to_string(), ok, output_chars, error)))
+    let cached_observation = result
+        .pointer("/data/cached_observation")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(Some(TraceToolResult {
+        tool_name: tool_name.to_string(),
+        args,
+        ok,
+        output_chars,
+        error,
+        cached_observation,
+    }))
 }
 
 fn function_calls_from_trace_response(value: &Value) -> Vec<(String, Value)> {
@@ -734,9 +764,10 @@ mod tests {
             serde_json::to_vec_pretty(&json!({
                 "call_id": "call_2",
                 "tool": "fs.read",
+                "args": {"path": "README.md"},
                 "result": {
                     "ok": true,
-                    "data": {"path": "README.md"},
+                    "data": {"path": "README.md", "cached_observation": true},
                     "error": null
                 }
             }))
@@ -748,6 +779,7 @@ mod tests {
 
         assert_eq!(summary["tool_results"], 2);
         assert_eq!(summary["tool_failures"], 1);
+        assert_eq!(summary["readonly_tool_cache_hits"], 1);
         assert_eq!(summary["tool_failure_counts"]["cmd.exec"], 1);
     }
 
