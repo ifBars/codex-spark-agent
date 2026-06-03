@@ -168,6 +168,8 @@ enum ProfileScenarioKind {
     CompactionPressure,
     /// Scratch-file coding task that exercises read, edit, write, and verification tools.
     FileEdit,
+    /// Scratch-file workflow that exercises write, rename, search, and verification tools.
+    FileOps,
 }
 
 impl ProfileScenarioKind {
@@ -177,6 +179,7 @@ impl ProfileScenarioKind {
             Self::NaturalCompaction => "natural-compaction",
             Self::CompactionPressure => "compaction-pressure",
             Self::FileEdit => "file-edit",
+            Self::FileOps => "file-ops",
         }
     }
 }
@@ -770,27 +773,45 @@ fn timestamp_session_name() -> String {
 }
 
 fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind) -> Result<()> {
-    if !matches!(scenario, ProfileScenarioKind::FileEdit) {
+    let Some(name) = (match scenario {
+        ProfileScenarioKind::FileEdit => Some("file-edit"),
+        ProfileScenarioKind::FileOps => Some("file-ops"),
+        _ => None,
+    }) else {
         return Ok(());
-    }
+    };
 
-    let dir = cwd.join(".spark-scenarios").join("file-edit");
+    let dir = cwd.join(".spark-scenarios").join(name);
     if dir.exists() {
         std::fs::remove_dir_all(&dir)
             .map_err(|error| anyhow::anyhow!("failed to reset {}: {error}", dir.display()))?;
     }
     std::fs::create_dir_all(&dir)
         .map_err(|error| anyhow::anyhow!("failed to create {}: {error}", dir.display()))?;
-    std::fs::write(
-        dir.join("notes.md"),
-        "# Spark File Edit Fixture\n\n- status: draft\n- owner: spark\n\nTODO: replace this line with a concise final note.\n",
-    )
-    .map_err(|error| anyhow::anyhow!("failed to write fixture notes.md: {error}"))?;
-    std::fs::write(
-        dir.join("config.toml"),
-        "name = \"spark-fixture\"\nmode = \"draft\"\n",
-    )
-    .map_err(|error| anyhow::anyhow!("failed to write fixture config.toml: {error}"))?;
+    match scenario {
+        ProfileScenarioKind::FileEdit => {
+            std::fs::write(
+                dir.join("notes.md"),
+                "# Spark File Edit Fixture\n\n- status: draft\n- owner: spark\n\nTODO: replace this line with a concise final note.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture notes.md: {error}"))?;
+            std::fs::write(
+                dir.join("config.toml"),
+                "name = \"spark-fixture\"\nmode = \"draft\"\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture config.toml: {error}"))?;
+        }
+        ProfileScenarioKind::FileOps => {
+            std::fs::create_dir_all(dir.join("drafts"))
+                .map_err(|error| anyhow::anyhow!("failed to create drafts fixture: {error}"))?;
+            std::fs::write(
+                dir.join("manifest.txt"),
+                "file-ops fixture\nexpected_final=final/report.md\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture manifest.txt: {error}"))?;
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -827,6 +848,18 @@ fn profile_scenario_prompts(
              3. Use fs.write on .spark-scenarios/file-edit/summary.txt with a one-line summary of what changed.\n\
              4. Use fs.read on both changed files to verify the final contents.\n\
              Finish with the tools used, whether verification passed, and any harness behavior that made the task easier or harder."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::FileOps => Ok(vec![
+            "Profile scenario: file-ops.\n\
+             Work only under .spark-scenarios/file-ops.\n\
+             Use native file tools, not cmd.exec, unless verification cannot be done otherwise.\n\
+             Required actions:\n\
+             1. Use fs.write on .spark-scenarios/file-ops/drafts/report-draft.md with a short markdown report containing the exact phrase: Spark rename path verified.\n\
+             2. Use fs.rename to move .spark-scenarios/file-ops/drafts/report-draft.md to .spark-scenarios/file-ops/final/report.md.\n\
+             3. Use fs.read on .spark-scenarios/file-ops/final/report.md to verify the final contents.\n\
+             4. Use fs.search under .spark-scenarios/file-ops for Spark rename path verified.\n\
+             Finish with the native tools used, whether verification passed, and any harness behavior that made the workflow easier or harder."
                 .to_string(),
         ]),
         ProfileScenarioKind::NaturalCompaction => natural_compaction_scenario_prompts(target_tokens),
@@ -1256,6 +1289,34 @@ mod tests {
 
         assert!(notes.contains("TODO: replace this line"));
         assert!(config.contains("mode = \"draft\""));
+    }
+
+    #[test]
+    fn file_ops_scenario_exercises_native_rename_flow() {
+        let prompts =
+            profile_scenario_prompts(ProfileScenarioKind::FileOps, 45_000).expect("scenario");
+        let prompt = prompts.first().expect("prompt");
+
+        assert!(prompt.contains("Profile scenario: file-ops"));
+        assert!(prompt.contains("Work only under .spark-scenarios/file-ops"));
+        assert!(prompt.contains("Use fs.write"));
+        assert!(prompt.contains("Use fs.rename"));
+        assert!(prompt.contains("Use fs.search"));
+        assert!(prompt.contains("not cmd.exec"));
+    }
+
+    #[test]
+    fn file_ops_scenario_prepares_scratch_fixture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        prepare_profile_scenario(dir.path(), ProfileScenarioKind::FileOps)
+            .expect("prepare scenario");
+
+        let root = dir.path().join(".spark-scenarios").join("file-ops");
+        let manifest = std::fs::read_to_string(root.join("manifest.txt")).expect("read manifest");
+
+        assert!(root.join("drafts").is_dir());
+        assert!(manifest.contains("expected_final=final/report.md"));
     }
 
     #[test]
