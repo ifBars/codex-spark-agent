@@ -19,6 +19,7 @@ const DEFAULT_MAX_INPUT_CHARS: usize = 500_000;
 const APPROX_CHARS_PER_TOKEN: usize = 4;
 const DEFAULT_SCENARIO_TARGET_TOKENS: usize = 45_000;
 const MAX_SCENARIO_TARGET_TOKENS: usize = 120_000;
+const MAX_SCENARIO_REPEAT: usize = 50;
 
 #[derive(Debug, Parser)]
 #[command(name = "spark")]
@@ -137,6 +138,9 @@ enum Command {
         /// Target prompt size for long-context scenarios, in approximate tokens.
         #[arg(long, default_value_t = DEFAULT_SCENARIO_TARGET_TOKENS)]
         target_tokens: usize,
+        /// Run the scenario this many times and aggregate the traces from this invocation.
+        #[arg(long, default_value_t = 1)]
+        repeat: usize,
         /// Disable trace files for this scenario.
         #[arg(long)]
         no_trace: bool,
@@ -415,6 +419,7 @@ async fn main() -> Result<()> {
             model,
             max_turns,
             target_tokens,
+            repeat,
             no_trace,
             no_profile,
             compact_after_chars,
@@ -436,12 +441,13 @@ async fn main() -> Result<()> {
                 max_input_tokens,
                 DEFAULT_MAX_INPUT_CHARS,
             )?;
-            prepare_profile_scenario(&cwd, scenario)?;
+            validate_scenario_repeat(repeat)?;
             let prompts = profile_scenario_prompts(scenario, target_tokens)?;
             let total_prompt_chars = prompts.iter().map(String::len).sum::<usize>();
             println!(
-                "scenario={:?} prompts={} prompt_chars={} approx_tokens={} compact_after_chars={} max_input_chars={}",
+                "scenario={:?} repeat={} prompts={} prompt_chars={} approx_tokens={} compact_after_chars={} max_input_chars={}",
                 scenario,
+                repeat,
                 prompts.len(),
                 total_prompt_chars,
                 total_prompt_chars / APPROX_CHARS_PER_TOKEN,
@@ -449,62 +455,81 @@ async fn main() -> Result<()> {
                 max_input_chars
             );
             let auth = config::load_auth()?;
-            let mut runner = agent::AgentRunner::new(
-                auth,
-                cwd.clone(),
-                model,
-                max_turns,
-                !no_trace,
-                !no_profile,
-                compact_after_chars,
-                max_input_chars,
-                false,
-                None,
-                false,
-                Some(json!({
-                    "profile_scenario": {
-                        "name": scenario.name(),
-                        "target_tokens": target_tokens,
-                        "prompt_count": prompts.len(),
-                        "prompt_chars": total_prompt_chars,
-                        "approx_prompt_tokens": total_prompt_chars / APPROX_CHARS_PER_TOKEN,
-                        "expected_tool_groups": profile_scenario_expected_tool_groups(scenario),
-                        "expected_tool_calls": profile_scenario_expected_tool_calls(scenario),
-                    }
-                })),
-            )?;
+            let mut summaries = Vec::new();
             let mut run_result = Ok(());
-            for (index, prompt) in prompts.iter().enumerate() {
-                println!(
-                    "scenario_turn={}/{} prompt_chars={} approx_tokens={}",
-                    index + 1,
-                    prompts.len(),
-                    prompt.len(),
-                    prompt.len() / APPROX_CHARS_PER_TOKEN
-                );
-                if let Err(error) = runner.run(prompt).await {
-                    run_result = Err(error);
+            for repeat_index in 1..=repeat {
+                prepare_profile_scenario(&cwd, scenario)?;
+                if repeat > 1 {
+                    println!("scenario_repeat={repeat_index}/{repeat}");
+                }
+                let mut runner = agent::AgentRunner::new(
+                    auth.clone(),
+                    cwd.clone(),
+                    model.clone(),
+                    max_turns,
+                    !no_trace,
+                    !no_profile,
+                    compact_after_chars,
+                    max_input_chars,
+                    false,
+                    None,
+                    false,
+                    Some(json!({
+                        "profile_scenario": {
+                            "name": scenario.name(),
+                            "target_tokens": target_tokens,
+                            "prompt_count": prompts.len(),
+                            "prompt_chars": total_prompt_chars,
+                            "approx_prompt_tokens": total_prompt_chars / APPROX_CHARS_PER_TOKEN,
+                            "repeat_index": repeat_index,
+                            "repeat_count": repeat,
+                            "expected_tool_groups": profile_scenario_expected_tool_groups(scenario),
+                            "expected_tool_calls": profile_scenario_expected_tool_calls(scenario),
+                        }
+                    })),
+                )?;
+                for (index, prompt) in prompts.iter().enumerate() {
+                    println!(
+                        "scenario_turn={}/{} prompt_chars={} approx_tokens={}",
+                        index + 1,
+                        prompts.len(),
+                        prompt.len(),
+                        prompt.len() / APPROX_CHARS_PER_TOKEN
+                    );
+                    if let Err(error) = runner.run(prompt).await {
+                        run_result = Err(error);
+                        break;
+                    }
+                }
+                if !no_trace {
+                    match latest_trace_dir(&trace_runs_root(&cwd)).and_then(|latest| {
+                        let summary = profiler::analyze_trace(&latest)?;
+                        Ok((latest, summary))
+                    }) {
+                        Ok((latest, summary)) => {
+                            println!(
+                                "{}",
+                                profiler::format_trace_summary_row(
+                                    &display_trace_dir(&cwd, &latest).display().to_string(),
+                                    &summary,
+                                )
+                            );
+                            summaries.push(summary);
+                        }
+                        Err(error) => {
+                            eprintln!("warning: failed to summarize scenario trace: {error:#}");
+                        }
+                    }
+                }
+                if run_result.is_err() {
                     break;
                 }
             }
-            if !no_trace {
-                match latest_trace_dir(&trace_runs_root(&cwd)).and_then(|latest| {
-                    let summary = profiler::analyze_trace(&latest)?;
-                    Ok((latest, summary))
-                }) {
-                    Ok((latest, summary)) => {
-                        println!(
-                            "{}",
-                            profiler::format_trace_summary_row(
-                                &display_trace_dir(&cwd, &latest).display().to_string(),
-                                &summary,
-                            )
-                        );
-                    }
-                    Err(error) => {
-                        eprintln!("warning: failed to summarize scenario trace: {error:#}");
-                    }
-                }
+            if !no_trace && repeat > 1 && !summaries.is_empty() {
+                println!(
+                    "{}",
+                    profiler::format_trace_aggregate_row(scenario.name(), &summaries)
+                );
             }
             run_result?;
         }
@@ -1184,6 +1209,16 @@ fn resolve_char_threshold(
     }
 }
 
+fn validate_scenario_repeat(repeat: usize) -> Result<()> {
+    if repeat == 0 {
+        anyhow::bail!("--repeat must be greater than 0");
+    }
+    if repeat > MAX_SCENARIO_REPEAT {
+        anyhow::bail!("--repeat must be <= {MAX_SCENARIO_REPEAT}");
+    }
+    Ok(())
+}
+
 fn latest_trace_dir(root: &Path) -> Result<PathBuf> {
     list_trace_dirs(root, 1)?
         .into_iter()
@@ -1232,7 +1267,7 @@ mod tests {
         contains_skill_mention, latest_trace_dir, list_trace_dirs, mentioned_skill_names,
         prepare_profile_scenario, profile_scenario_expected_tool_calls,
         profile_scenario_expected_tool_groups, profile_scenario_prompts, resolve_char_threshold,
-        trace_runs_root,
+        trace_runs_root, validate_scenario_repeat,
     };
 
     #[test]
@@ -1337,6 +1372,18 @@ mod tests {
                 .to_string()
                 .contains("pass either --max-input-chars or --max-input-tokens")
         );
+    }
+
+    #[test]
+    fn scenario_repeat_must_be_in_supported_range() {
+        validate_scenario_repeat(1).expect("repeat 1");
+        validate_scenario_repeat(50).expect("max repeat");
+
+        let zero = validate_scenario_repeat(0).expect_err("zero repeat");
+        assert!(zero.to_string().contains("greater than 0"));
+
+        let too_many = validate_scenario_repeat(51).expect_err("too many repeats");
+        assert!(too_many.to_string().contains("<= 50"));
     }
 
     #[test]
