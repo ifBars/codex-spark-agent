@@ -178,6 +178,7 @@ async fn main() -> Result<()> {
                 max_input_tokens,
                 DEFAULT_MAX_INPUT_CHARS,
             )?;
+            let session_name = session.or_else(|| interactive.then(|| "default".to_string()));
             let auth = config::load_auth()?;
             let mut runner = agent::AgentRunner::new(
                 auth,
@@ -188,8 +189,10 @@ async fn main() -> Result<()> {
                 profile,
                 compact_after_chars,
                 max_input_chars,
+                interactive,
+                session_name.clone(),
+                new_session,
             )?;
-            let session_name = session.or_else(|| interactive.then(|| "default".to_string()));
             let session_path = session_name
                 .as_deref()
                 .map(config::session_path)
@@ -241,6 +244,9 @@ async fn main() -> Result<()> {
                     false,
                     DEFAULT_COMPACT_AFTER_CHARS,
                     DEFAULT_MAX_INPUT_CHARS,
+                    false,
+                    None,
+                    false,
                 )?;
                 for source in skills::discover_sources(&cwd)? {
                     let skill = compile_skill_cached(&runner, &cwd, &source.name, true).await?;

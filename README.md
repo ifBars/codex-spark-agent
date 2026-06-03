@@ -236,7 +236,7 @@ Use `--profile` for a compact summary after a prompt:
 
 Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`. Use `spark traces` to list recent trace directories, or `spark traces --summary` to compare recent runs by request size, latency, tools, compactions, and diagnostics. Use `spark analyze-trace` without a path to summarize the latest trace.
 
-Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
+Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, profile flag, interactive/session mode, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
 
 Token counts are approximate and use a simple 4 chars/token estimate. They are profiling signals for comparing harness behavior, not authoritative tokenizer output.
 

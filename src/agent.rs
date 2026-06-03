@@ -59,6 +59,9 @@ impl AgentRunner {
         profile: bool,
         compact_after_chars: usize,
         max_input_chars: usize,
+        interactive: bool,
+        session_name: Option<String>,
+        new_session: bool,
     ) -> Result<Self> {
         if auth::is_expired(&auth_tokens) {
             println!("Refreshing ChatGPT token...");
@@ -74,6 +77,10 @@ impl AgentRunner {
             max_turns,
             compact_after_chars,
             max_input_chars,
+            profile,
+            interactive,
+            session_name,
+            new_session,
         };
 
         Ok(Self {
@@ -902,6 +909,10 @@ struct TraceMetadata {
     max_turns: Option<usize>,
     compact_after_chars: usize,
     max_input_chars: usize,
+    profile: bool,
+    interactive: bool,
+    session_name: Option<String>,
+    new_session: bool,
 }
 
 impl TraceWriter {
@@ -920,6 +931,10 @@ impl TraceWriter {
                 "cwd": metadata.cwd,
                 "model": metadata.model,
                 "max_turns": metadata.max_turns,
+                "profile": metadata.profile,
+                "interactive": metadata.interactive,
+                "session": metadata.session_name,
+                "new_session": metadata.new_session,
                 "compact_after_chars": metadata.compact_after_chars,
                 "compact_after_approx_tokens": approx_token_count_from_chars(metadata.compact_after_chars),
                 "max_input_chars": metadata.max_input_chars,
@@ -1222,6 +1237,10 @@ mod tests {
                 max_turns: None,
                 compact_after_chars: 120_000,
                 max_input_chars: 480_000,
+                profile: true,
+                interactive: true,
+                session_name: Some("demo-session".to_string()),
+                new_session: true,
             },
         )
         .expect("trace writer");
@@ -1233,6 +1252,10 @@ mod tests {
         assert_eq!(metadata["compact_after_approx_tokens"], 30_000);
         assert_eq!(metadata["max_input_approx_tokens"], 120_000);
         assert_eq!(metadata["context_window_tokens"], 128_000);
+        assert_eq!(metadata["profile"], true);
+        assert_eq!(metadata["interactive"], true);
+        assert_eq!(metadata["session"], "demo-session");
+        assert_eq!(metadata["new_session"], true);
     }
 
     #[test]
