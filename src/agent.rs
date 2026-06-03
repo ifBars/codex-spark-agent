@@ -578,13 +578,14 @@ fn compact_input_locally(input: &mut Vec<Value>, max_chars: usize) -> Result<Opt
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
 
-    let mut compacted = 0usize;
+    let mut compacted_tool_outputs = 0usize;
+    let mut compacted_messages = 0usize;
     let keep_full_from = output_indexes.len().saturating_sub(2);
     for (ordinal, index) in output_indexes.iter().copied().enumerate() {
         let keep_recent = ordinal >= keep_full_from;
         let max_output_chars = if keep_recent { 16_000 } else { 4_000 };
         if compact_output_item(&mut input[index], max_output_chars)? {
-            compacted += 1;
+            compacted_tool_outputs += 1;
         }
     }
 
@@ -602,12 +603,13 @@ fn compact_input_locally(input: &mut Vec<Value>, max_chars: usize) -> Result<Opt
                 continue;
             }
             if compact_message_item(&mut input[index], 800)? {
-                compacted += 1;
+                compacted_messages += 1;
             }
         }
     }
 
     let after = serde_json::to_string(input)?.len();
+    let compacted = compacted_tool_outputs + compacted_messages;
     if compacted == 0 {
         return Ok(None);
     }
@@ -616,6 +618,8 @@ fn compact_input_locally(input: &mut Vec<Value>, max_chars: usize) -> Result<Opt
         "before_chars": before,
         "after_chars": after,
         "compacted_outputs": compacted,
+        "compacted_tool_outputs": compacted_tool_outputs,
+        "compacted_messages": compacted_messages,
         "threshold_chars": max_chars,
     })))
 }
@@ -1068,6 +1072,70 @@ mod tests {
             pressure["final_chars"].as_u64().expect("final chars") as usize,
             final_chars
         );
+    }
+
+    #[test]
+    fn local_compaction_report_splits_tool_outputs_and_messages() {
+        let mut input = (0..12)
+            .flat_map(|index| {
+                [
+                    json!({
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": format!("message {index} {}", "m".repeat(10_000))
+                        }]
+                    }),
+                    json!({
+                        "type": "function_call_output",
+                        "call_id": format!("call_{index}"),
+                        "output": "o".repeat(10_000)
+                    }),
+                ]
+            })
+            .collect::<Vec<_>>();
+
+        let report = compact_input_locally(&mut input, 40_000)
+            .expect("local compact")
+            .expect("report");
+
+        assert!(
+            report["compacted_tool_outputs"]
+                .as_u64()
+                .expect("tool outputs")
+                > 0
+        );
+        assert!(report["compacted_messages"].as_u64().expect("messages") > 0);
+        assert_eq!(
+            report["compacted_outputs"],
+            json!(
+                report["compacted_tool_outputs"].as_u64().unwrap()
+                    + report["compacted_messages"].as_u64().unwrap()
+            )
+        );
+    }
+
+    #[test]
+    fn local_compaction_report_keeps_aggregate_output_count() {
+        let mut input = (0..4)
+            .map(|index| {
+                json!({
+                    "type": "function_call_output",
+                    "call_id": format!("call_{index}"),
+                    "output": "o".repeat(20_000)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let report = compact_input_locally(&mut input, 40_000)
+            .expect("local compact")
+            .expect("report");
+
+        assert_eq!(
+            report["compacted_outputs"],
+            report["compacted_tool_outputs"]
+        );
+        assert_eq!(report["compacted_messages"], 0);
     }
 
     #[test]

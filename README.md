@@ -204,7 +204,7 @@ In interactive chat, `/compact` runs the same remote-first compaction path immed
 
 `/status` and `/profile` include live context pressure for the active session, so long natural conversations can be checked before the next message triggers auto compaction.
 
-If remote compaction still leaves history above the threshold, the harness applies a local pressure pass before sending the next Spark request. Traces mark this as `local_pressure` under the remote compaction report so those runs can be separated from clean remote compactions during profiling.
+If remote compaction still leaves history above the threshold, the harness applies a local pressure pass before sending the next Spark request. Traces mark this as `local_pressure` under the remote compaction report so those runs can be separated from clean remote compactions during profiling. Local pressure and fallback reports split `compacted_tool_outputs` from `compacted_messages` so long-context failures can be correlated with noisy tool output versus broad conversation history.
 
 If remote compaction fails, local preview compaction trims older tool outputs and older messages. Treat the local fallback as a debugging path, not the preferred steady state.
 

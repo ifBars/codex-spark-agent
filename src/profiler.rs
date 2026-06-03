@@ -919,6 +919,9 @@ fn summarize_compaction_report(report: &Value) -> Value {
     copy_field(report, &mut summary, "compact_request_chars");
     copy_field(report, &mut summary, "after_chars");
     copy_field(report, &mut summary, "threshold_chars");
+    copy_field(report, &mut summary, "compacted_outputs");
+    copy_field(report, &mut summary, "compacted_tool_outputs");
+    copy_field(report, &mut summary, "compacted_messages");
     copy_field(report, &mut summary, "remote_error");
     copy_field(report, &mut summary, "fallback");
     copy_field(report, &mut summary, "local_pressure");
