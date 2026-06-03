@@ -255,6 +255,7 @@ impl AgentRunner {
                     if let Some(trace) = &mut self.trace {
                         trace.write(self.request_seq + 1, "compaction", &report)?;
                     }
+                    eprintln!("{}", format_compaction_notice(&report));
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -496,6 +497,48 @@ fn compact_remote_history_to_threshold(
             "fallback": pressure_report,
         })),
     ))
+}
+
+fn format_compaction_notice(report: &Value) -> String {
+    let method = report
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let before = report
+        .get("before_chars")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "?".to_string());
+    let after = report
+        .get("after_chars")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .or_else(|| {
+            report
+                .pointer("/fallback/after_chars")
+                .and_then(Value::as_u64)
+                .map(|value| value.to_string())
+        })
+        .unwrap_or_else(|| "?".to_string());
+    let duration_ms = report
+        .get("duration_ms")
+        .and_then(Value::as_u64)
+        .map(|value| format!("{value}ms"))
+        .unwrap_or_else(|| "?ms".to_string());
+    let pressure = report
+        .get("local_pressure")
+        .and_then(|pressure| pressure.get("made_progress"))
+        .and_then(Value::as_bool)
+        .map(|made_progress| {
+            if made_progress {
+                " local_pressure=applied"
+            } else {
+                " local_pressure=no_progress"
+            }
+        })
+        .unwrap_or("");
+
+    format!("compaction: {method} {before}->{after} chars in {duration_ms}{pressure}")
 }
 
 fn context_pressure_json(
@@ -1025,6 +1068,36 @@ mod tests {
             pressure["final_chars"].as_u64().expect("final chars") as usize,
             final_chars
         );
+    }
+
+    #[test]
+    fn compaction_notice_summarizes_remote_report() {
+        let notice = format_compaction_notice(&json!({
+            "method": "responses_compact",
+            "duration_ms": 1234,
+            "before_chars": 220_000,
+            "after_chars": 80_000
+        }));
+
+        assert_eq!(
+            notice,
+            "compaction: responses_compact 220000->80000 chars in 1234ms"
+        );
+    }
+
+    #[test]
+    fn compaction_notice_marks_local_pressure() {
+        let notice = format_compaction_notice(&json!({
+            "method": "responses_compact",
+            "duration_ms": 1234,
+            "before_chars": 220_000,
+            "after_chars": 100_000,
+            "local_pressure": {
+                "made_progress": true
+            }
+        }));
+
+        assert!(notice.contains("local_pressure=applied"));
     }
 
     #[test]

@@ -198,6 +198,8 @@ Token thresholds use the same simple 4 chars/token estimate as the profiler. Pas
 
 When history grows past the compaction threshold, the harness first tries Codex-like remote compaction through `/responses/compact`, normalizes returned `compaction_summary` items to Codex-style `compaction` items, and replaces live history with the compacted transcript.
 
+Automatic compaction prints a concise event line such as `compaction: responses_compact 220000->80000 chars in 1234ms`. Full compaction reports still go into traces and profile summaries.
+
 In interactive chat, `/compact` runs the same remote-first compaction path immediately and saves the active session afterward. Use it before a large follow-up when a natural conversation has accumulated noisy tool output.
 
 `/status` and `/profile` include live context pressure for the active session, so long natural conversations can be checked before the next message triggers auto compaction.
