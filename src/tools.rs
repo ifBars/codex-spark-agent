@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
+const MAX_COMMAND_STREAM_CHARS: usize = 24_000;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDescriptor {
     pub name: String,
@@ -528,16 +530,63 @@ async fn cmd_exec(cwd: &Path, args: Value) -> Result<ToolResult> {
     .await
     .context("command timed out")??;
 
+    let stdout = bounded_text(
+        String::from_utf8_lossy(&output.stdout).as_ref(),
+        MAX_COMMAND_STREAM_CHARS,
+    );
+    let stderr = bounded_text(
+        String::from_utf8_lossy(&output.stderr).as_ref(),
+        MAX_COMMAND_STREAM_CHARS,
+    );
+
     Ok(ToolResult {
         ok: output.status.success(),
         data: json!({
             "code": output.status.code(),
-            "stdout": String::from_utf8_lossy(&output.stdout),
-            "stderr": String::from_utf8_lossy(&output.stderr),
+            "stdout": stdout.text,
+            "stderr": stderr.text,
+            "stdout_chars": stdout.original_chars,
+            "stderr_chars": stderr.original_chars,
+            "stdout_truncated": stdout.truncated,
+            "stderr_truncated": stderr.truncated,
             "workdir": display_rel(cwd, &workdir),
         }),
         error: None,
     })
+}
+
+struct BoundedText {
+    text: String,
+    original_chars: usize,
+    truncated: bool,
+}
+
+fn bounded_text(raw: &str, max_chars: usize) -> BoundedText {
+    let original_chars = raw.chars().count();
+    if original_chars <= max_chars {
+        return BoundedText {
+            text: raw.to_string(),
+            original_chars,
+            truncated: false,
+        };
+    }
+
+    let marker = format!(
+        "\n...[command stream truncated; original_chars={original_chars}, max_chars={max_chars}]...\n"
+    );
+    let marker_chars = marker.chars().count();
+    let available = max_chars.saturating_sub(marker_chars);
+    let head_len = available.saturating_mul(2) / 3;
+    let tail_len = available.saturating_sub(head_len);
+    let head = raw.chars().take(head_len).collect::<String>();
+    let tail_vec = raw.chars().rev().take(tail_len).collect::<Vec<_>>();
+    let tail = tail_vec.into_iter().rev().collect::<String>();
+
+    BoundedText {
+        text: format!("{head}{marker}{tail}"),
+        original_chars,
+        truncated: true,
+    }
 }
 
 fn shell_command_for(workdir: &Path, command: &str) -> Command {
@@ -718,6 +767,28 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(paths, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn bounded_text_preserves_short_streams() {
+        let output = bounded_text("short output", 100);
+
+        assert_eq!(output.text, "short output");
+        assert_eq!(output.original_chars, 12);
+        assert!(!output.truncated);
+    }
+
+    #[test]
+    fn bounded_text_keeps_head_tail_and_metadata_for_long_streams() {
+        let raw = format!("{}{}", "a".repeat(80), "z".repeat(80));
+        let output = bounded_text(&raw, 80);
+
+        assert!(output.truncated);
+        assert_eq!(output.original_chars, 160);
+        assert!(output.text.contains("command stream truncated"));
+        assert!(output.text.starts_with("aaa"));
+        assert!(output.text.ends_with("zzz"));
+        assert!(output.text.chars().count() <= 80);
     }
 
     #[test]

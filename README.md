@@ -157,6 +157,8 @@ Tool schemas are intentionally small. The harness accepts JSON-string or object 
 
 `fs.list` and `fs.search` skip generated/runtime directories such as `target/`, `.git/`, `node_modules/`, `.spark/`, `.spark-runs/`, and `.spark-profile/` during recursive discovery. Direct paths remain readable, so profiling artifacts can still be inspected explicitly. `fs.read` returns line-window metadata (`returned_lines`, `total_lines`, `has_more`, and `next_offset`) so Spark can choose the next chunk without guessing.
 
+`cmd.exec` bounds stdout and stderr before returning them to Spark. Long streams keep their head and tail plus `stdout_chars`/`stderr_chars` and truncation flags, which keeps command-heavy runs from poisoning the next request with accidental massive output.
+
 ## Compaction
 
 Spark has a 128k context window. This harness has two guardrails:
