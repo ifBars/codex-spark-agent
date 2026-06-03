@@ -106,6 +106,9 @@ enum Command {
         /// Only include traces for a profile scenario name.
         #[arg(long)]
         scenario: Option<String>,
+        /// Only include traces that contain this diagnostic kind. Repeat to require multiple kinds.
+        #[arg(long = "diagnostic")]
+        diagnostics: Vec<String>,
         /// Print an aggregate row for matching trace summaries.
         #[arg(long)]
         aggregate: bool,
@@ -348,22 +351,32 @@ async fn main() -> Result<()> {
             limit,
             summary,
             scenario,
+            diagnostics,
             aggregate,
         } => {
             let cwd = std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
             let mut matching_summaries = Vec::new();
             for run in list_trace_dirs(&trace_runs_root(&cwd), limit)? {
                 let display = display_trace_dir(&cwd, &run);
-                let trace_summary = if summary || scenario.is_some() || aggregate {
-                    Some(profiler::analyze_trace(&run)?)
-                } else {
-                    None
-                };
+                let trace_summary =
+                    if summary || scenario.is_some() || !diagnostics.is_empty() || aggregate {
+                        Some(profiler::analyze_trace(&run)?)
+                    } else {
+                        None
+                    };
                 if let Some(scenario) = scenario.as_deref()
                     && trace_summary
                         .as_ref()
                         .and_then(profiler::trace_profile_scenario_name)
                         != Some(scenario)
+                {
+                    continue;
+                }
+                if !diagnostics.is_empty()
+                    && !trace_has_all_diagnostics(
+                        trace_summary.as_ref().expect("summary loaded"),
+                        &diagnostics,
+                    )
                 {
                     continue;
                 }
@@ -387,7 +400,7 @@ async fn main() -> Result<()> {
                 println!(
                     "{}",
                     profiler::format_trace_aggregate_row(
-                        scenario.as_deref().unwrap_or("all"),
+                        trace_filter_label(scenario.as_deref(), &diagnostics).as_str(),
                         &matching_summaries,
                     )
                 );
@@ -1219,6 +1232,29 @@ fn validate_scenario_repeat(repeat: usize) -> Result<()> {
     Ok(())
 }
 
+fn trace_has_all_diagnostics(summary: &Value, required: &[String]) -> bool {
+    if required.is_empty() {
+        return true;
+    }
+    let Some(diagnostics) = summary.get("diagnostics").and_then(Value::as_array) else {
+        return false;
+    };
+    required.iter().all(|required_kind| {
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.get("kind").and_then(Value::as_str) == Some(required_kind.as_str())
+        })
+    })
+}
+
+fn trace_filter_label(scenario: Option<&str>, diagnostics: &[String]) -> String {
+    let mut label = scenario.unwrap_or("all").to_string();
+    if !diagnostics.is_empty() {
+        label.push_str(" diagnostics=");
+        label.push_str(&diagnostics.join(","));
+    }
+    label
+}
+
 fn latest_trace_dir(root: &Path) -> Result<PathBuf> {
     list_trace_dirs(root, 1)?
         .into_iter()
@@ -1267,8 +1303,9 @@ mod tests {
         contains_skill_mention, latest_trace_dir, list_trace_dirs, mentioned_skill_names,
         prepare_profile_scenario, profile_scenario_expected_tool_calls,
         profile_scenario_expected_tool_groups, profile_scenario_prompts, resolve_char_threshold,
-        trace_runs_root, validate_scenario_repeat,
+        trace_filter_label, trace_has_all_diagnostics, trace_runs_root, validate_scenario_repeat,
     };
+    use serde_json::json;
 
     #[test]
     fn slash_commands_match_exactly_or_with_whitespace() {
@@ -1384,6 +1421,61 @@ mod tests {
 
         let too_many = validate_scenario_repeat(51).expect_err("too many repeats");
         assert!(too_many.to_string().contains("<= 50"));
+    }
+
+    #[test]
+    fn trace_diagnostic_filter_requires_all_requested_kinds() {
+        let summary = json!({
+            "diagnostics": [
+                {"kind": "tool_failures"},
+                {"kind": "tool_failure_recovered"}
+            ]
+        });
+
+        assert!(trace_has_all_diagnostics(
+            &summary,
+            &["tool_failures".to_string()]
+        ));
+        assert!(trace_has_all_diagnostics(
+            &summary,
+            &[
+                "tool_failures".to_string(),
+                "tool_failure_recovered".to_string()
+            ]
+        ));
+        assert!(!trace_has_all_diagnostics(
+            &summary,
+            &[
+                "tool_failures".to_string(),
+                "weak_compaction_shrink".to_string()
+            ]
+        ));
+        assert!(!trace_has_all_diagnostics(
+            &json!({}),
+            &["tool_failures".to_string()]
+        ));
+    }
+
+    #[test]
+    fn trace_filter_label_includes_scenario_and_diagnostics() {
+        assert_eq!(
+            trace_filter_label(Some("tool-recovery"), &[]),
+            "tool-recovery"
+        );
+        assert_eq!(
+            trace_filter_label(None, &["tool_failures".to_string()]),
+            "all diagnostics=tool_failures"
+        );
+        assert_eq!(
+            trace_filter_label(
+                Some("tool-recovery"),
+                &[
+                    "tool_failures".to_string(),
+                    "tool_failure_recovered".to_string()
+                ],
+            ),
+            "tool-recovery diagnostics=tool_failures,tool_failure_recovered"
+        );
     }
 
     #[test]

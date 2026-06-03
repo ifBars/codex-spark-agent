@@ -117,6 +117,7 @@ Compare recent traces:
 ```powershell
 cargo run --bin spark -- traces --summary --limit 10
 cargo run --bin spark -- traces --summary --scenario compaction-pressure --aggregate --limit 20
+cargo run --bin spark -- traces --summary --diagnostic tool_failure_recovered --aggregate
 ```
 
 Run a repeatable profiling scenario through the real agent loop:
@@ -253,7 +254,7 @@ Use `--profile` for a compact summary after a prompt:
 - remote/local compaction counts,
 - derived diagnostics for request failures, repeated tool loops, mutation-created parent dirs, weak or expanding compaction, and near-limit context pressure.
 
-Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`. Use `spark traces` to list recent trace directories, or `spark traces --summary` to compare recent runs by request size, latency, tools, compactions, and diagnostics. Use `spark analyze-trace` without a path to summarize the latest trace.
+Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`. Use `spark traces` to list recent trace directories, or `spark traces --summary` to compare recent runs by request size, latency, tools, compactions, and diagnostics. `spark traces --diagnostic <kind>` filters analyzed traces by diagnostic kind; repeat the flag to require multiple diagnostics. Use `spark analyze-trace` without a path to summarize the latest trace.
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, profile flag, interactive/session mode, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
 
