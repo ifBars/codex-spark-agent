@@ -743,6 +743,10 @@ pub fn format_trace_timeline(summary: &Value) -> String {
         lines.push(format!("diagnostics: {}", kinds.join(", ")));
     }
 
+    if let Some(required_actions) = format_required_actions_summary(summary) {
+        lines.push(required_actions);
+    }
+
     let Some(timeline) = summary.get("timeline").and_then(Value::as_array) else {
         lines.push("timeline: none".to_string());
         return format!("{}\n", lines.join("\n"));
@@ -882,6 +886,60 @@ fn aggregate_diagnostic_kinds(summaries: &[Value]) -> Vec<String> {
         .into_iter()
         .map(|(kind, count)| format!("{kind}:{count}"))
         .collect()
+}
+
+fn format_required_actions_summary(summary: &Value) -> Option<String> {
+    let total = summary
+        .get("retained_required_actions")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    if total == 0 {
+        return None;
+    }
+    let executed = summary
+        .get("retained_required_actions_executed")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let missing = summary
+        .get("retained_required_actions_missing")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let detours = summary
+        .get("tool_calls_before_first_required_action")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let actions = summary
+        .get("retained_required_actions")
+        .and_then(Value::as_array)
+        .map(|actions| {
+            actions
+                .iter()
+                .map(format_required_action)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    Some(format!(
+        "required-actions: total={total} executed={executed} missing={missing} detours_before_first={detours} actions=[{actions}]"
+    ))
+}
+
+fn format_required_action(action: &Value) -> String {
+    let tool = action
+        .get("tool")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let mut parts = vec![format!("tool={tool}")];
+    if let Some(path) = action.get("path").and_then(Value::as_str) {
+        parts.push(format!("path={path}"));
+    }
+    if let Some(recursive) = action.get("recursive").and_then(Value::as_bool) {
+        parts.push(format!("recursive={recursive}"));
+    }
+    parts.join(" ")
 }
 
 fn number_field(summary: &Value, key: &str) -> String {
@@ -2043,6 +2101,10 @@ mod tests {
                 "max_input_chars": 500000
             },
             "diagnostics": [{"kind": "tool_failures"}],
+            "retained_required_actions": [{"tool": "fs.list", "path": "src", "recursive": false}],
+            "retained_required_actions_executed": [{"tool": "fs.list", "path": "src", "recursive": false}],
+            "retained_required_actions_missing": [],
+            "tool_calls_before_first_required_action": 0,
             "timeline": [{
                 "turn": 1,
                 "request_input_chars": 120000,
@@ -2069,6 +2131,7 @@ mod tests {
 
         assert!(output.contains("trace model=gpt-5.3-codex-spark scenario=compaction-pressure"));
         assert!(output.contains("diagnostics: tool_failures"));
+        assert!(output.contains("required-actions: total=1 executed=1 missing=0 detours_before_first=0 actions=[tool=fs.list path=src recursive=false]"));
         assert!(output.contains("turn 1: input=120000 chars (~30000 tok, 23.4%)"));
         assert!(output.contains("calls=[fs.read]"));
         assert!(output.contains("results=[fs.read:ok 9ms 512 chars cached+timeout]"));
