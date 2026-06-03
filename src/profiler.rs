@@ -1150,6 +1150,7 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
         "total_skills",
         "scenario_skills",
     );
+    let aggregate_scenario_overrun = format_aggregate_scenario_overrun(summaries);
     let total_compactions = sum_summary_field(summaries, "compactions");
     let total_remote_compactions = sum_summary_field(summaries, "remote_compactions");
     let total_fallback_compactions = sum_summary_field(summaries, "fallback_compactions");
@@ -1180,7 +1181,7 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
     };
 
     format!(
-        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures}{aggregate_recoveries} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} local_pressure={total_local_pressure_compactions}{aggregate_scenario_tools}{aggregate_scenario_calls}{aggregate_scenario_skills}{aggregate_tool_only_turns} diagnostics={diagnostics}"
+        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures}{aggregate_recoveries} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} local_pressure={total_local_pressure_compactions}{aggregate_scenario_tools}{aggregate_scenario_calls}{aggregate_scenario_skills}{aggregate_scenario_overrun}{aggregate_tool_only_turns} diagnostics={diagnostics}"
     )
 }
 
@@ -1262,6 +1263,7 @@ pub fn trace_aggregate_json(label: &str, summaries: &[Value]) -> Value {
             "satisfied_skills",
             "total_skills",
         ),
+        "scenario_overrun": aggregate_scenario_overrun_json(summaries),
         "diagnostics": aggregate_diagnostic_count_map(summaries),
     })
 }
@@ -1299,6 +1301,52 @@ fn sum_tool_only_turn_field(summaries: &[Value], key: &str) -> u64 {
                 .and_then(Value::as_u64)
         })
         .sum()
+}
+
+fn sum_scenario_call_field(summaries: &[Value], key: &str) -> u64 {
+    summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .pointer(&format!("/profile_scenario_call_expectations/{key}"))
+                .and_then(Value::as_u64)
+        })
+        .sum()
+}
+
+fn max_scenario_call_field(summaries: &[Value], key: &str) -> u64 {
+    summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .pointer(&format!("/profile_scenario_call_expectations/{key}"))
+                .and_then(Value::as_u64)
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn format_aggregate_scenario_overrun(summaries: &[Value]) -> String {
+    let extra_calls = sum_scenario_call_field(summaries, "extra_calls_after_satisfied");
+    let extra_turns = sum_scenario_call_field(summaries, "extra_turns_after_satisfied");
+    let context_growth = sum_scenario_call_field(summaries, "context_growth_after_satisfied_chars");
+    if extra_calls == 0 && extra_turns == 0 && context_growth == 0 {
+        return String::new();
+    }
+    let max_extra_turns = max_scenario_call_field(summaries, "extra_turns_after_satisfied");
+    format!(
+        " scenario_overrun_calls={extra_calls} scenario_overrun_turns={extra_turns} max_overrun_turns={max_extra_turns} scenario_overrun_context={context_growth}"
+    )
+}
+
+fn aggregate_scenario_overrun_json(summaries: &[Value]) -> Value {
+    json!({
+        "extra_calls_after_satisfied": sum_scenario_call_field(summaries, "extra_calls_after_satisfied"),
+        "extra_turns_after_satisfied": sum_scenario_call_field(summaries, "extra_turns_after_satisfied"),
+        "max_extra_turns_after_satisfied": max_scenario_call_field(summaries, "extra_turns_after_satisfied"),
+        "context_growth_after_satisfied_chars": sum_scenario_call_field(summaries, "context_growth_after_satisfied_chars"),
+        "max_context_growth_after_satisfied_chars": max_scenario_call_field(summaries, "context_growth_after_satisfied_chars"),
+    })
 }
 
 fn format_aggregate_expectation_ratio(
@@ -4037,7 +4085,10 @@ mod tests {
                 },
                 "profile_scenario_call_expectations": {
                     "total_calls": 4,
-                    "satisfied_calls": 4
+                    "satisfied_calls": 4,
+                    "extra_calls_after_satisfied": 2,
+                    "extra_turns_after_satisfied": 1,
+                    "context_growth_after_satisfied_chars": 12000
                 },
                 "compactions": 1,
                 "remote_compactions": 1,
@@ -4063,7 +4114,10 @@ mod tests {
                 },
                 "profile_scenario_call_expectations": {
                     "total_calls": 4,
-                    "satisfied_calls": 3
+                    "satisfied_calls": 3,
+                    "extra_calls_after_satisfied": 5,
+                    "extra_turns_after_satisfied": 3,
+                    "context_growth_after_satisfied_chars": 34000
                 },
                 "compactions": 1,
                 "remote_compactions": 1,
@@ -4082,6 +4136,8 @@ mod tests {
         assert!(row.contains("max_tokens=45000 (35.2%)"));
         assert!(row.contains("tools=2 failures=2 recoveries=1/2"));
         assert!(row.contains("scenario_tools=5/6 scenario_calls=7/8"));
+        assert!(row.contains("scenario_overrun_calls=7 scenario_overrun_turns=4"));
+        assert!(row.contains("max_overrun_turns=3 scenario_overrun_context=46000"));
         assert!(row.contains("compactions=2 remote=2 fallback=0 local_pressure=2"));
         assert!(row.contains("diagnostics=remote_compaction_local_pressure:2,request_failure:1"));
     }
@@ -4109,7 +4165,10 @@ mod tests {
                 },
                 "profile_scenario_call_expectations": {
                     "satisfied_calls": 4,
-                    "total_calls": 5
+                    "total_calls": 5,
+                    "extra_calls_after_satisfied": 3,
+                    "extra_turns_after_satisfied": 2,
+                    "context_growth_after_satisfied_chars": 8000
                 },
                 "diagnostics": [{"kind": "tool_failure_recovered"}],
                 "compaction_reports": [{"local_pressure": {"after_chars": 1000}}],
@@ -4135,7 +4194,10 @@ mod tests {
                 },
                 "profile_scenario_call_expectations": {
                     "satisfied_calls": 3,
-                    "total_calls": 5
+                    "total_calls": 5,
+                    "extra_calls_after_satisfied": 4,
+                    "extra_turns_after_satisfied": 1,
+                    "context_growth_after_satisfied_chars": 3000
                 },
                 "tool_only_turns": {
                     "count": 1,
@@ -4165,6 +4227,26 @@ mod tests {
         assert_eq!(aggregate["scenario_tools"]["total"], 8);
         assert_eq!(aggregate["scenario_calls"]["satisfied"], 7);
         assert_eq!(aggregate["scenario_calls"]["total"], 10);
+        assert_eq!(
+            aggregate["scenario_overrun"]["extra_calls_after_satisfied"],
+            7
+        );
+        assert_eq!(
+            aggregate["scenario_overrun"]["extra_turns_after_satisfied"],
+            3
+        );
+        assert_eq!(
+            aggregate["scenario_overrun"]["max_extra_turns_after_satisfied"],
+            2
+        );
+        assert_eq!(
+            aggregate["scenario_overrun"]["context_growth_after_satisfied_chars"],
+            11_000
+        );
+        assert_eq!(
+            aggregate["scenario_overrun"]["max_context_growth_after_satisfied_chars"],
+            8_000
+        );
         assert_eq!(aggregate["diagnostics"]["tool_failure_recovered"], 1);
         assert_eq!(aggregate["diagnostics"]["request_failure"], 1);
     }
