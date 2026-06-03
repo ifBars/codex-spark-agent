@@ -112,6 +112,9 @@ enum Command {
         /// Print an aggregate row for matching trace summaries.
         #[arg(long)]
         aggregate: bool,
+        /// Sort matching analyzed traces by a profiling metric.
+        #[arg(long, value_enum, default_value_t = TraceSort::Newest)]
+        sort: TraceSort,
         /// Only include traces whose max tool-only streak is at least this many turns.
         #[arg(long)]
         min_tool_only_streak: Option<u64>,
@@ -196,6 +199,22 @@ enum ProfileScenarioKind {
     ToolRecovery,
     /// Repo-local skill mention task that exercises automatic skill compile/load.
     SkillUse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum TraceSort {
+    /// Newest run directory first.
+    Newest,
+    /// Highest post-satisfaction context growth first.
+    OverrunContext,
+    /// Highest post-satisfaction extra turn count first.
+    OverrunTurns,
+    /// Highest tool-only turn streak first.
+    ToolOnlyStreak,
+    /// Highest estimated request token count first.
+    Context,
+    /// Highest Spark request latency first.
+    RequestMs,
 }
 
 impl ProfileScenarioKind {
@@ -371,6 +390,7 @@ async fn main() -> Result<()> {
             scenario,
             diagnostics,
             aggregate,
+            sort,
             min_tool_only_streak,
             min_overrun_turns,
             min_overrun_context_chars,
@@ -383,10 +403,12 @@ async fn main() -> Result<()> {
             let cwd = std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
             let mut matching_summaries = Vec::new();
             let mut json_records = Vec::new();
+            let mut matching_records = Vec::new();
             let analyze = summary
                 || scenario.is_some()
                 || !diagnostics.is_empty()
                 || aggregate
+                || sort != TraceSort::Newest
                 || min_tool_only_streak.is_some()
                 || min_overrun_turns.is_some()
                 || min_overrun_context_chars.is_some()
@@ -426,8 +448,21 @@ async fn main() -> Result<()> {
                 if let Some(trace_summary) = &trace_summary {
                     matching_summaries.push(trace_summary.clone());
                 }
+                matching_records.push(TraceListRecord {
+                    run,
+                    display,
+                    summary: trace_summary,
+                });
+            }
+            sort_trace_records(&mut matching_records, sort);
+            for record in &matching_records {
                 if json || jsonl {
-                    let record = trace_export_record(&cwd, &run, &display, trace_summary.as_ref());
+                    let record = trace_export_record(
+                        &cwd,
+                        &record.run,
+                        &record.display,
+                        record.summary.as_ref(),
+                    );
                     if jsonl {
                         println!("{}", serde_json::to_string(&record)?);
                     } else {
@@ -436,16 +471,16 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 if summary {
-                    let trace_summary = trace_summary.expect("summary loaded");
+                    let trace_summary = record.summary.as_ref().expect("summary loaded");
                     println!(
                         "{}",
                         profiler::format_trace_summary_row(
-                            &display.display().to_string(),
-                            &trace_summary
+                            &record.display.display().to_string(),
+                            trace_summary
                         )
                     );
                 } else {
-                    println!("{}", display.display());
+                    println!("{}", record.display.display());
                 }
             }
             if json {
@@ -454,6 +489,7 @@ async fn main() -> Result<()> {
                         "scenario": scenario,
                         "diagnostics": diagnostics,
                         "limit": limit,
+                        "sort": trace_sort_name(sort),
                         "min_tool_only_streak": min_tool_only_streak,
                         "min_overrun_turns": min_overrun_turns,
                         "min_overrun_context_chars": min_overrun_context_chars,
@@ -1441,6 +1477,62 @@ fn trace_export_record(cwd: &Path, path: &Path, display: &Path, summary: Option<
     })
 }
 
+struct TraceListRecord {
+    run: PathBuf,
+    display: PathBuf,
+    summary: Option<Value>,
+}
+
+fn sort_trace_records(records: &mut [TraceListRecord], sort: TraceSort) {
+    match sort {
+        TraceSort::Newest => {}
+        TraceSort::OverrunContext
+        | TraceSort::OverrunTurns
+        | TraceSort::ToolOnlyStreak
+        | TraceSort::Context
+        | TraceSort::RequestMs => {
+            records.sort_by(|left, right| {
+                trace_sort_metric(right.summary.as_ref(), sort)
+                    .cmp(&trace_sort_metric(left.summary.as_ref(), sort))
+                    .then_with(|| right.run.file_name().cmp(&left.run.file_name()))
+            });
+        }
+    }
+}
+
+fn trace_sort_metric(summary: Option<&Value>, sort: TraceSort) -> u64 {
+    let Some(summary) = summary else {
+        return 0;
+    };
+    let pointer = match sort {
+        TraceSort::Newest => return 0,
+        TraceSort::OverrunContext => {
+            "/profile_scenario_call_expectations/context_growth_after_satisfied_chars"
+        }
+        TraceSort::OverrunTurns => {
+            "/profile_scenario_call_expectations/extra_turns_after_satisfied"
+        }
+        TraceSort::ToolOnlyStreak => "/tool_only_turns/max_consecutive",
+        TraceSort::Context => "/max_approx_input_tokens",
+        TraceSort::RequestMs => "/max_request_duration_ms",
+    };
+    summary
+        .pointer(pointer)
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+fn trace_sort_name(sort: TraceSort) -> &'static str {
+    match sort {
+        TraceSort::Newest => "newest",
+        TraceSort::OverrunContext => "overrun-context",
+        TraceSort::OverrunTurns => "overrun-turns",
+        TraceSort::ToolOnlyStreak => "tool-only-streak",
+        TraceSort::Context => "context",
+        TraceSort::RequestMs => "request-ms",
+    }
+}
+
 fn resolve_char_threshold(
     name: &str,
     chars: Option<usize>,
@@ -1580,13 +1672,14 @@ fn list_trace_dirs(root: &Path, limit: usize) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, ProfileScenarioKind, command_args,
-        contains_skill_mention, is_active_session, latest_trace_dir, list_trace_dirs,
-        mentioned_skill_names, prepare_profile_scenario, profile_scenario_expected_skills,
-        profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
-        profile_scenario_prompts, resolve_char_threshold, session_name_for_display,
-        trace_export_record, trace_filter_label, trace_has_all_diagnostics,
-        trace_matches_metric_filters, trace_runs_root, validate_scenario_repeat,
+        APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, ProfileScenarioKind, TraceListRecord,
+        TraceSort, command_args, contains_skill_mention, is_active_session, latest_trace_dir,
+        list_trace_dirs, mentioned_skill_names, prepare_profile_scenario,
+        profile_scenario_expected_skills, profile_scenario_expected_tool_calls,
+        profile_scenario_expected_tool_groups, profile_scenario_prompts, resolve_char_threshold,
+        session_name_for_display, sort_trace_records, trace_export_record, trace_filter_label,
+        trace_has_all_diagnostics, trace_matches_metric_filters, trace_runs_root,
+        trace_sort_metric, trace_sort_name, validate_scenario_repeat,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -1656,6 +1749,79 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(names, vec!["run-300", "run-200"]);
+    }
+
+    #[test]
+    fn trace_sort_metrics_read_expected_summary_fields() {
+        let summary = json!({
+            "max_approx_input_tokens": 42,
+            "max_request_duration_ms": 1234,
+            "tool_only_turns": {
+                "max_consecutive": 8
+            },
+            "profile_scenario_call_expectations": {
+                "extra_turns_after_satisfied": 6,
+                "context_growth_after_satisfied_chars": 101846
+            }
+        });
+
+        assert_eq!(
+            trace_sort_metric(Some(&summary), TraceSort::OverrunContext),
+            101_846
+        );
+        assert_eq!(
+            trace_sort_metric(Some(&summary), TraceSort::OverrunTurns),
+            6
+        );
+        assert_eq!(
+            trace_sort_metric(Some(&summary), TraceSort::ToolOnlyStreak),
+            8
+        );
+        assert_eq!(trace_sort_metric(Some(&summary), TraceSort::Context), 42);
+        assert_eq!(
+            trace_sort_metric(Some(&summary), TraceSort::RequestMs),
+            1_234
+        );
+        assert_eq!(trace_sort_metric(None, TraceSort::RequestMs), 0);
+        assert_eq!(
+            trace_sort_name(TraceSort::OverrunContext),
+            "overrun-context"
+        );
+    }
+
+    #[test]
+    fn trace_records_sort_by_worst_metric_then_newest_name() {
+        let mut records = vec![
+            TraceListRecord {
+                run: PathBuf::from("run-100"),
+                display: PathBuf::from("run-100"),
+                summary: Some(json!({
+                    "tool_only_turns": {"max_consecutive": 2}
+                })),
+            },
+            TraceListRecord {
+                run: PathBuf::from("run-300"),
+                display: PathBuf::from("run-300"),
+                summary: Some(json!({
+                    "tool_only_turns": {"max_consecutive": 8}
+                })),
+            },
+            TraceListRecord {
+                run: PathBuf::from("run-200"),
+                display: PathBuf::from("run-200"),
+                summary: Some(json!({
+                    "tool_only_turns": {"max_consecutive": 8}
+                })),
+            },
+        ];
+
+        sort_trace_records(&mut records, TraceSort::ToolOnlyStreak);
+        let names = records
+            .iter()
+            .map(|record| record.run.display().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["run-300", "run-200", "run-100"]);
     }
 
     #[test]

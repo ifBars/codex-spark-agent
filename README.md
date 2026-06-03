@@ -120,6 +120,8 @@ cargo run --bin spark -- traces --summary --scenario compaction-pressure --aggre
 cargo run --bin spark -- traces --summary --diagnostic tool_failure_recovered --aggregate
 cargo run --bin spark -- traces --summary --scenario skill-use --min-overrun-turns 3 --aggregate
 cargo run --bin spark -- traces --summary --min-tool-only-streak 3 --min-overrun-context-chars 100000
+cargo run --bin spark -- traces --summary --sort overrun-context --limit 10
+cargo run --bin spark -- traces --summary --sort tool-only-streak --scenario skill-use
 cargo run --bin spark -- traces --json --scenario tool-recovery --aggregate
 cargo run --bin spark -- traces --jsonl --diagnostic request_failure
 ```
@@ -263,7 +265,7 @@ Use `--profile` for a compact summary after a prompt:
 - remote/local compaction counts,
 - derived diagnostics for request failures, repeated tool loops, mutation-created parent dirs, weak or expanding compaction, and near-limit context pressure.
 
-Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`. Use `spark traces` to list recent trace directories, or `spark traces --summary` to compare recent runs by request size, latency, tools, compactions, and diagnostics. `spark traces --json` emits matching analyzed traces as one JSON object, and `spark traces --jsonl` emits one record per matching trace for scripts. `--aggregate` adds an aggregate object in JSON mode or an aggregate record in JSONL mode. `spark traces --diagnostic <kind>` filters analyzed traces by diagnostic kind; repeat the flag to require multiple diagnostics. Use `--min-tool-only-streak`, `--min-overrun-turns`, and `--min-overrun-context-chars` to find traces that crossed specific Spark overrun thresholds. Use `spark analyze-trace` without a path to summarize the latest trace.
+Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`. Use `spark traces` to list recent trace directories, or `spark traces --summary` to compare recent runs by request size, latency, tools, compactions, and diagnostics. `spark traces --json` emits matching analyzed traces as one JSON object, and `spark traces --jsonl` emits one record per matching trace for scripts. `--aggregate` adds an aggregate object in JSON mode or an aggregate record in JSONL mode. `spark traces --diagnostic <kind>` filters analyzed traces by diagnostic kind; repeat the flag to require multiple diagnostics. Use `--min-tool-only-streak`, `--min-overrun-turns`, and `--min-overrun-context-chars` to find traces that crossed specific Spark overrun thresholds. Use `--sort overrun-context`, `--sort overrun-turns`, `--sort tool-only-streak`, `--sort context`, or `--sort request-ms` to rank matching analyzed traces by worst profiling signal instead of recency. Use `spark analyze-trace` without a path to summarize the latest trace.
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, profile flag, interactive/session mode, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
 
