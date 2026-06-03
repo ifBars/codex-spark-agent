@@ -930,14 +930,17 @@ fn compact_text(raw: &str, max_chars: usize) -> String {
 
 fn retained_intent_block(raw: &str) -> String {
     let lines = retained_intent_lines(raw, 12);
-    if lines.is_empty() {
-        return "retained_intent_lines=0".to_string();
-    }
-
+    let actions = retained_action_lines(&lines);
     let mut block = format!("retained_intent_lines={}", lines.len());
     for (index, line) in lines.iter().enumerate() {
         block.push('\n');
         block.push_str(&format!("intent_{}={}", index + 1, line));
+    }
+    block.push('\n');
+    block.push_str(&format!("required_actions={}", actions.len()));
+    for (index, action) in actions.iter().enumerate() {
+        block.push('\n');
+        block.push_str(&format!("action_{}={}", index + 1, action));
     }
     block
 }
@@ -975,6 +978,39 @@ fn is_high_signal_intent_line(line: &str) -> bool {
         || line.starts_with("After any compaction")
         || line.starts_with("- ")
         || line.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+}
+
+fn retained_action_lines(lines: &[String]) -> Vec<String> {
+    let mut actions = Vec::new();
+    for line in lines {
+        if let Some(action) = parse_fs_list_action(line) {
+            actions.push(action);
+        }
+    }
+    actions.sort();
+    actions.dedup();
+    actions
+}
+
+fn parse_fs_list_action(line: &str) -> Option<String> {
+    let normalized = line.trim().trim_end_matches('.');
+    let start = normalized.find("use fs.list on ")? + "use fs.list on ".len();
+    let rest = &normalized[start..];
+    let (path, tail) = rest
+        .split_once(" with ")
+        .map_or((rest, ""), |(path, tail)| (path, tail));
+    let path = path.trim().trim_matches('`');
+    if path.is_empty() {
+        return None;
+    }
+    let recursive = if tail.contains("recursive=false") {
+        "false"
+    } else if tail.contains("recursive=true") {
+        "true"
+    } else {
+        "unspecified"
+    };
+    Some(format!("tool=fs.list path={path} recursive={recursive}"))
 }
 
 struct TraceWriter {
@@ -1328,6 +1364,18 @@ mod tests {
         assert!(!lines.iter().any(|line| line.starts_with("row ")));
         assert!(block.contains("retained_intent_lines="));
         assert!(block.contains("intent_1=Profile scenario: compaction-pressure."));
+        assert!(block.contains("required_actions=1"));
+        assert!(block.contains("action_1=tool=fs.list path=src recursive=false"));
+    }
+
+    #[test]
+    fn parses_required_fs_list_action_from_intent_line() {
+        let action = parse_fs_list_action(
+            "Do not restate the synthetic payload. After any compaction, use fs.list on src with recursive=false, then answer with:",
+        )
+        .expect("action");
+
+        assert_eq!(action, "tool=fs.list path=src recursive=false");
     }
 
     #[test]
