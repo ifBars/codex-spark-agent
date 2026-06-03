@@ -330,6 +330,8 @@ impl AgentRunner {
             self.input.extend(output_items_for_next_input(&raw));
 
             let calls = function_calls(&response);
+            self.profiler
+                .record_turn_activity(self.request_seq, !calls.is_empty(), text.len());
             if calls.is_empty() {
                 self.emit_profile_summary()?;
                 return Ok(());

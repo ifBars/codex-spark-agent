@@ -20,6 +20,12 @@ pub struct AgentProfiler {
     max_tool_duration_ms: u64,
     repeated_tool_calls: usize,
     consecutive_duplicate_tool_calls: usize,
+    #[serde(default)]
+    tool_only_turns: usize,
+    #[serde(default)]
+    max_consecutive_tool_only_turns: usize,
+    #[serde(default)]
+    current_consecutive_tool_only_turns: usize,
     compactions: usize,
     remote_compactions: usize,
     fallback_compactions: usize,
@@ -32,6 +38,8 @@ pub struct AgentProfiler {
     total_request_duration_ms: u64,
     max_request_duration_ms: u64,
     request_duration_ms_by_request: Vec<u64>,
+    #[serde(default)]
+    tool_only_turn_numbers: Vec<usize>,
     response_text_chars: usize,
     errors: Vec<Value>,
     compaction_reports: Vec<Value>,
@@ -102,6 +110,29 @@ impl AgentProfiler {
         self.signature_counts
             .insert(signature.clone(), previous_count + 1);
         self.last_signature = Some(signature);
+    }
+
+    pub fn record_turn_activity(
+        &mut self,
+        turn: usize,
+        has_tool_calls: bool,
+        response_text_chars: usize,
+    ) {
+        if has_tool_calls && response_text_chars == 0 {
+            self.tool_only_turns += 1;
+            self.current_consecutive_tool_only_turns += 1;
+            self.max_consecutive_tool_only_turns = self
+                .max_consecutive_tool_only_turns
+                .max(self.current_consecutive_tool_only_turns);
+            self.tool_only_turn_numbers.push(turn);
+            self.push_signal(json!({
+                "kind": "tool_only_turn",
+                "turn": turn,
+                "consecutive": self.current_consecutive_tool_only_turns,
+            }));
+        } else {
+            self.current_consecutive_tool_only_turns = 0;
+        }
     }
 
     pub fn record_tool_result(
@@ -234,6 +265,12 @@ impl AgentProfiler {
             "average_tool_duration_ms": if self.tool_results == 0 { 0 } else { self.total_tool_duration_ms / self.tool_results as u64 },
             "repeated_tool_calls": self.repeated_tool_calls,
             "consecutive_duplicate_tool_calls": self.consecutive_duplicate_tool_calls,
+            "tool_only_turn_count": self.tool_only_turns,
+            "tool_only_turns": {
+                "count": self.tool_only_turns,
+                "max_consecutive": self.max_consecutive_tool_only_turns,
+                "turns": self.tool_only_turn_numbers,
+            },
             "compactions": self.compactions,
             "remote_compactions": self.remote_compactions,
             "fallback_compactions": self.fallback_compactions,
@@ -266,13 +303,15 @@ impl AgentProfiler {
 
     pub fn status_line(&self) -> String {
         format!(
-            "profile: requests={}, max_request_ms={}, tool_calls={}, tool_failures={}, repeated_calls={}, consecutive_duplicates={}, readonly_cache_hits={}, compactions={} (remote={}, fallback={}), max_input_chars={}, max_approx_input_tokens={} ({:.1}% of 128k)",
+            "profile: requests={}, max_request_ms={}, tool_calls={}, tool_failures={}, repeated_calls={}, consecutive_duplicates={}, tool_only_turns={}, max_tool_only_streak={}, readonly_cache_hits={}, compactions={} (remote={}, fallback={}), max_input_chars={}, max_approx_input_tokens={} ({:.1}% of 128k)",
             self.requests,
             self.max_request_duration_ms,
             self.tool_calls,
             self.tool_failures,
             self.repeated_tool_calls,
             self.consecutive_duplicate_tool_calls,
+            self.tool_only_turns,
+            self.max_consecutive_tool_only_turns,
             self.readonly_tool_cache_hits,
             self.compactions,
             self.remote_compactions,
@@ -367,6 +406,17 @@ impl AgentProfiler {
                 "kind": "repeated_tool_calls",
                 "message": "Spark repeated exact tool-call signatures several times. Compare the repeated arguments in recent_signals before changing prompts.",
                 "count": self.repeated_tool_calls,
+            }));
+        }
+
+        if self.max_consecutive_tool_only_turns >= 3 {
+            diagnostics.push(json!({
+                "level": "info",
+                "kind": "tool_only_turn_streak",
+                "message": "Spark spent several consecutive turns calling tools without producing user-facing text. Compare this with task completion and context growth before changing harness defaults.",
+                "count": self.tool_only_turns,
+                "max_consecutive": self.max_consecutive_tool_only_turns,
+                "turns": self.tool_only_turn_numbers,
             }));
         }
 
@@ -723,6 +773,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         scenario_tool_call_expectation_report(trace_metadata.as_ref(), &observed_tool_calls);
     let scenario_skill_expectation_report =
         scenario_skill_expectation_report(trace_metadata.as_ref(), &loaded_skill_contexts);
+    let tool_only_turn_report = tool_only_turn_report(&timeline);
     let tool_failure_recovery_report = tool_failure_recovery_report(&observed_tool_results);
     if let Some(object) = summary.as_object_mut() {
         object.insert(
@@ -758,6 +809,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             "loaded_skill_contexts".to_string(),
             json!(loaded_skill_contexts.iter().collect::<Vec<_>>()),
         );
+        object.insert("tool_only_turns".to_string(), tool_only_turn_report.clone());
         if let Some(report) = &scenario_tool_expectation_report {
             object.insert(
                 "profile_scenario_tool_expectations".to_string(),
@@ -849,6 +901,20 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                     "missing_skills": report.get("missing_skills").cloned().unwrap_or_else(|| json!([])),
                 }));
             }
+            if tool_only_turn_report
+                .get("max_consecutive")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count >= 3)
+            {
+                diagnostics.push(json!({
+                    "level": "info",
+                    "kind": "tool_only_turn_streak",
+                    "message": "Spark spent several consecutive turns calling tools without producing user-facing text. Compare this with scenario completion and context growth before changing harness defaults.",
+                    "count": tool_only_turn_report.get("count").cloned().unwrap_or_else(|| json!(0)),
+                    "max_consecutive": tool_only_turn_report.get("max_consecutive").cloned().unwrap_or_else(|| json!(0)),
+                    "turns": tool_only_turn_report.get("turns").cloned().unwrap_or_else(|| json!([])),
+                }));
+            }
             if let Some(report) = &tool_failure_recovery_report {
                 if report
                     .get("recovered_failures")
@@ -935,6 +1001,9 @@ pub fn format_trace_timeline(summary: &Value) -> String {
     if let Some(scenario_skills) = format_scenario_skill_expectations(summary) {
         lines.push(scenario_skills);
     }
+    if let Some(tool_only_turns) = format_tool_only_turns(summary) {
+        lines.push(tool_only_turns);
+    }
     if let Some(tool_recovery) = format_tool_failure_recovery(summary) {
         lines.push(tool_recovery);
     }
@@ -983,6 +1052,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     let scenario_tools = format_scenario_tools_for_summary_row(summary);
     let scenario_calls = format_scenario_calls_for_summary_row(summary);
     let scenario_skills = format_scenario_skills_for_summary_row(summary);
+    let tool_only_turns = format_tool_only_turns_for_summary_row(summary);
     let recoveries = format_tool_failure_recovery_for_summary_row(summary);
     let diagnostics = diagnostic_kinds(summary);
     let diagnostics = if diagnostics.is_empty() {
@@ -992,7 +1062,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     };
 
     format!(
-        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures}{recoveries} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{scenario_tools}{scenario_calls}{scenario_skills} diagnostics={diagnostics}"
+        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures}{recoveries} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{scenario_tools}{scenario_calls}{scenario_skills}{tool_only_turns} diagnostics={diagnostics}"
     )
 }
 
@@ -1079,6 +1149,21 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
         .iter()
         .map(compactions_with_local_pressure)
         .sum::<usize>();
+    let total_tool_only_turns = sum_tool_only_turn_field(summaries, "count");
+    let max_tool_only_streak = summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .pointer("/tool_only_turns/max_consecutive")
+                .and_then(Value::as_u64)
+        })
+        .max()
+        .unwrap_or(0);
+    let aggregate_tool_only_turns = if total_tool_only_turns == 0 {
+        String::new()
+    } else {
+        format!(" tool_only={total_tool_only_turns} max_tool_only_streak={max_tool_only_streak}")
+    };
     let diagnostics = aggregate_diagnostic_kinds(summaries);
     let diagnostics = if diagnostics.is_empty() {
         "none".to_string()
@@ -1087,7 +1172,7 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
     };
 
     format!(
-        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures}{aggregate_recoveries} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} local_pressure={total_local_pressure_compactions}{aggregate_scenario_tools}{aggregate_scenario_calls}{aggregate_scenario_skills} diagnostics={diagnostics}"
+        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures}{aggregate_recoveries} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} local_pressure={total_local_pressure_compactions}{aggregate_scenario_tools}{aggregate_scenario_calls}{aggregate_scenario_skills}{aggregate_tool_only_turns} diagnostics={diagnostics}"
     )
 }
 
@@ -1145,6 +1230,12 @@ pub fn trace_aggregate_json(label: &str, summaries: &[Value]) -> Value {
         "remote_compactions": sum_summary_field(summaries, "remote_compactions"),
         "fallback_compactions": sum_summary_field(summaries, "fallback_compactions"),
         "local_pressure_compactions": summaries.iter().map(compactions_with_local_pressure).sum::<usize>(),
+        "tool_only_turns": sum_tool_only_turn_field(summaries, "count"),
+        "max_tool_only_turn_streak": summaries
+            .iter()
+            .filter_map(|summary| summary.pointer("/tool_only_turns/max_consecutive").and_then(Value::as_u64))
+            .max()
+            .unwrap_or(0),
         "scenario_tools": aggregate_expectation_json(
             summaries,
             "profile_scenario_tool_expectations",
@@ -1186,6 +1277,17 @@ fn sum_recovery_field(summaries: &[Value], key: &str) -> u64 {
         .filter_map(|summary| {
             summary
                 .pointer(&format!("/tool_failure_recovery/{key}"))
+                .and_then(Value::as_u64)
+        })
+        .sum()
+}
+
+fn sum_tool_only_turn_field(summaries: &[Value], key: &str) -> u64 {
+    summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .pointer(&format!("/tool_only_turns/{key}"))
                 .and_then(Value::as_u64)
         })
         .sum()
@@ -1493,6 +1595,48 @@ fn format_scenario_skills_for_summary_row(summary: &Value) -> String {
         .and_then(Value::as_u64)
         .unwrap_or(0);
     format!(" scenario_skills={satisfied}/{total}")
+}
+
+fn format_tool_only_turns(summary: &Value) -> Option<String> {
+    let report = summary.get("tool_only_turns")?;
+    let count = report.get("count").and_then(Value::as_u64).unwrap_or(0);
+    if count == 0 {
+        return None;
+    }
+    let max_consecutive = report
+        .get("max_consecutive")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let turns = report
+        .get("turns")
+        .and_then(Value::as_array)
+        .map(|turns| {
+            turns
+                .iter()
+                .filter_map(Value::as_u64)
+                .map(|turn| turn.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    Some(format!(
+        "tool-only-turns: count={count} max_consecutive={max_consecutive} turns=[{turns}]"
+    ))
+}
+
+fn format_tool_only_turns_for_summary_row(summary: &Value) -> String {
+    let Some(report) = summary.get("tool_only_turns") else {
+        return String::new();
+    };
+    let count = report.get("count").and_then(Value::as_u64).unwrap_or(0);
+    if count == 0 {
+        return String::new();
+    }
+    let max_consecutive = report
+        .get("max_consecutive")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    format!(" tool_only={count} max_tool_only_streak={max_consecutive}")
 }
 
 fn format_tool_failure_recovery(summary: &Value) -> Option<String> {
@@ -2233,6 +2377,36 @@ fn scenario_skill_expectation_report(
     }))
 }
 
+fn tool_only_turn_report(timeline: &BTreeMap<usize, Map<String, Value>>) -> Value {
+    let mut turns = Vec::new();
+    let mut max_consecutive = 0usize;
+    let mut current_consecutive = 0usize;
+
+    for (turn, entry) in timeline {
+        let has_tool_calls = entry
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .is_some_and(|calls| !calls.is_empty());
+        let response_text_chars = entry
+            .get("response_text_chars")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if has_tool_calls && response_text_chars == 0 {
+            turns.push(*turn);
+            current_consecutive += 1;
+            max_consecutive = max_consecutive.max(current_consecutive);
+        } else {
+            current_consecutive = 0;
+        }
+    }
+
+    json!({
+        "count": turns.len(),
+        "max_consecutive": max_consecutive,
+        "turns": turns,
+    })
+}
+
 fn scenario_tool_expectation_report(
     metadata: Option<&Value>,
     calls: &[ObservedToolCall],
@@ -2656,6 +2830,31 @@ mod tests {
             summary["recent_signals"][1]["kind"],
             "consecutive_duplicate_tool_call"
         );
+    }
+
+    #[test]
+    fn profiler_records_tool_only_turn_streaks() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_turn_activity(1, true, 0);
+        profiler.record_turn_activity(2, true, 0);
+        profiler.record_turn_activity(3, true, 0);
+        profiler.record_turn_activity(4, false, 12);
+
+        let summary = profiler.to_json();
+
+        assert_eq!(summary["tool_only_turn_count"], 3);
+        assert_eq!(summary["tool_only_turns"]["count"], 3);
+        assert_eq!(summary["tool_only_turns"]["max_consecutive"], 3);
+        assert_eq!(summary["tool_only_turns"]["turns"], json!([1, 2, 3]));
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "tool_only_turn_streak")
+        );
+        assert!(profiler.status_line().contains("tool_only_turns=3"));
     }
 
     #[test]
@@ -3412,6 +3611,60 @@ mod tests {
     }
 
     #[test]
+    fn analyze_trace_reports_tool_only_turn_streaks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for turn in 1..=3 {
+            std::fs::write(
+                dir.path().join(format!("{turn:03}-request-input.json")),
+                serde_json::to_vec_pretty(&json!({
+                    "input": [{"role": "user", "content": [{"type": "input_text", "text": "demo"}]}]
+                }))
+                .expect("serialize request"),
+            )
+            .expect("write request");
+            std::fs::write(
+                dir.path().join(format!("{turn:03}-response.json")),
+                serde_json::to_vec_pretty(&json!({
+                    "raw": {
+                        "events": [{
+                            "type": "response.output_item.done",
+                            "output_index": 0,
+                            "item": {
+                                "type": "function_call",
+                                "name": "fs_read",
+                                "arguments": "{\"path\":\"src/main.rs\"}"
+                            }
+                        }]
+                    }
+                }))
+                .expect("serialize response"),
+            )
+            .expect("write response");
+        }
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["tool_only_turns"]["count"], 3);
+        assert_eq!(summary["tool_only_turns"]["max_consecutive"], 3);
+        assert_eq!(summary["tool_only_turns"]["turns"], json!([1, 2, 3]));
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "tool_only_turn_streak")
+        );
+        assert!(
+            format_trace_timeline(&summary)
+                .contains("tool-only-turns: count=3 max_consecutive=3 turns=[1,2,3]")
+        );
+        assert!(
+            format_trace_summary_row(".spark-runs/run-1", &summary)
+                .contains("tool_only=3 max_tool_only_streak=3")
+        );
+    }
+
+    #[test]
     fn analyze_trace_reports_profile_scenario_skill_expectations() {
         let dir = tempfile::tempdir().expect("tempdir");
         write_trace_metadata_with_expected_skills(
@@ -3759,7 +4012,12 @@ mod tests {
                     "total_calls": 5
                 },
                 "diagnostics": [{"kind": "tool_failure_recovered"}],
-                "compaction_reports": [{"local_pressure": {"after_chars": 1000}}]
+                "compaction_reports": [{"local_pressure": {"after_chars": 1000}}],
+                "tool_only_turns": {
+                    "count": 2,
+                    "max_consecutive": 2,
+                    "turns": [1, 2]
+                }
             }),
             json!({
                 "errors": [{"stage": "response"}],
@@ -3779,6 +4037,11 @@ mod tests {
                     "satisfied_calls": 3,
                     "total_calls": 5
                 },
+                "tool_only_turns": {
+                    "count": 1,
+                    "max_consecutive": 1,
+                    "turns": [1]
+                },
                 "diagnostics": [{"kind": "request_failure"}]
             }),
         ];
@@ -3796,6 +4059,8 @@ mod tests {
         assert_eq!(aggregate["recovered_tool_failures"], 1);
         assert_eq!(aggregate["failed_tool_results"], 1);
         assert_eq!(aggregate["local_pressure_compactions"], 1);
+        assert_eq!(aggregate["tool_only_turns"], 3);
+        assert_eq!(aggregate["max_tool_only_turn_streak"], 2);
         assert_eq!(aggregate["scenario_tools"]["satisfied"], 5);
         assert_eq!(aggregate["scenario_tools"]["total"], 8);
         assert_eq!(aggregate["scenario_calls"]["satisfied"], 7);
