@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -561,6 +561,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let mut retained_required_actions = Vec::<RequiredAction>::new();
     let mut observed_tool_calls = Vec::<ObservedToolCall>::new();
     let mut observed_tool_results = Vec::<ObservedToolResult>::new();
+    let mut loaded_skill_contexts = BTreeSet::<String>::new();
     let mut files = std::fs::read_dir(dir)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -604,6 +605,11 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 json!(context_window_pct(input_chars)),
             );
             retained_required_actions.extend(required_actions_from_request_input(&value));
+            let turn_loaded_skills = loaded_skill_contexts_from_request_input(&value);
+            if !turn_loaded_skills.is_empty() {
+                loaded_skill_contexts.extend(turn_loaded_skills.iter().cloned());
+                turn_entry.insert("loaded_skills".to_string(), json!(turn_loaded_skills));
+            }
         } else if name.ends_with("-response.json") {
             if let Some(duration_ms) = value.get("duration_ms").and_then(Value::as_u64) {
                 profiler.record_request_duration(turn, duration_ms);
@@ -715,6 +721,8 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         scenario_tool_expectation_report(trace_metadata.as_ref(), &observed_tool_calls);
     let scenario_call_expectation_report =
         scenario_tool_call_expectation_report(trace_metadata.as_ref(), &observed_tool_calls);
+    let scenario_skill_expectation_report =
+        scenario_skill_expectation_report(trace_metadata.as_ref(), &loaded_skill_contexts);
     let tool_failure_recovery_report = tool_failure_recovery_report(&observed_tool_results);
     if let Some(object) = summary.as_object_mut() {
         object.insert(
@@ -746,6 +754,10 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             "tool_calls_before_first_required_action".to_string(),
             json!(required_action_report.calls_before_first_required_action),
         );
+        object.insert(
+            "loaded_skill_contexts".to_string(),
+            json!(loaded_skill_contexts.iter().collect::<Vec<_>>()),
+        );
         if let Some(report) = &scenario_tool_expectation_report {
             object.insert(
                 "profile_scenario_tool_expectations".to_string(),
@@ -755,6 +767,12 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         if let Some(report) = &scenario_call_expectation_report {
             object.insert(
                 "profile_scenario_call_expectations".to_string(),
+                report.clone(),
+            );
+        }
+        if let Some(report) = &scenario_skill_expectation_report {
+            object.insert(
+                "profile_scenario_skill_expectations".to_string(),
                 report.clone(),
             );
         }
@@ -802,6 +820,33 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                     "kind": "profile_scenario_expected_calls_missing",
                     "message": "The trace did not include all exact native tool calls expected for this profiling scenario.",
                     "missing_calls": report.get("missing_calls").cloned().unwrap_or_else(|| json!([])),
+                }));
+            }
+            if let Some(report) = &scenario_call_expectation_report
+                && report
+                    .get("extra_calls_after_satisfied")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| count > 0)
+            {
+                diagnostics.push(json!({
+                    "level": "info",
+                    "kind": "profile_scenario_extra_calls_after_expected",
+                    "message": "Spark satisfied all exact native tool calls expected for this profiling scenario, then made additional tool calls before completing.",
+                    "extra_calls_after_satisfied": report.get("extra_calls_after_satisfied").cloned().unwrap_or_else(|| json!(0)),
+                    "first_satisfied_call_index": report.get("first_satisfied_call_index").cloned().unwrap_or(Value::Null),
+                }));
+            }
+            if let Some(report) = &scenario_skill_expectation_report
+                && report
+                    .get("missing_skills")
+                    .and_then(Value::as_array)
+                    .is_some_and(|missing| !missing.is_empty())
+            {
+                diagnostics.push(json!({
+                    "level": "warning",
+                    "kind": "profile_scenario_expected_skills_missing",
+                    "message": "The trace did not include all loaded skill contexts expected for this profiling scenario.",
+                    "missing_skills": report.get("missing_skills").cloned().unwrap_or_else(|| json!([])),
                 }));
             }
             if let Some(report) = &tool_failure_recovery_report {
@@ -887,6 +932,9 @@ pub fn format_trace_timeline(summary: &Value) -> String {
     if let Some(scenario_calls) = format_scenario_call_expectations(summary) {
         lines.push(scenario_calls);
     }
+    if let Some(scenario_skills) = format_scenario_skill_expectations(summary) {
+        lines.push(scenario_skills);
+    }
     if let Some(tool_recovery) = format_tool_failure_recovery(summary) {
         lines.push(tool_recovery);
     }
@@ -934,6 +982,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     let local_pressure_compactions = compactions_with_local_pressure(summary);
     let scenario_tools = format_scenario_tools_for_summary_row(summary);
     let scenario_calls = format_scenario_calls_for_summary_row(summary);
+    let scenario_skills = format_scenario_skills_for_summary_row(summary);
     let recoveries = format_tool_failure_recovery_for_summary_row(summary);
     let diagnostics = diagnostic_kinds(summary);
     let diagnostics = if diagnostics.is_empty() {
@@ -943,7 +992,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     };
 
     format!(
-        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures}{recoveries} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{scenario_tools}{scenario_calls} diagnostics={diagnostics}"
+        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures}{recoveries} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{scenario_tools}{scenario_calls}{scenario_skills} diagnostics={diagnostics}"
     )
 }
 
@@ -1016,6 +1065,13 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
         "total_calls",
         "scenario_calls",
     );
+    let aggregate_scenario_skills = format_aggregate_expectation_ratio(
+        summaries,
+        "profile_scenario_skill_expectations",
+        "satisfied_skills",
+        "total_skills",
+        "scenario_skills",
+    );
     let total_compactions = sum_summary_field(summaries, "compactions");
     let total_remote_compactions = sum_summary_field(summaries, "remote_compactions");
     let total_fallback_compactions = sum_summary_field(summaries, "fallback_compactions");
@@ -1031,7 +1087,7 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
     };
 
     format!(
-        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures}{aggregate_recoveries} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} local_pressure={total_local_pressure_compactions}{aggregate_scenario_tools}{aggregate_scenario_calls} diagnostics={diagnostics}"
+        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures}{aggregate_recoveries} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} local_pressure={total_local_pressure_compactions}{aggregate_scenario_tools}{aggregate_scenario_calls}{aggregate_scenario_skills} diagnostics={diagnostics}"
     )
 }
 
@@ -1100,6 +1156,12 @@ pub fn trace_aggregate_json(label: &str, summaries: &[Value]) -> Value {
             "profile_scenario_call_expectations",
             "satisfied_calls",
             "total_calls",
+        ),
+        "scenario_skills": aggregate_expectation_json(
+            summaries,
+            "profile_scenario_skill_expectations",
+            "satisfied_skills",
+            "total_skills",
         ),
         "diagnostics": aggregate_diagnostic_count_map(summaries),
     })
@@ -1328,8 +1390,48 @@ fn format_scenario_call_expectations(summary: &Value) -> Option<String> {
                 .join(",")
         })
         .unwrap_or_default();
+    let extra = report
+        .get("extra_calls_after_satisfied")
+        .and_then(Value::as_u64)
+        .filter(|count| *count > 0)
+        .map(|count| format!(" extra_after={count}"))
+        .unwrap_or_default();
     Some(format!(
-        "scenario-calls: satisfied={satisfied}/{total} missing={missing} calls=[{calls}]"
+        "scenario-calls: satisfied={satisfied}/{total} missing={missing}{extra} calls=[{calls}]",
+    ))
+}
+
+fn format_scenario_skill_expectations(summary: &Value) -> Option<String> {
+    let report = summary.get("profile_scenario_skill_expectations")?;
+    let total = report
+        .get("total_skills")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if total == 0 {
+        return None;
+    }
+    let satisfied = report
+        .get("satisfied_skills")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let missing = report
+        .get("missing_skills")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let skills = report
+        .get("expected_skills")
+        .and_then(Value::as_array)
+        .map(|skills| {
+            skills
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    Some(format!(
+        "scenario-skills: satisfied={satisfied}/{total} missing={missing} skills=[{skills}]"
     ))
 }
 
@@ -1366,7 +1468,31 @@ fn format_scenario_calls_for_summary_row(summary: &Value) -> String {
         .get("satisfied_calls")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    format!(" scenario_calls={satisfied}/{total}")
+    let extra = report
+        .get("extra_calls_after_satisfied")
+        .and_then(Value::as_u64)
+        .filter(|count| *count > 0)
+        .map(|count| format!(" extra_calls={count}"))
+        .unwrap_or_default();
+    format!(" scenario_calls={satisfied}/{total}{extra}")
+}
+
+fn format_scenario_skills_for_summary_row(summary: &Value) -> String {
+    let Some(report) = summary.get("profile_scenario_skill_expectations") else {
+        return String::new();
+    };
+    let total = report
+        .get("total_skills")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if total == 0 {
+        return String::new();
+    }
+    let satisfied = report
+        .get("satisfied_skills")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    format!(" scenario_skills={satisfied}/{total}")
 }
 
 fn format_tool_failure_recovery(summary: &Value) -> Option<String> {
@@ -1513,6 +1639,11 @@ fn format_timeline_turn(turn: &Value) -> String {
         "turn {turn_number}: input={input_chars} chars (~{approx_tokens} tok, {context_pct}) request={request_ms} text={response_chars} chars"
     )];
 
+    if let Some(skills) = turn.get("loaded_skills").and_then(Value::as_array)
+        && !skills.is_empty()
+    {
+        parts.push(format!("skills=[{}]", format_string_array(skills)));
+    }
     if let Some(tools) = turn.get("tool_calls").and_then(Value::as_array)
         && !tools.is_empty()
     {
@@ -1535,6 +1666,14 @@ fn format_timeline_turn(turn: &Value) -> String {
     }
 
     parts.join(" ")
+}
+
+fn format_string_array(values: &[Value]) -> String {
+    values
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn format_tool_calls(tools: &[Value]) -> String {
@@ -2024,6 +2163,76 @@ fn required_action_report(
     }
 }
 
+fn loaded_skill_contexts_from_request_input(value: &Value) -> Vec<String> {
+    let mut skills = BTreeSet::<String>::new();
+    collect_loaded_skill_contexts(value, &mut skills);
+    skills.into_iter().collect()
+}
+
+fn collect_loaded_skill_contexts(value: &Value, skills: &mut BTreeSet<String>) {
+    match value {
+        Value::String(text) => {
+            let mut rest = text.as_str();
+            while let Some((_, after_prefix)) = rest.split_once("[spark skill loaded: ") {
+                let Some((name, after_name)) = after_prefix.split_once(']') else {
+                    break;
+                };
+                let name = name.trim();
+                if !name.is_empty() {
+                    skills.insert(name.to_string());
+                }
+                rest = after_name;
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_loaded_skill_contexts(item, skills);
+            }
+        }
+        Value::Object(object) => {
+            for item in object.values() {
+                collect_loaded_skill_contexts(item, skills);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn scenario_skill_expectation_report(
+    metadata: Option<&Value>,
+    loaded_skills: &BTreeSet<String>,
+) -> Option<Value> {
+    let expected_skills = metadata?
+        .pointer("/context/profile_scenario/expected_skills")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if expected_skills.is_empty() {
+        return None;
+    }
+
+    let mut satisfied = Vec::new();
+    let mut missing = Vec::new();
+    for skill in &expected_skills {
+        if loaded_skills.contains(skill) {
+            satisfied.push(skill.clone());
+        } else {
+            missing.push(skill.clone());
+        }
+    }
+
+    Some(json!({
+        "expected_skills": expected_skills,
+        "loaded_skills": loaded_skills.iter().collect::<Vec<_>>(),
+        "total_skills": satisfied.len() + missing.len(),
+        "satisfied_skills": satisfied.len(),
+        "missing_skills": missing,
+        "satisfied_skill_contexts": satisfied,
+    }))
+}
+
 fn scenario_tool_expectation_report(
     metadata: Option<&Value>,
     calls: &[ObservedToolCall],
@@ -2094,6 +2303,35 @@ fn scenario_tool_call_expectation_report(
             missing.push(expected.clone());
         }
     }
+    let first_satisfied_call_index = if missing.is_empty() {
+        (0..calls.len()).find(|index| {
+            expected_calls.iter().all(|expected| {
+                calls
+                    .iter()
+                    .take(index + 1)
+                    .any(|call| required_action_matches_call(expected, call))
+            })
+        })
+    } else {
+        None
+    };
+    let extra_calls_after_satisfied = first_satisfied_call_index
+        .map(|index| calls.len().saturating_sub(index + 1))
+        .unwrap_or(0);
+    let extra_calls = first_satisfied_call_index
+        .map(|index| {
+            calls
+                .iter()
+                .skip(index + 1)
+                .map(|call| {
+                    json!({
+                        "tool": &call.tool_name,
+                        "signature": tool_signature(&call.tool_name, &call.args),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
 
     Some(json!({
         "expected_calls": expected_calls,
@@ -2101,6 +2339,9 @@ fn scenario_tool_call_expectation_report(
         "satisfied_calls": satisfied.len(),
         "missing_calls": missing,
         "satisfied_tool_calls": satisfied,
+        "first_satisfied_call_index": first_satisfied_call_index,
+        "extra_calls_after_satisfied": extra_calls_after_satisfied,
+        "extra_tool_calls": extra_calls,
     }))
 }
 
@@ -2361,6 +2602,23 @@ mod tests {
                     "profile_scenario": {
                         "name": "file-ops",
                         "expected_tool_calls": calls,
+                    }
+                }
+            }))
+            .expect("serialize metadata"),
+        )
+        .expect("write metadata");
+    }
+
+    fn write_trace_metadata_with_expected_skills(dir: &Path, skills: Value) {
+        std::fs::write(
+            dir.join("000-trace-metadata.json"),
+            serde_json::to_vec_pretty(&json!({
+                "model": "gpt-5.3-codex-spark",
+                "context": {
+                    "profile_scenario": {
+                        "name": "skill-use",
+                        "expected_skills": skills,
                     }
                 }
             }))
@@ -3061,6 +3319,157 @@ mod tests {
         );
         assert!(
             format_trace_summary_row(".spark-runs/run-1", &summary).contains("scenario_calls=1/2")
+        );
+    }
+
+    #[test]
+    fn analyze_trace_reports_extra_calls_after_expected_calls_satisfied() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_trace_metadata_with_expected_tool_calls(
+            dir.path(),
+            json!([
+                {
+                    "tool": "fs.read",
+                    "path": "src/main.rs"
+                },
+                {
+                    "tool": "fs.search",
+                    "path": "src"
+                }
+            ]),
+        );
+        std::fs::write(
+            dir.path().join("001-response.json"),
+            serde_json::to_vec_pretty(&json!({
+                "raw": {
+                    "events": [
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 0,
+                            "item": {
+                                "type": "function_call",
+                                "name": "fs_read",
+                                "arguments": "{\"path\":\"src/main.rs\"}"
+                            }
+                        },
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 1,
+                            "item": {
+                                "type": "function_call",
+                                "name": "fs_search",
+                                "arguments": "{\"path\":\"src\",\"query\":\"load_skill_mentions\"}"
+                            }
+                        },
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 2,
+                            "item": {
+                                "type": "function_call",
+                                "name": "fs_read",
+                                "arguments": "{\"path\":\"src/skills.rs\"}"
+                            }
+                        }
+                    ]
+                }
+            }))
+            .expect("serialize response"),
+        )
+        .expect("write response");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["satisfied_calls"],
+            2
+        );
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["first_satisfied_call_index"],
+            1
+        );
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["extra_calls_after_satisfied"],
+            1
+        );
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["extra_tool_calls"][0]["tool"],
+            "fs.read"
+        );
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| {
+                    diagnostic["kind"] == "profile_scenario_extra_calls_after_expected"
+                })
+        );
+        assert!(format_trace_timeline(&summary).contains("extra_after=1"));
+        assert!(
+            format_trace_summary_row(".spark-runs/run-1", &summary)
+                .contains("scenario_calls=2/2 extra_calls=1")
+        );
+    }
+
+    #[test]
+    fn analyze_trace_reports_profile_scenario_skill_expectations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_trace_metadata_with_expected_skills(
+            dir.path(),
+            json!(["rust-patterns", "missing-skill"]),
+        );
+        std::fs::write(
+            dir.path().join("001-request-input.json"),
+            serde_json::to_vec_pretty(&json!({
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "[spark skill loaded: rust-patterns]\nSpark skill: rust-patterns\n\nDescription: Demo"
+                        }]
+                    },
+                    {
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "Profile scenario: skill-use. Apply @rust-patterns."
+                        }]
+                    }
+                ]
+            }))
+            .expect("serialize request"),
+        )
+        .expect("write request");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["loaded_skill_contexts"], json!(["rust-patterns"]));
+        assert_eq!(
+            summary["profile_scenario_skill_expectations"]["total_skills"],
+            2
+        );
+        assert_eq!(
+            summary["profile_scenario_skill_expectations"]["satisfied_skills"],
+            1
+        );
+        assert_eq!(
+            summary["profile_scenario_skill_expectations"]["missing_skills"],
+            json!(["missing-skill"])
+        );
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "profile_scenario_expected_skills_missing")
+        );
+        assert!(format_trace_timeline(&summary).contains("skills=[rust-patterns]"));
+        assert!(
+            format_trace_timeline(&summary).contains("scenario-skills: satisfied=1/2 missing=1")
+        );
+        assert!(
+            format_trace_summary_row(".spark-runs/run-1", &summary).contains("scenario_skills=1/2")
         );
     }
 

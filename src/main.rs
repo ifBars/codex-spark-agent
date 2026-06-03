@@ -185,6 +185,8 @@ enum ProfileScenarioKind {
     FileOps,
     /// Scratch-file task that intentionally exercises native tool failure and recovery.
     ToolRecovery,
+    /// Repo-local skill mention task that exercises automatic skill compile/load.
+    SkillUse,
 }
 
 impl ProfileScenarioKind {
@@ -196,6 +198,7 @@ impl ProfileScenarioKind {
             Self::FileEdit => "file-edit",
             Self::FileOps => "file-ops",
             Self::ToolRecovery => "tool-recovery",
+            Self::SkillUse => "skill-use",
         }
     }
 }
@@ -552,6 +555,7 @@ async fn main() -> Result<()> {
                             "repeat_count": repeat,
                             "expected_tool_groups": profile_scenario_expected_tool_groups(scenario),
                             "expected_tool_calls": profile_scenario_expected_tool_calls(scenario),
+                            "expected_skills": profile_scenario_expected_skills(scenario),
                         }
                     })),
                 )?;
@@ -563,6 +567,7 @@ async fn main() -> Result<()> {
                         prompt.len(),
                         prompt.len() / APPROX_CHARS_PER_TOKEN
                     );
+                    load_skill_mentions(&mut runner, &cwd, prompt).await?;
                     if let Err(error) = runner.run(prompt).await {
                         run_result = Err(error);
                         break;
@@ -1072,6 +1077,16 @@ fn profile_scenario_prompts(
              Finish with the native tools used, whether recovery passed, and whether the harness observation made the correction clear."
                 .to_string(),
         ]),
+        ProfileScenarioKind::SkillUse => Ok(vec![
+            "Profile scenario: skill-use.\n\
+             Load and apply @rust-patterns before answering.\n\
+             Use native file tools, not cmd.exec, unless verification cannot be done otherwise.\n\
+             Required actions:\n\
+             1. Use fs.read on src/main.rs with a bounded window.\n\
+             2. Use fs.search under src for load_skill_mentions.\n\
+             Finish with two concise Rust harness risks or cleanup opportunities, and mention whether the loaded skill guidance affected your review."
+                .to_string(),
+        ]),
         ProfileScenarioKind::NaturalCompaction => natural_compaction_scenario_prompts(target_tokens),
         ProfileScenarioKind::CompactionPressure => {
             let target_chars = target_tokens.saturating_mul(APPROX_CHARS_PER_TOKEN);
@@ -1159,6 +1174,7 @@ fn profile_scenario_expected_tool_groups(scenario: ProfileScenarioKind) -> Vec<V
         ProfileScenarioKind::ToolRecovery => {
             vec![vec!["fs.read"], vec!["fs.stat"], vec!["fs.write"]]
         }
+        ProfileScenarioKind::SkillUse => vec![vec!["fs.read"], vec!["fs.search"]],
     }
 }
 
@@ -1223,6 +1239,23 @@ fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind) -> Vec<Va
                 "path": ".spark-scenarios/tool-recovery/recovery-summary.txt",
             }),
         ],
+        ProfileScenarioKind::SkillUse => vec![
+            json!({
+                "tool": "fs.read",
+                "path": "src/main.rs",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "src",
+            }),
+        ],
+    }
+}
+
+fn profile_scenario_expected_skills(scenario: ProfileScenarioKind) -> Vec<&'static str> {
+    match scenario {
+        ProfileScenarioKind::SkillUse => vec!["rust-patterns"],
+        _ => vec![],
     }
 }
 
@@ -1456,10 +1489,11 @@ mod tests {
     use super::{
         APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, ProfileScenarioKind, command_args,
         contains_skill_mention, is_active_session, latest_trace_dir, list_trace_dirs,
-        mentioned_skill_names, prepare_profile_scenario, profile_scenario_expected_tool_calls,
-        profile_scenario_expected_tool_groups, profile_scenario_prompts, resolve_char_threshold,
-        session_name_for_display, trace_export_record, trace_filter_label,
-        trace_has_all_diagnostics, trace_runs_root, validate_scenario_repeat,
+        mentioned_skill_names, prepare_profile_scenario, profile_scenario_expected_skills,
+        profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
+        profile_scenario_prompts, resolve_char_threshold, session_name_for_display,
+        trace_export_record, trace_filter_label, trace_has_all_diagnostics, trace_runs_root,
+        validate_scenario_repeat,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -1896,6 +1930,34 @@ mod tests {
             calls[3]["path"],
             ".spark-scenarios/tool-recovery/recovery-summary.txt"
         );
+    }
+
+    #[test]
+    fn skill_use_scenario_exercises_skill_mention_and_native_tools() {
+        let prompts =
+            profile_scenario_prompts(ProfileScenarioKind::SkillUse, 45_000).expect("scenario");
+        let prompt = prompts.first().expect("prompt");
+
+        assert!(prompt.contains("Profile scenario: skill-use"));
+        assert!(prompt.contains("@rust-patterns"));
+        assert!(prompt.contains("Use fs.read"));
+        assert!(prompt.contains("Use fs.search"));
+        assert!(prompt.contains("not cmd.exec"));
+    }
+
+    #[test]
+    fn skill_use_scenario_declares_expected_tools_and_skill() {
+        let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::SkillUse);
+        let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::SkillUse);
+        let skills = profile_scenario_expected_skills(ProfileScenarioKind::SkillUse);
+
+        assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.search"]]);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["tool"], "fs.read");
+        assert_eq!(calls[0]["path"], "src/main.rs");
+        assert_eq!(calls[1]["tool"], "fs.search");
+        assert_eq!(calls[1]["path"], "src");
+        assert_eq!(skills, vec!["rust-patterns"]);
     }
 
     #[test]
