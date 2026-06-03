@@ -555,10 +555,12 @@ async fn cmd_exec(cwd: &Path, args: Value) -> Result<ToolResult> {
         MAX_COMMAND_STREAM_CHARS,
     );
 
+    let ok = output.status.success();
+    let code = output.status.code();
     Ok(ToolResult {
-        ok: output.status.success(),
+        ok,
         data: json!({
-            "code": output.status.code(),
+            "code": code,
             "stdout": stdout.text,
             "stderr": stderr.text,
             "stdout_chars": stdout.original_chars,
@@ -567,7 +569,10 @@ async fn cmd_exec(cwd: &Path, args: Value) -> Result<ToolResult> {
             "stderr_truncated": stderr.truncated,
             "workdir": display_rel(cwd, &workdir),
         }),
-        error: None,
+        error: (!ok).then(|| match code {
+            Some(code) => format!("command exited with code {code}"),
+            None => "command terminated by signal".to_string(),
+        }),
     })
 }
 
@@ -958,5 +963,31 @@ mod tests {
             result.error.as_deref(),
             Some("command timed out after 100ms")
         );
+    }
+
+    #[tokio::test]
+    async fn cmd_exec_reports_nonzero_exit_as_tool_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let command = if cfg!(target_os = "windows") {
+            "Write-Output nope; exit 7"
+        } else {
+            "printf nope; exit 7"
+        };
+
+        let result = cmd_exec(
+            dir.path(),
+            json!({
+                "command": command,
+                "timeout_ms": 5000
+            }),
+        )
+        .await
+        .expect("cmd result");
+
+        assert!(!result.ok);
+        assert_eq!(result.data["code"], 7);
+        assert_eq!(result.error.as_deref(), Some("command exited with code 7"));
+        let stdout = result.data["stdout"].as_str().expect("stdout");
+        assert!(stdout.contains("nope"));
     }
 }
