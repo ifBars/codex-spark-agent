@@ -112,6 +112,12 @@ enum Command {
         /// Print an aggregate row for matching trace summaries.
         #[arg(long)]
         aggregate: bool,
+        /// Print matching analyzed traces as one JSON object.
+        #[arg(long)]
+        json: bool,
+        /// Print matching analyzed traces as one JSON object per line.
+        #[arg(long)]
+        jsonl: bool,
     },
     /// Summarize a .spark-runs/run-* trace for repeated tool calls and compaction behavior.
     AnalyzeTrace {
@@ -353,17 +359,28 @@ async fn main() -> Result<()> {
             scenario,
             diagnostics,
             aggregate,
+            json,
+            jsonl,
         } => {
+            if json && jsonl {
+                anyhow::bail!("pass either --json or --jsonl, not both");
+            }
             let cwd = std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
             let mut matching_summaries = Vec::new();
+            let mut json_records = Vec::new();
+            let analyze = summary
+                || scenario.is_some()
+                || !diagnostics.is_empty()
+                || aggregate
+                || json
+                || jsonl;
             for run in list_trace_dirs(&trace_runs_root(&cwd), limit)? {
                 let display = display_trace_dir(&cwd, &run);
-                let trace_summary =
-                    if summary || scenario.is_some() || !diagnostics.is_empty() || aggregate {
-                        Some(profiler::analyze_trace(&run)?)
-                    } else {
-                        None
-                    };
+                let trace_summary = if analyze {
+                    Some(profiler::analyze_trace(&run)?)
+                } else {
+                    None
+                };
                 if let Some(scenario) = scenario.as_deref()
                     && trace_summary
                         .as_ref()
@@ -383,6 +400,15 @@ async fn main() -> Result<()> {
                 if let Some(trace_summary) = &trace_summary {
                     matching_summaries.push(trace_summary.clone());
                 }
+                if json || jsonl {
+                    let record = trace_export_record(&cwd, &run, &display, trace_summary.as_ref());
+                    if jsonl {
+                        println!("{}", serde_json::to_string(&record)?);
+                    } else {
+                        json_records.push(record);
+                    }
+                    continue;
+                }
                 if summary {
                     let trace_summary = trace_summary.expect("summary loaded");
                     println!(
@@ -396,14 +422,42 @@ async fn main() -> Result<()> {
                     println!("{}", display.display());
                 }
             }
+            if json {
+                let output = json!({
+                    "filter": {
+                        "scenario": scenario,
+                        "diagnostics": diagnostics,
+                        "limit": limit,
+                    },
+                    "runs": json_records,
+                    "aggregate": aggregate.then(|| {
+                        profiler::trace_aggregate_json(
+                            trace_filter_label(scenario.as_deref(), &diagnostics).as_str(),
+                            &matching_summaries,
+                        )
+                    }),
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            }
             if aggregate {
-                println!(
-                    "{}",
-                    profiler::format_trace_aggregate_row(
-                        trace_filter_label(scenario.as_deref(), &diagnostics).as_str(),
-                        &matching_summaries,
-                    )
-                );
+                if jsonl {
+                    let record = json!({
+                        "type": "aggregate",
+                        "aggregate": profiler::trace_aggregate_json(
+                            trace_filter_label(scenario.as_deref(), &diagnostics).as_str(),
+                            &matching_summaries,
+                        ),
+                    });
+                    println!("{}", serde_json::to_string(&record)?);
+                } else if !json {
+                    println!(
+                        "{}",
+                        profiler::format_trace_aggregate_row(
+                            trace_filter_label(scenario.as_deref(), &diagnostics).as_str(),
+                            &matching_summaries,
+                        )
+                    );
+                }
             }
         }
         Command::AnalyzeTrace {
@@ -1296,6 +1350,17 @@ fn display_trace_dir(cwd: &Path, path: &Path) -> PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn trace_export_record(cwd: &Path, path: &Path, display: &Path, summary: Option<&Value>) -> Value {
+    let absolute_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    json!({
+        "type": "trace",
+        "trace_dir": display.display().to_string(),
+        "trace_dir_abs": absolute_path.display().to_string(),
+        "workspace": cwd.display().to_string(),
+        "summary": summary.cloned().unwrap_or(Value::Null),
+    })
+}
+
 fn resolve_char_threshold(
     name: &str,
     chars: Option<usize>,
@@ -1393,8 +1458,8 @@ mod tests {
         contains_skill_mention, is_active_session, latest_trace_dir, list_trace_dirs,
         mentioned_skill_names, prepare_profile_scenario, profile_scenario_expected_tool_calls,
         profile_scenario_expected_tool_groups, profile_scenario_prompts, resolve_char_threshold,
-        session_name_for_display, trace_filter_label, trace_has_all_diagnostics, trace_runs_root,
-        validate_scenario_repeat,
+        session_name_for_display, trace_export_record, trace_filter_label,
+        trace_has_all_diagnostics, trace_runs_root, validate_scenario_repeat,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -1568,6 +1633,34 @@ mod tests {
             ),
             "tool-recovery diagnostics=tool_failures,tool_failure_recovered"
         );
+    }
+
+    #[test]
+    fn trace_export_record_wraps_summary_with_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let run = dir.path().join(".spark-runs").join("run-42");
+        std::fs::create_dir_all(&run).expect("create trace dir");
+        let display = PathBuf::from(".spark-runs").join("run-42");
+        let summary = json!({
+            "requests": 1,
+            "tool_calls": 2,
+        });
+
+        let record = trace_export_record(dir.path(), &run, &display, Some(&summary));
+
+        assert_eq!(record["type"], "trace");
+        assert_eq!(
+            record["trace_dir"],
+            format!(".spark-runs{}run-42", std::path::MAIN_SEPARATOR)
+        );
+        assert!(
+            record["trace_dir_abs"]
+                .as_str()
+                .unwrap()
+                .ends_with("run-42")
+        );
+        assert_eq!(record["summary"]["requests"], 1);
+        assert_eq!(record["summary"]["tool_calls"], 2);
     }
 
     #[test]

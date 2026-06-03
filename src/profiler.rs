@@ -1035,6 +1035,76 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
     )
 }
 
+pub fn trace_aggregate_json(label: &str, summaries: &[Value]) -> Value {
+    let count = summaries.len();
+    let successes = summaries
+        .iter()
+        .filter(|summary| {
+            summary
+                .get("errors")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        })
+        .count();
+    let max_tokens = summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .get("max_approx_input_tokens")
+                .and_then(Value::as_u64)
+        })
+        .max()
+        .unwrap_or(0);
+    let max_context_pct = summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .get("max_context_window_pct")
+                .and_then(Value::as_f64)
+        })
+        .fold(0.0, f64::max);
+    let max_request_ms = summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .get("max_request_duration_ms")
+                .and_then(Value::as_u64)
+        })
+        .max()
+        .unwrap_or(0);
+
+    json!({
+        "label": label,
+        "runs": count,
+        "success": successes,
+        "failure": count.saturating_sub(successes),
+        "max_approx_input_tokens": max_tokens,
+        "max_context_window_pct": max_context_pct,
+        "max_request_duration_ms": max_request_ms,
+        "tool_calls": sum_summary_field(summaries, "tool_calls"),
+        "tool_failures": sum_summary_field(summaries, "tool_failures"),
+        "recovered_tool_failures": sum_recovery_field(summaries, "recovered_failures"),
+        "failed_tool_results": sum_recovery_field(summaries, "failed_tool_results"),
+        "compactions": sum_summary_field(summaries, "compactions"),
+        "remote_compactions": sum_summary_field(summaries, "remote_compactions"),
+        "fallback_compactions": sum_summary_field(summaries, "fallback_compactions"),
+        "local_pressure_compactions": summaries.iter().map(compactions_with_local_pressure).sum::<usize>(),
+        "scenario_tools": aggregate_expectation_json(
+            summaries,
+            "profile_scenario_tool_expectations",
+            "satisfied_groups",
+            "total_groups",
+        ),
+        "scenario_calls": aggregate_expectation_json(
+            summaries,
+            "profile_scenario_call_expectations",
+            "satisfied_calls",
+            "total_calls",
+        ),
+        "diagnostics": aggregate_diagnostic_count_map(summaries),
+    })
+}
+
 fn trace_scenario_name(metadata: &Value) -> Option<&str> {
     metadata
         .pointer("/context/profile_scenario/name")
@@ -1086,6 +1156,32 @@ fn format_aggregate_expectation_ratio(
     }
 }
 
+fn aggregate_expectation_json(
+    summaries: &[Value],
+    report_key: &str,
+    satisfied_key: &str,
+    total_key: &str,
+) -> Value {
+    let (satisfied, total) = summaries
+        .iter()
+        .filter_map(|summary| summary.get(report_key))
+        .fold((0, 0), |(satisfied, total), report| {
+            (
+                satisfied
+                    + report
+                        .get(satisfied_key)
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                total + report.get(total_key).and_then(Value::as_u64).unwrap_or(0),
+            )
+        });
+
+    json!({
+        "satisfied": satisfied,
+        "total": total,
+    })
+}
+
 fn compactions_with_local_pressure(summary: &Value) -> usize {
     summary
         .get("compaction_reports")
@@ -1104,6 +1200,23 @@ fn compactions_with_local_pressure(summary: &Value) -> usize {
 }
 
 fn aggregate_diagnostic_kinds(summaries: &[Value]) -> Vec<String> {
+    aggregate_diagnostic_counts(summaries)
+        .into_iter()
+        .map(|(kind, count)| format!("{kind}:{count}"))
+        .collect()
+}
+
+fn aggregate_diagnostic_count_map(summaries: &[Value]) -> Value {
+    let counts = aggregate_diagnostic_counts(summaries);
+    Value::Object(
+        counts
+            .into_iter()
+            .map(|(kind, count)| (kind, json!(count)))
+            .collect(),
+    )
+}
+
+fn aggregate_diagnostic_counts(summaries: &[Value]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::<String, usize>::new();
     for summary in summaries {
         for kind in diagnostic_kinds(summary) {
@@ -1111,9 +1224,6 @@ fn aggregate_diagnostic_kinds(summaries: &[Value]) -> Vec<String> {
         }
     }
     counts
-        .into_iter()
-        .map(|(kind, count)| format!("{kind}:{count}"))
-        .collect()
 }
 
 fn format_required_actions_summary(summary: &Value) -> Option<String> {
@@ -3212,6 +3322,77 @@ mod tests {
         assert!(row.contains("scenario_tools=5/6 scenario_calls=7/8"));
         assert!(row.contains("compactions=2 remote=2 fallback=0 local_pressure=2"));
         assert!(row.contains("diagnostics=remote_compaction_local_pressure:2,request_failure:1"));
+    }
+
+    #[test]
+    fn formats_trace_aggregate_json_for_batch_analysis() {
+        let summaries = vec![
+            json!({
+                "errors": [],
+                "max_approx_input_tokens": 45_000,
+                "max_context_window_pct": 35.2,
+                "max_request_duration_ms": 1200,
+                "tool_calls": 4,
+                "tool_failures": 1,
+                "compactions": 1,
+                "remote_compactions": 1,
+                "fallback_compactions": 0,
+                "tool_failure_recovery": {
+                    "failed_tool_results": 1,
+                    "recovered_failures": 1
+                },
+                "profile_scenario_tool_expectations": {
+                    "satisfied_groups": 3,
+                    "total_groups": 4
+                },
+                "profile_scenario_call_expectations": {
+                    "satisfied_calls": 4,
+                    "total_calls": 5
+                },
+                "diagnostics": [{"kind": "tool_failure_recovered"}],
+                "compaction_reports": [{"local_pressure": {"after_chars": 1000}}]
+            }),
+            json!({
+                "errors": [{"stage": "response"}],
+                "max_approx_input_tokens": 50_000,
+                "max_context_window_pct": 39.1,
+                "max_request_duration_ms": 2400,
+                "tool_calls": 2,
+                "tool_failures": 0,
+                "compactions": 0,
+                "remote_compactions": 0,
+                "fallback_compactions": 0,
+                "profile_scenario_tool_expectations": {
+                    "satisfied_groups": 2,
+                    "total_groups": 4
+                },
+                "profile_scenario_call_expectations": {
+                    "satisfied_calls": 3,
+                    "total_calls": 5
+                },
+                "diagnostics": [{"kind": "request_failure"}]
+            }),
+        ];
+
+        let aggregate = trace_aggregate_json("tool-recovery", &summaries);
+
+        assert_eq!(aggregate["label"], "tool-recovery");
+        assert_eq!(aggregate["runs"], 2);
+        assert_eq!(aggregate["success"], 1);
+        assert_eq!(aggregate["failure"], 1);
+        assert_eq!(aggregate["max_approx_input_tokens"], 50_000);
+        assert_eq!(aggregate["max_request_duration_ms"], 2400);
+        assert_eq!(aggregate["tool_calls"], 6);
+        assert_eq!(aggregate["tool_failures"], 1);
+        assert_eq!(aggregate["recovered_tool_failures"], 1);
+        assert_eq!(aggregate["failed_tool_results"], 1);
+        assert_eq!(aggregate["local_pressure_compactions"], 1);
+        assert_eq!(aggregate["scenario_tools"]["satisfied"], 5);
+        assert_eq!(aggregate["scenario_tools"]["total"], 8);
+        assert_eq!(aggregate["scenario_calls"]["satisfied"], 7);
+        assert_eq!(aggregate["scenario_calls"]["total"], 10);
+        assert_eq!(aggregate["diagnostics"]["tool_failure_recovered"], 1);
+        assert_eq!(aggregate["diagnostics"]["request_failure"], 1);
     }
 
     #[test]
