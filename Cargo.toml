@@ -1,0 +1,32 @@
+[package]
+name = "codex-spark-agent"
+version = "0.1.0"
+edition = "2024"
+description = "Experimental Rust CLI harness for GPT-5.3-Codex-Spark over the ChatGPT Codex backend"
+license = "MIT"
+repository = "https://github.com/ifBars/codex-spark-agent"
+readme = "README.md"
+keywords = ["codex", "openai", "agent", "cli", "rust"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "spark"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+dirs = "6"
+open = "5"
+rand = "0.8"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time", "process"] }
+toml = "0.9"
+url = "2"
+urlencoding = "2"
