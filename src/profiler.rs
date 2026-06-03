@@ -164,7 +164,7 @@ impl AgentProfiler {
             diagnostics.push(json!({
                 "level": "error",
                 "kind": "request_failure",
-                "message": "One or more Spark requests failed. Inspect response-error trace files and the input size sequence around the failing turn.",
+                "message": "One or more Spark turns failed. Inspect *-error trace files and the input size sequence around the failing turn.",
                 "count": self.errors.len(),
             }));
         }
@@ -280,12 +280,16 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             }
         } else if name.ends_with("-compaction.json") {
             profiler.record_compaction(&value);
-        } else if name.ends_with("-response-error.json") {
+        } else if name.ends_with("-error.json") {
+            let stage = value
+                .get("stage")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             let error = value
                 .get("error")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error");
-            profiler.record_error(turn, "response", error);
+            profiler.record_error(turn, stage, error);
         }
     }
 
@@ -615,5 +619,25 @@ mod tests {
                 .expect("error text")
                 .contains("without response.completed")
         );
+    }
+
+    #[test]
+    fn analyze_trace_reports_generic_terminal_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("002-max_turns-error.json"),
+            serde_json::to_vec_pretty(&json!({
+                "stage": "max_turns",
+                "error": "stopped after 1 turns without completion"
+            }))
+            .expect("serialize error"),
+        )
+        .expect("write error");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["errors"][0]["turn"], 2);
+        assert_eq!(summary["errors"][0]["stage"], "max_turns");
+        assert_eq!(summary["diagnostics"][0]["kind"], "request_failure");
     }
 }

@@ -185,22 +185,37 @@ impl AgentRunner {
             if let Some(max_turns) = self.max_turns
                 && turn > max_turns
             {
-                anyhow::bail!("stopped after {max_turns} turns without completion");
+                let message = format!("stopped after {max_turns} turns without completion");
+                self.record_terminal_error(self.request_seq + 1, "max_turns", &message)?;
+                anyhow::bail!(message);
             }
 
-            if let Some(report) = self.compact_if_needed(&tools).await? {
-                self.profiler.record_compaction(&report);
-                if let Some(trace) = &mut self.trace {
-                    trace.write(self.request_seq + 1, "compaction", &report)?;
+            match self.compact_if_needed(&tools).await {
+                Ok(Some(report)) => {
+                    self.profiler.record_compaction(&report);
+                    if let Some(trace) = &mut self.trace {
+                        trace.write(self.request_seq + 1, "compaction", &report)?;
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.record_terminal_error(
+                        self.request_seq + 1,
+                        "compaction",
+                        &error.to_string(),
+                    )?;
+                    return Err(error);
                 }
             }
 
             let input_chars = serde_json::to_string(&self.input)?.len();
             if input_chars > self.max_input_chars {
-                anyhow::bail!(
+                let message = format!(
                     "request input is {input_chars} JSON chars, above max-input-chars {}; Spark has a 128k context window, so split the prompt or lower retained context",
                     self.max_input_chars
                 );
+                self.record_terminal_error(self.request_seq + 1, "input_guard", &message)?;
+                anyhow::bail!(message);
             }
 
             self.request_seq += 1;
@@ -216,15 +231,7 @@ impl AgentRunner {
             let (response, raw) = match self.client.responses_create(&self.input, &tools).await {
                 Ok(result) => result,
                 Err(error) => {
-                    self.profiler
-                        .record_error(self.request_seq, "response", &error.to_string());
-                    if let Some(trace) = &mut self.trace {
-                        trace.write(
-                            self.request_seq,
-                            "response-error",
-                            &json!({"stage": "response", "error": error.to_string()}),
-                        )?;
-                    }
+                    self.record_terminal_error(self.request_seq, "response", &error.to_string())?;
                     return Err(error);
                 }
             };
@@ -314,6 +321,18 @@ impl AgentRunner {
             println!("{}", serde_json::to_string_pretty(&summary)?);
         }
         Ok(())
+    }
+
+    fn record_terminal_error(&mut self, turn: usize, stage: &str, error: &str) -> Result<()> {
+        self.profiler.record_error(turn, stage, error);
+        if let Some(trace) = &mut self.trace {
+            trace.write(
+                turn,
+                &format!("{stage}-error"),
+                &json!({"stage": stage, "error": error}),
+            )?;
+        }
+        self.emit_profile_summary()
     }
 
     async fn compact_if_needed(
