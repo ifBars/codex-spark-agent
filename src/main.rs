@@ -112,6 +112,15 @@ enum Command {
         /// Print an aggregate row for matching trace summaries.
         #[arg(long)]
         aggregate: bool,
+        /// Only include traces whose max tool-only streak is at least this many turns.
+        #[arg(long)]
+        min_tool_only_streak: Option<u64>,
+        /// Only include traces whose post-satisfaction overrun is at least this many turns.
+        #[arg(long)]
+        min_overrun_turns: Option<u64>,
+        /// Only include traces whose post-satisfaction context growth is at least this many chars.
+        #[arg(long)]
+        min_overrun_context_chars: Option<u64>,
         /// Print matching analyzed traces as one JSON object.
         #[arg(long)]
         json: bool,
@@ -362,6 +371,9 @@ async fn main() -> Result<()> {
             scenario,
             diagnostics,
             aggregate,
+            min_tool_only_streak,
+            min_overrun_turns,
+            min_overrun_context_chars,
             json,
             jsonl,
         } => {
@@ -375,6 +387,9 @@ async fn main() -> Result<()> {
                 || scenario.is_some()
                 || !diagnostics.is_empty()
                 || aggregate
+                || min_tool_only_streak.is_some()
+                || min_overrun_turns.is_some()
+                || min_overrun_context_chars.is_some()
                 || json
                 || jsonl;
             for run in list_trace_dirs(&trace_runs_root(&cwd), limit)? {
@@ -398,6 +413,14 @@ async fn main() -> Result<()> {
                         &diagnostics,
                     )
                 {
+                    continue;
+                }
+                if !trace_matches_metric_filters(
+                    trace_summary.as_ref().expect("summary loaded"),
+                    min_tool_only_streak,
+                    min_overrun_turns,
+                    min_overrun_context_chars,
+                ) {
                     continue;
                 }
                 if let Some(trace_summary) = &trace_summary {
@@ -431,11 +454,21 @@ async fn main() -> Result<()> {
                         "scenario": scenario,
                         "diagnostics": diagnostics,
                         "limit": limit,
+                        "min_tool_only_streak": min_tool_only_streak,
+                        "min_overrun_turns": min_overrun_turns,
+                        "min_overrun_context_chars": min_overrun_context_chars,
                     },
                     "runs": json_records,
                     "aggregate": aggregate.then(|| {
                         profiler::trace_aggregate_json(
-                            trace_filter_label(scenario.as_deref(), &diagnostics).as_str(),
+                            trace_filter_label(
+                                scenario.as_deref(),
+                                &diagnostics,
+                                min_tool_only_streak,
+                                min_overrun_turns,
+                                min_overrun_context_chars,
+                            )
+                            .as_str(),
                             &matching_summaries,
                         )
                     }),
@@ -447,7 +480,14 @@ async fn main() -> Result<()> {
                     let record = json!({
                         "type": "aggregate",
                         "aggregate": profiler::trace_aggregate_json(
-                            trace_filter_label(scenario.as_deref(), &diagnostics).as_str(),
+                            trace_filter_label(
+                                scenario.as_deref(),
+                                &diagnostics,
+                                min_tool_only_streak,
+                                min_overrun_turns,
+                                min_overrun_context_chars,
+                            )
+                            .as_str(),
                             &matching_summaries,
                         ),
                     });
@@ -456,7 +496,14 @@ async fn main() -> Result<()> {
                     println!(
                         "{}",
                         profiler::format_trace_aggregate_row(
-                            trace_filter_label(scenario.as_deref(), &diagnostics).as_str(),
+                            trace_filter_label(
+                                scenario.as_deref(),
+                                &diagnostics,
+                                min_tool_only_streak,
+                                min_overrun_turns,
+                                min_overrun_context_chars,
+                            )
+                            .as_str(),
                             &matching_summaries,
                         )
                     );
@@ -1434,11 +1481,57 @@ fn trace_has_all_diagnostics(summary: &Value, required: &[String]) -> bool {
     })
 }
 
-fn trace_filter_label(scenario: Option<&str>, diagnostics: &[String]) -> String {
+fn trace_matches_metric_filters(
+    summary: &Value,
+    min_tool_only_streak: Option<u64>,
+    min_overrun_turns: Option<u64>,
+    min_overrun_context_chars: Option<u64>,
+) -> bool {
+    metric_at_least(
+        summary,
+        "/tool_only_turns/max_consecutive",
+        min_tool_only_streak,
+    ) && metric_at_least(
+        summary,
+        "/profile_scenario_call_expectations/extra_turns_after_satisfied",
+        min_overrun_turns,
+    ) && metric_at_least(
+        summary,
+        "/profile_scenario_call_expectations/context_growth_after_satisfied_chars",
+        min_overrun_context_chars,
+    )
+}
+
+fn metric_at_least(summary: &Value, pointer: &str, minimum: Option<u64>) -> bool {
+    let Some(minimum) = minimum else {
+        return true;
+    };
+    summary
+        .pointer(pointer)
+        .and_then(Value::as_u64)
+        .is_some_and(|value| value >= minimum)
+}
+
+fn trace_filter_label(
+    scenario: Option<&str>,
+    diagnostics: &[String],
+    min_tool_only_streak: Option<u64>,
+    min_overrun_turns: Option<u64>,
+    min_overrun_context_chars: Option<u64>,
+) -> String {
     let mut label = scenario.unwrap_or("all").to_string();
     if !diagnostics.is_empty() {
         label.push_str(" diagnostics=");
         label.push_str(&diagnostics.join(","));
+    }
+    if let Some(minimum) = min_tool_only_streak {
+        label.push_str(&format!(" min_tool_only_streak={minimum}"));
+    }
+    if let Some(minimum) = min_overrun_turns {
+        label.push_str(&format!(" min_overrun_turns={minimum}"));
+    }
+    if let Some(minimum) = min_overrun_context_chars {
+        label.push_str(&format!(" min_overrun_context_chars={minimum}"));
     }
     label
 }
@@ -1492,8 +1585,8 @@ mod tests {
         mentioned_skill_names, prepare_profile_scenario, profile_scenario_expected_skills,
         profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
         profile_scenario_prompts, resolve_char_threshold, session_name_for_display,
-        trace_export_record, trace_filter_label, trace_has_all_diagnostics, trace_runs_root,
-        validate_scenario_repeat,
+        trace_export_record, trace_filter_label, trace_has_all_diagnostics,
+        trace_matches_metric_filters, trace_runs_root, validate_scenario_repeat,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -1650,11 +1743,11 @@ mod tests {
     #[test]
     fn trace_filter_label_includes_scenario_and_diagnostics() {
         assert_eq!(
-            trace_filter_label(Some("tool-recovery"), &[]),
+            trace_filter_label(Some("tool-recovery"), &[], None, None, None),
             "tool-recovery"
         );
         assert_eq!(
-            trace_filter_label(None, &["tool_failures".to_string()]),
+            trace_filter_label(None, &["tool_failures".to_string()], None, None, None),
             "all diagnostics=tool_failures"
         );
         assert_eq!(
@@ -1664,9 +1757,66 @@ mod tests {
                     "tool_failures".to_string(),
                     "tool_failure_recovered".to_string()
                 ],
+                None,
+                None,
+                None,
             ),
             "tool-recovery diagnostics=tool_failures,tool_failure_recovered"
         );
+        assert_eq!(
+            trace_filter_label(
+                Some("skill-use"),
+                &["tool_only_turn_streak".to_string()],
+                Some(3),
+                Some(2),
+                Some(10_000),
+            ),
+            "skill-use diagnostics=tool_only_turn_streak min_tool_only_streak=3 min_overrun_turns=2 min_overrun_context_chars=10000"
+        );
+    }
+
+    #[test]
+    fn trace_metric_filters_require_requested_thresholds() {
+        let summary = json!({
+            "tool_only_turns": {
+                "max_consecutive": 8
+            },
+            "profile_scenario_call_expectations": {
+                "extra_turns_after_satisfied": 6,
+                "context_growth_after_satisfied_chars": 101846
+            }
+        });
+
+        assert!(trace_matches_metric_filters(
+            &summary,
+            Some(8),
+            Some(6),
+            Some(101_846)
+        ));
+        assert!(!trace_matches_metric_filters(
+            &summary,
+            Some(9),
+            Some(6),
+            Some(101_846)
+        ));
+        assert!(!trace_matches_metric_filters(
+            &summary,
+            Some(8),
+            Some(7),
+            Some(101_846)
+        ));
+        assert!(!trace_matches_metric_filters(
+            &summary,
+            Some(8),
+            Some(6),
+            Some(101_847)
+        ));
+        assert!(!trace_matches_metric_filters(
+            &json!({}),
+            Some(1),
+            None,
+            None
+        ));
     }
 
     #[test]
