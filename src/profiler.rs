@@ -481,10 +481,11 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let mut embedded_profile_summary = None;
     let mut embedded_profile_summary_rank = 0usize;
     let mut trace_metadata = None;
+    let mut timeline = BTreeMap::<usize, Map<String, Value>>::new();
     let mut files = std::fs::read_dir(dir)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
-    files.sort();
+    files.sort_by(|left, right| trace_file_sort_key(left).cmp(&trace_file_sort_key(right)));
 
     for path in files {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -513,15 +514,38 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 .map(|input| input.len())
                 .unwrap_or(raw.len());
             profiler.record_request(input_chars);
+            let turn_entry = timeline_turn(&mut timeline, turn);
+            turn_entry.insert("request_input_chars".to_string(), json!(input_chars));
+            turn_entry.insert(
+                "request_approx_tokens".to_string(),
+                json!(approx_token_count_from_chars(input_chars)),
+            );
+            turn_entry.insert(
+                "context_window_pct".to_string(),
+                json!(context_window_pct(input_chars)),
+            );
         } else if name.ends_with("-response.json") {
             if let Some(duration_ms) = value.get("duration_ms").and_then(Value::as_u64) {
                 profiler.record_request_duration(turn, duration_ms);
+                timeline_turn(&mut timeline, turn)
+                    .insert("request_duration_ms".to_string(), json!(duration_ms));
             }
             for (tool_name, args) in function_calls_from_trace_response(&value) {
                 profiler.record_tool_call(turn, &tool_name, &args);
+                push_timeline_array(
+                    &mut timeline,
+                    turn,
+                    "tool_calls",
+                    json!({
+                        "tool": tool_name,
+                        "signature": tool_signature(&tool_name, &args),
+                    }),
+                );
             }
             if let Some(text) = response_text_from_trace_response(&value) {
                 profiler.record_response_text(&text);
+                timeline_turn(&mut timeline, turn)
+                    .insert("response_text_chars".to_string(), json!(text.len()));
             }
         } else if is_tool_result_trace_file(name) {
             if let Some(result) = tool_result_from_trace(&value)? {
@@ -537,9 +561,29 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 if result.cached_observation {
                     profiler.record_readonly_tool_cache_hit(turn, &result.tool_name, &result.args);
                 }
+                push_timeline_array(
+                    &mut timeline,
+                    turn,
+                    "tool_results",
+                    json!({
+                        "tool": result.tool_name,
+                        "ok": result.ok,
+                        "duration_ms": result.duration_ms,
+                        "output_chars": result.output_chars,
+                        "error": result.error,
+                        "cached_observation": result.cached_observation,
+                        "truncated": tool_result_is_truncated(&result.data),
+                    }),
+                );
             }
         } else if name.ends_with("-compaction.json") {
             profiler.record_compaction(&value);
+            push_timeline_array(
+                &mut timeline,
+                turn,
+                "compactions",
+                summarize_compaction_report(&value),
+            );
         } else if name.ends_with("-error.json") {
             let stage = value
                 .get("stage")
@@ -550,11 +594,24 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error");
             profiler.record_error(turn, stage, error);
+            push_timeline_array(
+                &mut timeline,
+                turn,
+                "errors",
+                json!({
+                    "stage": stage,
+                    "error": error,
+                }),
+            );
         }
     }
 
     let mut summary = profiler.to_json();
     if let Some(object) = summary.as_object_mut() {
+        object.insert(
+            "timeline".to_string(),
+            Value::Array(timeline.into_values().map(Value::Object).collect()),
+        );
         if let Some(metadata) = trace_metadata {
             object.insert("trace_metadata".to_string(), metadata);
         }
@@ -568,8 +625,56 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     Ok(summary)
 }
 
+fn timeline_turn(
+    timeline: &mut BTreeMap<usize, Map<String, Value>>,
+    turn: usize,
+) -> &mut Map<String, Value> {
+    timeline.entry(turn).or_insert_with(|| {
+        let mut entry = Map::new();
+        entry.insert("turn".to_string(), json!(turn));
+        entry
+    })
+}
+
+fn push_timeline_array(
+    timeline: &mut BTreeMap<usize, Map<String, Value>>,
+    turn: usize,
+    key: &str,
+    value: Value,
+) {
+    let entry = timeline_turn(timeline, turn);
+    match entry.get_mut(key) {
+        Some(Value::Array(items)) => items.push(value),
+        _ => {
+            entry.insert(key.to_string(), Value::Array(vec![value]));
+        }
+    }
+}
+
 fn is_tool_result_trace_file(name: &str) -> bool {
     name.ends_with("-tool-result.json") || name.contains("-tool-result-")
+}
+
+fn trace_file_sort_key(path: &Path) -> (usize, String, usize, String) {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let stem = name.strip_suffix(".json").unwrap_or(name);
+    let (turn, rest) = stem
+        .split_once('-')
+        .and_then(|(turn, rest)| turn.parse::<usize>().ok().map(|turn| (turn, rest)))
+        .unwrap_or((usize::MAX, stem));
+    let (kind, sequence) = rest
+        .rsplit_once('-')
+        .and_then(|(kind, suffix)| {
+            suffix
+                .parse::<usize>()
+                .ok()
+                .map(|sequence| (kind, sequence))
+        })
+        .unwrap_or((rest, 1));
+    (turn, kind.to_string(), sequence, name.to_string())
 }
 
 fn summarize_compaction_report(report: &Value) -> Value {
@@ -1207,6 +1312,24 @@ mod tests {
         assert_eq!(summary["response_text_chars"], 4);
         assert_eq!(summary["request_duration_ms_by_request"], json!([1234]));
         assert_eq!(summary["max_request_duration_ms"], 1234);
+        assert_eq!(summary["timeline"][0]["turn"], 1);
+        assert!(
+            summary["timeline"][0]["request_input_chars"]
+                .as_u64()
+                .expect("request chars")
+                > 2
+        );
+        assert_eq!(summary["timeline"][0]["request_duration_ms"], 1234);
+        assert_eq!(summary["timeline"][0]["response_text_chars"], 4);
+        assert_eq!(summary["timeline"][0]["tool_calls"][0]["tool"], "fs.read");
+    }
+
+    #[test]
+    fn trace_file_sort_preserves_repeated_entry_sequence() {
+        let first = Path::new("001-tool-result.json");
+        let second = Path::new("001-tool-result-002.json");
+
+        assert!(trace_file_sort_key(first) < trace_file_sort_key(second));
     }
 
     #[test]
@@ -1256,6 +1379,17 @@ mod tests {
         assert_eq!(summary["max_tool_duration_ms"], 12_345);
         assert_eq!(summary["tool_duration_ms_by_tool"]["cmd.exec"], 12_345);
         assert_eq!(summary["tool_duration_ms_by_tool"]["fs.read"], 4);
+        assert_eq!(
+            summary["timeline"][0]["tool_results"][0]["tool"],
+            "cmd.exec"
+        );
+        assert_eq!(summary["timeline"][0]["tool_results"][0]["ok"], false);
+        assert_eq!(summary["timeline"][0]["tool_results"][0]["truncated"], true);
+        assert_eq!(summary["timeline"][0]["tool_results"][1]["tool"], "fs.read");
+        assert_eq!(
+            summary["timeline"][0]["tool_results"][1]["cached_observation"],
+            true
+        );
     }
 
     #[test]
@@ -1369,6 +1503,13 @@ mod tests {
                 .expect("error text")
                 .contains("without response.completed")
         );
+        assert_eq!(summary["timeline"][0]["errors"][0]["stage"], "response");
+        assert!(
+            summary["timeline"][0]["errors"][0]["error"]
+                .as_str()
+                .expect("timeline error")
+                .contains("without response.completed")
+        );
     }
 
     #[test]
@@ -1388,6 +1529,8 @@ mod tests {
 
         assert_eq!(summary["errors"][0]["turn"], 2);
         assert_eq!(summary["errors"][0]["stage"], "max_turns");
+        assert_eq!(summary["timeline"][0]["turn"], 2);
+        assert_eq!(summary["timeline"][0]["errors"][0]["stage"], "max_turns");
         assert_eq!(summary["diagnostics"][0]["kind"], "request_failure");
     }
 }

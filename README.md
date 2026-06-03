@@ -234,6 +234,8 @@ If a run fails after starting, the harness saves a `*-error.json` trace entry an
 
 `analyze-trace` recomputes its summary from raw trace files, so older embedded `*-profile-summary.json` files do not mask newer diagnostics.
 
+`analyze-trace` also emits a compact `timeline` array with per-turn request size, approximate token pressure, response latency, response text size, tool-call signatures, tool-result status, compactions, and terminal errors. Use the timeline to correlate Spark failures with context growth, slow requests, repeated tools, and compaction boundaries before opening the raw JSON files.
+
 `.spark-runs/`, `.spark-profile/`, `.spark/`, `target/`, and local auth/session state are ignored by git.
 
 ## Observed Spark Notes
