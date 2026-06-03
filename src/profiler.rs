@@ -787,6 +787,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     let compactions = number_field(summary, "compactions");
     let remote_compactions = number_field(summary, "remote_compactions");
     let fallback_compactions = number_field(summary, "fallback_compactions");
+    let local_pressure_compactions = compactions_with_local_pressure(summary);
     let diagnostics = diagnostic_kinds(summary);
     let diagnostics = if diagnostics.is_empty() {
         "none".to_string()
@@ -795,7 +796,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     };
 
     format!(
-        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} diagnostics={diagnostics}"
+        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions} diagnostics={diagnostics}"
     )
 }
 
@@ -850,6 +851,10 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
     let total_compactions = sum_summary_field(summaries, "compactions");
     let total_remote_compactions = sum_summary_field(summaries, "remote_compactions");
     let total_fallback_compactions = sum_summary_field(summaries, "fallback_compactions");
+    let total_local_pressure_compactions = summaries
+        .iter()
+        .map(compactions_with_local_pressure)
+        .sum::<usize>();
     let diagnostics = aggregate_diagnostic_kinds(summaries);
     let diagnostics = if diagnostics.is_empty() {
         "none".to_string()
@@ -858,7 +863,7 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
     };
 
     format!(
-        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} diagnostics={diagnostics}"
+        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} local_pressure={total_local_pressure_compactions} diagnostics={diagnostics}"
     )
 }
 
@@ -873,6 +878,23 @@ fn sum_summary_field(summaries: &[Value], key: &str) -> u64 {
         .iter()
         .filter_map(|summary| summary.get(key).and_then(Value::as_u64))
         .sum()
+}
+
+fn compactions_with_local_pressure(summary: &Value) -> usize {
+    summary
+        .get("compaction_reports")
+        .and_then(Value::as_array)
+        .map(|reports| {
+            reports
+                .iter()
+                .filter(|report| {
+                    report
+                        .get("local_pressure")
+                        .is_some_and(|value| !value.is_null())
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 fn aggregate_diagnostic_kinds(summaries: &[Value]) -> Vec<String> {
@@ -1105,7 +1127,25 @@ fn format_compactions(compactions: &[Value]) -> String {
                 .and_then(Value::as_u64)
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "?".to_string());
-            format!("{method} {before}->{after}")
+            let mut parts = vec![format!("{method} {before}->{after}")];
+            if let Some(remote_after) = compaction.get("remote_after_chars").and_then(Value::as_u64)
+            {
+                let remote_pct = compaction
+                    .get("remote_retained_pct")
+                    .and_then(Value::as_f64)
+                    .map(|pct| format!(" {pct:.1}%"))
+                    .unwrap_or_default();
+                parts.push(format!("remote={remote_after}{remote_pct}"));
+            }
+            if let (Some(remote_after), Some(final_chars)) = (
+                compaction.get("remote_after_chars").and_then(Value::as_u64),
+                compaction
+                    .get("local_pressure_final_chars")
+                    .and_then(Value::as_u64),
+            ) {
+                parts.push(format!("local_pressure={remote_after}->{final_chars}"));
+            }
+            parts.join(" ")
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -1216,6 +1256,7 @@ fn summarize_compaction_report(report: &Value) -> Value {
     copy_field(report, &mut summary, "remote_error");
     copy_field(report, &mut summary, "fallback");
     copy_field(report, &mut summary, "local_pressure");
+    add_compaction_retention_metrics(report, &mut summary);
 
     if let Some(raw) = report.get("raw") {
         let mut raw_summary = Map::new();
@@ -1242,6 +1283,55 @@ fn summarize_compaction_report(report: &Value) -> Value {
     }
 
     Value::Object(summary)
+}
+
+fn add_compaction_retention_metrics(report: &Value, summary: &mut Map<String, Value>) {
+    let before = report.get("before_chars").and_then(Value::as_u64);
+    let after = report.get("after_chars").and_then(Value::as_u64);
+    if let (Some(before), Some(after)) = (before, after)
+        && before > 0
+    {
+        summary.insert(
+            "final_retained_pct".to_string(),
+            json!(percent(after, before)),
+        );
+    }
+
+    let remote_after = report
+        .pointer("/local_pressure/remote_after_chars")
+        .and_then(Value::as_u64);
+    if let Some(remote_after) = remote_after {
+        summary.insert("remote_after_chars".to_string(), json!(remote_after));
+        if let Some(before) = before
+            && before > 0
+        {
+            summary.insert(
+                "remote_retained_pct".to_string(),
+                json!(percent(remote_after, before)),
+            );
+        }
+    }
+
+    let final_chars = report
+        .pointer("/local_pressure/final_chars")
+        .and_then(Value::as_u64);
+    if let Some(final_chars) = final_chars {
+        summary.insert("local_pressure_final_chars".to_string(), json!(final_chars));
+    }
+
+    if let (Some(remote_after), Some(final_chars)) = (remote_after, final_chars)
+        && remote_after > 0
+    {
+        let reduced = remote_after.saturating_sub(final_chars);
+        summary.insert(
+            "local_pressure_reduction_pct".to_string(),
+            json!(percent(reduced, remote_after)),
+        );
+    }
+}
+
+fn percent(part: u64, whole: u64) -> f64 {
+    (part as f64 / whole as f64) * 100.0
 }
 
 fn sanitize_profile_summary(mut summary: Value) -> Value {
@@ -2122,7 +2212,14 @@ mod tests {
                     "truncated": false,
                     "timed_out": true
                 }],
-                "compactions": [{"method": "responses_compact", "before_chars": 200000, "after_chars": 90000}],
+                "compactions": [{
+                    "method": "responses_compact",
+                    "before_chars": 200000,
+                    "after_chars": 90000,
+                    "remote_after_chars": 210000,
+                    "remote_retained_pct": 105.0,
+                    "local_pressure_final_chars": 90000
+                }],
                 "errors": [{"stage": "response", "error": "stream ended without response.completed"}]
             }]
         });
@@ -2135,8 +2232,37 @@ mod tests {
         assert!(output.contains("turn 1: input=120000 chars (~30000 tok, 23.4%)"));
         assert!(output.contains("calls=[fs.read]"));
         assert!(output.contains("results=[fs.read:ok 9ms 512 chars cached+timeout]"));
-        assert!(output.contains("compactions=[responses_compact 200000->90000]"));
+        assert!(output.contains(
+            "compactions=[responses_compact 200000->90000 remote=210000 105.0% local_pressure=210000->90000]"
+        ));
         assert!(output.contains("errors=[response:stream ended without response.completed]"));
+    }
+
+    #[test]
+    fn compaction_summary_reports_remote_replay_pressure_metrics() {
+        let summary = summarize_compaction_report(&json!({
+            "method": "responses_compact",
+            "before_chars": 181900,
+            "after_chars": 5430,
+            "local_pressure": {
+                "remote_after_chars": 183238,
+                "final_chars": 5430,
+                "made_progress": true
+            }
+        }));
+
+        assert_eq!(summary["remote_after_chars"], 183238);
+        assert_eq!(summary["local_pressure_final_chars"], 5430);
+        assert!(
+            (summary["remote_retained_pct"].as_f64().unwrap() - 100.73556899395272).abs() < 0.001
+        );
+        assert!(
+            (summary["final_retained_pct"].as_f64().unwrap() - 2.9851566794942275).abs() < 0.001
+        );
+        assert!(
+            (summary["local_pressure_reduction_pct"].as_f64().unwrap() - 97.03664087143497).abs()
+                < 0.001
+        );
     }
 
     #[test]
@@ -2155,6 +2281,7 @@ mod tests {
             "compactions": 2,
             "remote_compactions": 1,
             "fallback_compactions": 1,
+            "compaction_reports": [{"local_pressure": {"made_progress": true}}],
             "diagnostics": [{"kind": "tool_failures"}, {"kind": "weak_compaction_shrink"}]
         });
 
@@ -2164,7 +2291,7 @@ mod tests {
         assert!(row.contains("requests=3"));
         assert!(row.contains("max_tokens=42000 (32.8%)"));
         assert!(row.contains("tools=7 failures=1"));
-        assert!(row.contains("compactions=2 remote=1 fallback=1"));
+        assert!(row.contains("compactions=2 remote=1 fallback=1 local_pressure=1"));
         assert!(row.contains("diagnostics=tool_failures,weak_compaction_shrink"));
     }
 
@@ -2195,6 +2322,7 @@ mod tests {
                 "compactions": 1,
                 "remote_compactions": 1,
                 "fallback_compactions": 0,
+                "compaction_reports": [{"local_pressure": {"made_progress": true}}],
                 "diagnostics": [{"kind": "remote_compaction_local_pressure"}]
             }),
             json!({
@@ -2207,6 +2335,7 @@ mod tests {
                 "compactions": 1,
                 "remote_compactions": 1,
                 "fallback_compactions": 0,
+                "compaction_reports": [{"local_pressure": {"made_progress": false}}],
                 "diagnostics": [
                     {"kind": "request_failure"},
                     {"kind": "remote_compaction_local_pressure"}
@@ -2219,7 +2348,7 @@ mod tests {
         assert!(row.contains("compaction-pressure aggregate | runs=2 success=1 failure=1"));
         assert!(row.contains("max_tokens=45000 (35.2%)"));
         assert!(row.contains("tools=2 failures=0"));
-        assert!(row.contains("compactions=2 remote=2 fallback=0"));
+        assert!(row.contains("compactions=2 remote=2 fallback=0 local_pressure=2"));
         assert!(row.contains("diagnostics=remote_compaction_local_pressure:2,request_failure:1"));
     }
 
