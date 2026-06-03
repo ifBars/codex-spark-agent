@@ -170,6 +170,8 @@ enum ProfileScenarioKind {
     FileEdit,
     /// Scratch-file workflow that exercises write, rename, search, and verification tools.
     FileOps,
+    /// Scratch-file task that intentionally exercises native tool failure and recovery.
+    ToolRecovery,
 }
 
 impl ProfileScenarioKind {
@@ -180,6 +182,7 @@ impl ProfileScenarioKind {
             Self::CompactionPressure => "compaction-pressure",
             Self::FileEdit => "file-edit",
             Self::FileOps => "file-ops",
+            Self::ToolRecovery => "tool-recovery",
         }
     }
 }
@@ -778,6 +781,7 @@ fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind) -> Result
     let Some(name) = (match scenario {
         ProfileScenarioKind::FileEdit => Some("file-edit"),
         ProfileScenarioKind::FileOps => Some("file-ops"),
+        ProfileScenarioKind::ToolRecovery => Some("tool-recovery"),
         _ => None,
     }) else {
         return Ok(());
@@ -811,6 +815,15 @@ fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind) -> Result
                 "file-ops fixture\nexpected_final=final/report.md\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture manifest.txt: {error}"))?;
+        }
+        ProfileScenarioKind::ToolRecovery => {
+            std::fs::create_dir_all(dir.join("source"))
+                .map_err(|error| anyhow::anyhow!("failed to create source fixture: {error}"))?;
+            std::fs::write(
+                dir.join("source").join("note.md"),
+                "# Recovery Fixture\n\nSpark recovery path verified.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture source/note.md: {error}"))?;
         }
         _ => {}
     }
@@ -863,6 +876,18 @@ fn profile_scenario_prompts(
              4. Use fs.read on .spark-scenarios/file-ops/final/report.md to verify the final contents.\n\
              5. Use fs.search under .spark-scenarios/file-ops for Spark rename path verified.\n\
              Finish with the native tools used, whether verification passed, and any harness behavior that made the workflow easier or harder."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::ToolRecovery => Ok(vec![
+            "Profile scenario: tool-recovery.\n\
+             Work only under .spark-scenarios/tool-recovery.\n\
+             Use native file tools, not cmd.exec.\n\
+             Required actions:\n\
+             1. First use fs.read on .spark-scenarios/tool-recovery/source/missing-note.md. This path is intentionally missing; do not skip this failing probe.\n\
+             2. Use fs.stat on .spark-scenarios/tool-recovery/source/note.md to verify the corrected path exists after the failed observation.\n\
+             3. Use fs.read on .spark-scenarios/tool-recovery/source/note.md to verify it contains: Spark recovery path verified.\n\
+             4. Use fs.write on .spark-scenarios/tool-recovery/recovery-summary.txt with one line naming whether native-tool recovery succeeded.\n\
+             Finish with the native tools used, whether recovery passed, and whether the harness observation made the correction clear."
                 .to_string(),
         ]),
         ProfileScenarioKind::NaturalCompaction => natural_compaction_scenario_prompts(target_tokens),
@@ -949,6 +974,9 @@ fn profile_scenario_expected_tool_groups(scenario: ProfileScenarioKind) -> Vec<V
                 vec!["fs.search"],
             ]
         }
+        ProfileScenarioKind::ToolRecovery => {
+            vec![vec!["fs.read"], vec!["fs.stat"], vec!["fs.write"]]
+        }
     }
 }
 
@@ -993,6 +1021,24 @@ fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind) -> Vec<Va
             json!({
                 "tool": "fs.search",
                 "path": ".spark-scenarios/file-ops",
+            }),
+        ],
+        ProfileScenarioKind::ToolRecovery => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/tool-recovery/source/missing-note.md",
+            }),
+            json!({
+                "tool": "fs.stat",
+                "path": ".spark-scenarios/tool-recovery/source/note.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/tool-recovery/source/note.md",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/tool-recovery/recovery-summary.txt",
             }),
         ],
     }
@@ -1439,6 +1485,72 @@ mod tests {
         );
         assert_eq!(calls[4]["tool"], "fs.search");
         assert_eq!(calls[4]["path"], ".spark-scenarios/file-ops");
+    }
+
+    #[test]
+    fn tool_recovery_scenario_exercises_failed_probe_then_recovery() {
+        let prompts =
+            profile_scenario_prompts(ProfileScenarioKind::ToolRecovery, 45_000).expect("scenario");
+        let prompt = prompts.first().expect("prompt");
+
+        assert!(prompt.contains("Profile scenario: tool-recovery"));
+        assert!(prompt.contains("missing-note.md"));
+        assert!(prompt.contains("This path is intentionally missing"));
+        assert!(prompt.contains("Use fs.stat"));
+        assert!(prompt.contains("Use fs.write"));
+        assert!(prompt.contains("not cmd.exec"));
+    }
+
+    #[test]
+    fn tool_recovery_scenario_prepares_scratch_fixture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        prepare_profile_scenario(dir.path(), ProfileScenarioKind::ToolRecovery)
+            .expect("prepare scenario");
+
+        let root = dir.path().join(".spark-scenarios").join("tool-recovery");
+        let note = std::fs::read_to_string(root.join("source").join("note.md")).expect("read note");
+
+        assert!(root.join("source").is_dir());
+        assert!(note.contains("Spark recovery path verified."));
+        assert!(!root.join("source").join("missing-note.md").exists());
+    }
+
+    #[test]
+    fn tool_recovery_scenario_declares_recovery_tool_groups() {
+        let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::ToolRecovery);
+
+        assert_eq!(
+            groups,
+            vec![vec!["fs.read"], vec!["fs.stat"], vec!["fs.write"]]
+        );
+    }
+
+    #[test]
+    fn tool_recovery_scenario_declares_expected_exact_tool_calls() {
+        let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::ToolRecovery);
+
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0]["tool"], "fs.read");
+        assert_eq!(
+            calls[0]["path"],
+            ".spark-scenarios/tool-recovery/source/missing-note.md"
+        );
+        assert_eq!(calls[1]["tool"], "fs.stat");
+        assert_eq!(
+            calls[1]["path"],
+            ".spark-scenarios/tool-recovery/source/note.md"
+        );
+        assert_eq!(calls[2]["tool"], "fs.read");
+        assert_eq!(
+            calls[2]["path"],
+            ".spark-scenarios/tool-recovery/source/note.md"
+        );
+        assert_eq!(calls[3]["tool"], "fs.write");
+        assert_eq!(
+            calls[3]["path"],
+            ".spark-scenarios/tool-recovery/recovery-summary.txt"
+        );
     }
 
     #[test]
