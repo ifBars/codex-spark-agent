@@ -222,7 +222,7 @@ In interactive chat, `/compact` runs the same remote-first compaction path immed
 
 If remote compaction still leaves history above the threshold, the harness applies a local pressure pass before sending the next Spark request. Traces mark this as `local_pressure` under the remote compaction report so those runs can be separated from clean remote compactions during profiling. Local pressure and fallback reports split `compacted_tool_outputs` from `compacted_messages` so long-context failures can be correlated with noisy tool output versus broad conversation history.
 
-If remote compaction fails, local preview compaction trims older tool outputs and older messages. Recent messages are preserved when possible, but an oversized recent prompt can still be compacted if it alone keeps the retained transcript above the threshold. Locally compacted messages carry a `[spark local message compaction]` marker with original size, preview size, retained shape, deterministic retained-intent lines, extracted required actions, and an explicit exact-content note. Treat the local fallback as a debugging path, not the preferred steady state.
+If remote compaction fails, local preview compaction trims older tool outputs and older messages. Recent messages are preserved when possible, but an oversized recent prompt can still be compacted if it alone keeps the retained transcript above the threshold. Locally compacted messages carry a `[spark local message compaction]` marker with original size, preview size, retained shape, deterministic retained-intent lines, extracted required native file-tool actions, and an explicit exact-content note. Treat the local fallback as a debugging path, not the preferred steady state.
 
 ## Profiling
 

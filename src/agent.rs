@@ -977,13 +977,23 @@ fn is_high_signal_intent_line(line: &str) -> bool {
         || line.starts_with("Do not ")
         || line.starts_with("After any compaction")
         || line.starts_with("- ")
+        || mentions_native_file_tool_action(line)
         || line.chars().next().is_some_and(|ch| ch.is_ascii_digit())
+}
+
+fn mentions_native_file_tool_action(line: &str) -> bool {
+    (line.contains("fs.list")
+        || line.contains("fs.read")
+        || line.contains("fs.search")
+        || line.contains("fs.replace")
+        || line.contains("fs.edit"))
+        && (line.contains("use ") || line.contains("call ") || line.contains("run "))
 }
 
 fn retained_action_lines(lines: &[String]) -> Vec<String> {
     let mut actions = Vec::new();
     for line in lines {
-        if let Some(action) = parse_fs_list_action(line) {
+        if let Some(action) = parse_native_tool_action(line) {
             actions.push(action);
         }
     }
@@ -992,25 +1002,62 @@ fn retained_action_lines(lines: &[String]) -> Vec<String> {
     actions
 }
 
-fn parse_fs_list_action(line: &str) -> Option<String> {
+fn parse_native_tool_action(line: &str) -> Option<String> {
+    const TOOLS: [&str; 5] = ["fs.list", "fs.read", "fs.search", "fs.replace", "fs.edit"];
+    for tool in TOOLS {
+        if let Some(action) = parse_file_tool_action(line, tool) {
+            return Some(action);
+        }
+    }
+    None
+}
+
+fn parse_file_tool_action(line: &str, tool: &str) -> Option<String> {
     let normalized = line.trim().trim_end_matches('.');
-    let start = normalized.find("use fs.list on ")? + "use fs.list on ".len();
-    let rest = &normalized[start..];
-    let (path, tail) = rest
-        .split_once(" with ")
-        .map_or((rest, ""), |(path, tail)| (path, tail));
-    let path = path.trim().trim_matches('`');
-    if path.is_empty() {
+    let tool_index = normalized.find(tool)?;
+    let before = normalized[..tool_index].trim_end();
+    if !before.ends_with("use")
+        && !before.ends_with("call")
+        && !before.ends_with("run")
+        && !before.ends_with("using")
+    {
         return None;
     }
-    let recursive = if tail.contains("recursive=false") {
-        "false"
-    } else if tail.contains("recursive=true") {
-        "true"
-    } else {
-        "unspecified"
-    };
-    Some(format!("tool=fs.list path={path} recursive={recursive}"))
+    let after_tool = normalized[tool_index + tool.len()..].trim_start();
+    let after_tool = after_tool
+        .strip_prefix("on ")
+        .or_else(|| after_tool.strip_prefix("in "))
+        .or_else(|| after_tool.strip_prefix("for "))
+        .unwrap_or(after_tool);
+    if after_tool.is_empty() {
+        return Some(format!("tool={tool}"));
+    }
+    let (path, tail) = after_tool
+        .split_once(" with ")
+        .map_or((after_tool, ""), |(path, tail)| (path, tail));
+    let mut path = path.trim().trim_matches('`');
+    if let Some((prefix, _)) = path.split_once(", then") {
+        path = prefix.trim();
+    }
+    if let Some((prefix, _)) = path.split_once(" for ") {
+        path = prefix.trim();
+    }
+    let path = path.trim_end_matches(',').trim_end_matches(':');
+    if path.is_empty() {
+        return Some(format!("tool={tool}"));
+    }
+    let mut action = format!("tool={tool} path={path}");
+    if tool == "fs.list" {
+        let recursive = if tail.contains("recursive=false") {
+            "false"
+        } else if tail.contains("recursive=true") {
+            "true"
+        } else {
+            "unspecified"
+        };
+        action.push_str(&format!(" recursive={recursive}"));
+    }
+    Some(action)
 }
 
 struct TraceWriter {
@@ -1348,6 +1395,7 @@ mod tests {
              Do not restate the synthetic payload. After any compaction, use fs.list on src with recursive=false, then answer with:\n\
              - whether the task remained understandable,\n\
              - which tool you used,\n\
+             Next, use fs.read on README.md.\n\
              Synthetic payload follows. Preserve the high-level instruction above; payload rows are intentionally repetitive profiling filler.\n\
              row 00001: {}\n\
              row 00002: {}\n",
@@ -1364,18 +1412,25 @@ mod tests {
         assert!(!lines.iter().any(|line| line.starts_with("row ")));
         assert!(block.contains("retained_intent_lines="));
         assert!(block.contains("intent_1=Profile scenario: compaction-pressure."));
-        assert!(block.contains("required_actions=1"));
+        assert!(block.contains("required_actions=2"));
         assert!(block.contains("action_1=tool=fs.list path=src recursive=false"));
+        assert!(block.contains("action_2=tool=fs.read path=README.md"));
     }
 
     #[test]
-    fn parses_required_fs_list_action_from_intent_line() {
-        let action = parse_fs_list_action(
+    fn parses_required_native_file_tool_actions_from_intent_lines() {
+        let list_action = parse_native_tool_action(
             "Do not restate the synthetic payload. After any compaction, use fs.list on src with recursive=false, then answer with:",
         )
-        .expect("action");
+        .expect("list action");
+        let read_action =
+            parse_native_tool_action("Next, use fs.read on `README.md`.").expect("read action");
+        let search_action = parse_native_tool_action("Then run fs.search in src for compact.")
+            .expect("search action");
 
-        assert_eq!(action, "tool=fs.list path=src recursive=false");
+        assert_eq!(list_action, "tool=fs.list path=src recursive=false");
+        assert_eq!(read_action, "tool=fs.read path=README.md");
+        assert_eq!(search_action, "tool=fs.search path=src");
     }
 
     #[test]
