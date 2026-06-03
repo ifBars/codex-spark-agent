@@ -986,7 +986,9 @@ fn mentions_native_file_tool_action(line: &str) -> bool {
         || line.contains("fs.read")
         || line.contains("fs.search")
         || line.contains("fs.replace")
-        || line.contains("fs.edit"))
+        || line.contains("fs.edit")
+        || line.contains("fs.write")
+        || line.contains("fs.rename"))
         && (line.contains("use ") || line.contains("call ") || line.contains("run "))
 }
 
@@ -1003,13 +1005,50 @@ fn retained_action_lines(lines: &[String]) -> Vec<String> {
 }
 
 fn parse_native_tool_action(line: &str) -> Option<String> {
-    const TOOLS: [&str; 5] = ["fs.list", "fs.read", "fs.search", "fs.replace", "fs.edit"];
+    if let Some(action) = parse_rename_tool_action(line) {
+        return Some(action);
+    }
+    const TOOLS: [&str; 6] = [
+        "fs.list",
+        "fs.read",
+        "fs.search",
+        "fs.replace",
+        "fs.edit",
+        "fs.write",
+    ];
     for tool in TOOLS {
         if let Some(action) = parse_file_tool_action(line, tool) {
             return Some(action);
         }
     }
     None
+}
+
+fn parse_rename_tool_action(line: &str) -> Option<String> {
+    let normalized = line.trim().trim_end_matches('.');
+    let tool = "fs.rename";
+    let tool_index = normalized.find(tool)?;
+    let before = normalized[..tool_index].trim_end();
+    if !before.ends_with("use")
+        && !before.ends_with("call")
+        && !before.ends_with("run")
+        && !before.ends_with("using")
+    {
+        return None;
+    }
+    let after_tool = normalized[tool_index + tool.len()..].trim_start();
+    let after_tool = after_tool
+        .strip_prefix("to move ")
+        .or_else(|| after_tool.strip_prefix("move "))
+        .or_else(|| after_tool.strip_prefix("from "))
+        .unwrap_or(after_tool);
+    let (from, to) = after_tool.split_once(" to ")?;
+    let from = clean_action_path(from);
+    let to = clean_action_path(to);
+    if from.is_empty() || to.is_empty() {
+        return Some(format!("tool={tool}"));
+    }
+    Some(format!("tool={tool} from={from} to={to}"))
 }
 
 fn parse_file_tool_action(line: &str, tool: &str) -> Option<String> {
@@ -1042,7 +1081,7 @@ fn parse_file_tool_action(line: &str, tool: &str) -> Option<String> {
     if let Some((prefix, _)) = path.split_once(" for ") {
         path = prefix.trim();
     }
-    let path = path.trim_end_matches(',').trim_end_matches(':');
+    let path = clean_action_path(path);
     if path.is_empty() {
         return Some(format!("tool={tool}"));
     }
@@ -1058,6 +1097,17 @@ fn parse_file_tool_action(line: &str, tool: &str) -> Option<String> {
         action.push_str(&format!(" recursive={recursive}"));
     }
     Some(action)
+}
+
+fn clean_action_path(path: &str) -> String {
+    path.trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_end_matches(',')
+        .trim_end_matches(':')
+        .trim()
+        .to_string()
 }
 
 struct TraceWriter {
@@ -1396,6 +1446,8 @@ mod tests {
              - whether the task remained understandable,\n\
              - which tool you used,\n\
              Next, use fs.read on README.md.\n\
+             Then use fs.write on .spark-scenarios/file-ops/drafts/report-draft.md.\n\
+             Then use fs.rename to move .spark-scenarios/file-ops/drafts/report-draft.md to .spark-scenarios/file-ops/final/report.md.\n\
              Synthetic payload follows. Preserve the high-level instruction above; payload rows are intentionally repetitive profiling filler.\n\
              row 00001: {}\n\
              row 00002: {}\n",
@@ -1412,9 +1464,15 @@ mod tests {
         assert!(!lines.iter().any(|line| line.starts_with("row ")));
         assert!(block.contains("retained_intent_lines="));
         assert!(block.contains("intent_1=Profile scenario: compaction-pressure."));
-        assert!(block.contains("required_actions=2"));
+        assert!(block.contains("required_actions=4"));
         assert!(block.contains("action_1=tool=fs.list path=src recursive=false"));
         assert!(block.contains("action_2=tool=fs.read path=README.md"));
+        assert!(block.contains(
+            "action_3=tool=fs.rename from=.spark-scenarios/file-ops/drafts/report-draft.md to=.spark-scenarios/file-ops/final/report.md"
+        ));
+        assert!(block.contains(
+            "action_4=tool=fs.write path=.spark-scenarios/file-ops/drafts/report-draft.md"
+        ));
     }
 
     #[test]
@@ -1427,10 +1485,26 @@ mod tests {
             parse_native_tool_action("Next, use fs.read on `README.md`.").expect("read action");
         let search_action = parse_native_tool_action("Then run fs.search in src for compact.")
             .expect("search action");
+        let write_action = parse_native_tool_action(
+            "Then use fs.write on .spark-scenarios/file-ops/drafts/report-draft.md with a short markdown report.",
+        )
+        .expect("write action");
+        let rename_action = parse_native_tool_action(
+            "Then use fs.rename to move .spark-scenarios/file-ops/drafts/report-draft.md to .spark-scenarios/file-ops/final/report.md.",
+        )
+        .expect("rename action");
 
         assert_eq!(list_action, "tool=fs.list path=src recursive=false");
         assert_eq!(read_action, "tool=fs.read path=README.md");
         assert_eq!(search_action, "tool=fs.search path=src");
+        assert_eq!(
+            write_action,
+            "tool=fs.write path=.spark-scenarios/file-ops/drafts/report-draft.md"
+        );
+        assert_eq!(
+            rename_action,
+            "tool=fs.rename from=.spark-scenarios/file-ops/drafts/report-draft.md to=.spark-scenarios/file-ops/final/report.md"
+        );
     }
 
     #[test]

@@ -484,6 +484,8 @@ pub fn tool_signature(tool_name: &str, args: &Value) -> String {
 struct RequiredAction {
     tool: String,
     path: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
     recursive: Option<bool>,
 }
 
@@ -643,6 +645,8 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         left.tool
             .cmp(&right.tool)
             .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.from.cmp(&right.from))
+            .then_with(|| left.to.cmp(&right.to))
             .then_with(|| left.recursive.cmp(&right.recursive))
     });
     retained_required_actions.dedup();
@@ -957,6 +961,12 @@ fn format_required_action(action: &Value) -> String {
     let mut parts = vec![format!("tool={tool}")];
     if let Some(path) = action.get("path").and_then(Value::as_str) {
         parts.push(format!("path={path}"));
+    }
+    if let Some(from) = action.get("from").and_then(Value::as_str) {
+        parts.push(format!("from={from}"));
+    }
+    if let Some(to) = action.get("to").and_then(Value::as_str) {
+        parts.push(format!("to={to}"));
     }
     if let Some(recursive) = action.get("recursive").and_then(Value::as_bool) {
         parts.push(format!("recursive={recursive}"));
@@ -1457,6 +1467,8 @@ fn request_input_texts(value: &Value) -> Vec<String> {
 fn parse_required_action(raw: &str) -> Option<RequiredAction> {
     let mut tool = None;
     let mut path = None;
+    let mut from = None;
+    let mut to = None;
     let mut recursive = None;
     for part in raw.split_whitespace() {
         let Some((key, value)) = part.split_once('=') else {
@@ -1465,6 +1477,8 @@ fn parse_required_action(raw: &str) -> Option<RequiredAction> {
         match key {
             "tool" => tool = Some(value.to_string()),
             "path" => path = Some(value.trim_matches('`').to_string()),
+            "from" => from = Some(value.trim_matches('`').to_string()),
+            "to" => to = Some(value.trim_matches('`').to_string()),
             "recursive" => match value {
                 "true" => recursive = Some(true),
                 "false" => recursive = Some(false),
@@ -1476,6 +1490,8 @@ fn parse_required_action(raw: &str) -> Option<RequiredAction> {
     Some(RequiredAction {
         tool: tool?,
         path,
+        from,
+        to,
         recursive,
     })
 }
@@ -1513,6 +1529,16 @@ fn required_action_matches_call(action: &RequiredAction, call: &ObservedToolCall
     }
     if let Some(path) = &action.path
         && call.args.get("path").and_then(Value::as_str) != Some(path.as_str())
+    {
+        return false;
+    }
+    if let Some(from) = &action.from
+        && call.args.get("from").and_then(Value::as_str) != Some(from.as_str())
+    {
+        return false;
+    }
+    if let Some(to) = &action.to
+        && call.args.get("to").and_then(Value::as_str) != Some(to.as_str())
     {
         return false;
     }
@@ -2121,6 +2147,49 @@ mod tests {
         );
         assert_eq!(summary["retained_required_actions_missing"], json!([]));
         assert_eq!(summary["tool_calls_before_first_required_action"], 0);
+    }
+
+    #[test]
+    fn analyze_trace_matches_retained_rename_required_action() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_request_with_required_action(
+            dir.path(),
+            "action_1=tool=fs.rename from=.spark-scenarios/file-ops/drafts/report-draft.md to=.spark-scenarios/file-ops/final/report.md",
+        );
+        std::fs::write(
+            dir.path().join("001-response.json"),
+            serde_json::to_vec_pretty(&json!({
+                "raw": {
+                    "events": [{
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": {
+                            "type": "function_call",
+                            "name": "fs_rename",
+                            "arguments": "{\"from\":\".spark-scenarios/file-ops/drafts/report-draft.md\",\"to\":\".spark-scenarios/file-ops/final/report.md\"}"
+                        }
+                    }]
+                }
+            }))
+            .expect("serialize response"),
+        )
+        .expect("write response");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["retained_required_actions_missing"], json!([]));
+        assert_eq!(
+            summary["retained_required_actions_executed"][0]["tool"],
+            "fs.rename"
+        );
+        assert_eq!(
+            summary["retained_required_actions_executed"][0]["from"],
+            ".spark-scenarios/file-ops/drafts/report-draft.md"
+        );
+        assert_eq!(
+            summary["retained_required_actions_executed"][0]["to"],
+            ".spark-scenarios/file-ops/final/report.md"
+        );
     }
 
     #[test]
