@@ -865,7 +865,9 @@ impl TraceWriter {
                 "model": metadata.model,
                 "max_turns": metadata.max_turns,
                 "compact_after_chars": metadata.compact_after_chars,
+                "compact_after_approx_tokens": approx_token_count_from_chars(metadata.compact_after_chars),
                 "max_input_chars": metadata.max_input_chars,
+                "max_input_approx_tokens": approx_token_count_from_chars(metadata.max_input_chars),
                 "context_window_tokens": SPARK_CONTEXT_WINDOW_TOKENS,
             }))?,
         )?;
@@ -1057,6 +1059,30 @@ mod tests {
 
         assert!(dir.path().join("001-tool-result.json").exists());
         assert!(dir.path().join("001-tool-result-002.json").exists());
+    }
+
+    #[test]
+    fn trace_metadata_includes_approx_token_thresholds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let writer = TraceWriter::new(
+            dir.path().to_path_buf(),
+            TraceMetadata {
+                cwd: dir.path().to_path_buf(),
+                model: "gpt-5.3-codex-spark".to_string(),
+                max_turns: None,
+                compact_after_chars: 120_000,
+                max_input_chars: 480_000,
+            },
+        )
+        .expect("trace writer");
+
+        let metadata = std::fs::read_to_string(writer.dir.join("000-trace-metadata.json"))
+            .expect("read metadata");
+        let metadata = serde_json::from_str::<Value>(&metadata).expect("parse metadata");
+
+        assert_eq!(metadata["compact_after_approx_tokens"], 30_000);
+        assert_eq!(metadata["max_input_approx_tokens"], 120_000);
+        assert_eq!(metadata["context_window_tokens"], 128_000);
     }
 
     #[test]

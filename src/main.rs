@@ -13,6 +13,9 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 const DEFAULT_MODEL: &str = "gpt-5.3-codex-spark";
+const DEFAULT_COMPACT_AFTER_CHARS: usize = 160_000;
+const DEFAULT_MAX_INPUT_CHARS: usize = 500_000;
+const APPROX_CHARS_PER_TOKEN: usize = 4;
 
 #[derive(Debug, Parser)]
 #[command(name = "spark")]
@@ -66,11 +69,17 @@ enum Command {
         #[arg(long)]
         new_session: bool,
         /// Compact older tool outputs once request JSON exceeds this many characters.
-        #[arg(long, default_value_t = 160_000)]
-        compact_after_chars: usize,
+        #[arg(long)]
+        compact_after_chars: Option<usize>,
+        /// Compact older tool outputs once estimated input exceeds this many tokens.
+        #[arg(long)]
+        compact_after_tokens: Option<usize>,
         /// Refuse to send request JSON above this many characters.
-        #[arg(long, default_value_t = 500_000)]
-        max_input_chars: usize,
+        #[arg(long)]
+        max_input_chars: Option<usize>,
+        /// Refuse to send a request once estimated input exceeds this many tokens.
+        #[arg(long)]
+        max_input_tokens: Option<usize>,
     },
     /// Print available built-in tools as JSON.
     Tools,
@@ -135,7 +144,9 @@ async fn main() -> Result<()> {
             skills: requested_skills,
             new_session,
             compact_after_chars,
+            compact_after_tokens,
             max_input_chars,
+            max_input_tokens,
         } => {
             let interactive = prompt_file.is_none() && prompt.is_empty();
             let prompt = if let Some(path) = prompt_file {
@@ -149,6 +160,18 @@ async fn main() -> Result<()> {
             };
             let cwd = std::fs::canonicalize(&cwd)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
+            let compact_after_chars = resolve_char_threshold(
+                "compact-after",
+                compact_after_chars,
+                compact_after_tokens,
+                DEFAULT_COMPACT_AFTER_CHARS,
+            )?;
+            let max_input_chars = resolve_char_threshold(
+                "max-input",
+                max_input_chars,
+                max_input_tokens,
+                DEFAULT_MAX_INPUT_CHARS,
+            )?;
             let auth = config::load_auth()?;
             let mut runner = agent::AgentRunner::new(
                 auth,
@@ -210,8 +233,8 @@ async fn main() -> Result<()> {
                     None,
                     false,
                     false,
-                    160_000,
-                    500_000,
+                    DEFAULT_COMPACT_AFTER_CHARS,
+                    DEFAULT_MAX_INPUT_CHARS,
                 )?;
                 for source in skills::discover_sources(&cwd)? {
                     let skill = compile_skill_cached(&runner, &cwd, &source.name, true).await?;
@@ -634,6 +657,22 @@ fn display_trace_dir(cwd: &Path, path: &Path) -> PathBuf {
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn resolve_char_threshold(
+    name: &str,
+    chars: Option<usize>,
+    tokens: Option<usize>,
+    default_chars: usize,
+) -> Result<usize> {
+    match (chars, tokens) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("pass either --{name}-chars or --{name}-tokens, not both")
+        }
+        (Some(chars), None) => Ok(chars),
+        (None, Some(tokens)) => Ok(tokens.saturating_mul(APPROX_CHARS_PER_TOKEN)),
+        (None, None) => Ok(default_chars),
+    }
+}
+
 fn latest_trace_dir(root: &Path) -> Result<PathBuf> {
     list_trace_dirs(root, 1)?
         .into_iter()
@@ -678,8 +717,8 @@ fn list_trace_dirs(root: &Path, limit: usize) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_args, contains_skill_mention, latest_trace_dir, list_trace_dirs,
-        mentioned_skill_names, trace_runs_root,
+        DEFAULT_COMPACT_AFTER_CHARS, command_args, contains_skill_mention, latest_trace_dir,
+        list_trace_dirs, mentioned_skill_names, resolve_char_threshold, trace_runs_root,
     };
 
     #[test]
@@ -759,6 +798,31 @@ mod tests {
         let latest = latest_trace_dir(&root).expect("latest trace");
 
         assert_eq!(latest.file_name().unwrap(), "run-2");
+    }
+
+    #[test]
+    fn token_thresholds_resolve_to_estimated_chars() {
+        let chars = resolve_char_threshold(
+            "compact-after",
+            None,
+            Some(32_000),
+            DEFAULT_COMPACT_AFTER_CHARS,
+        )
+        .expect("resolve threshold");
+
+        assert_eq!(chars, 128_000);
+    }
+
+    #[test]
+    fn char_thresholds_conflict_with_token_thresholds() {
+        let error = resolve_char_threshold("max-input", Some(1), Some(1), 10)
+            .expect_err("conflicting thresholds");
+
+        assert!(
+            error
+                .to_string()
+                .contains("pass either --max-input-chars or --max-input-tokens")
+        );
     }
 }
 

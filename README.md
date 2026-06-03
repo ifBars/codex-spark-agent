@@ -182,6 +182,14 @@ Spark has a 128k context window. This harness has two guardrails:
 - `--compact-after-chars` defaults to `160000` request JSON characters.
 - `--max-input-chars` defaults to `500000` request JSON characters.
 
+You can tune those in approximate model-token terms instead:
+
+```powershell
+cargo run --bin spark -- chat --compact-after-tokens 40000 --max-input-tokens 125000
+```
+
+Token thresholds use the same simple 4 chars/token estimate as the profiler. Pass either the `*-chars` or `*-tokens` form for a threshold, not both.
+
 When history grows past the compaction threshold, the harness first tries Codex-like remote compaction through `/responses/compact`, normalizes returned `compaction_summary` items to Codex-style `compaction` items, and replaces live history with the compacted transcript.
 
 In interactive chat, `/compact` runs the same remote-first compaction path immediately and saves the active session afterward. Use it before a large follow-up when a natural conversation has accumulated noisy tool output.
