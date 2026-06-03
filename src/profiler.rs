@@ -309,6 +309,7 @@ pub fn tool_signature(tool_name: &str, args: &Value) -> String {
 pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let mut profiler = AgentProfiler::default();
     let mut embedded_profile_summary = None;
+    let mut embedded_profile_summary_rank = 0usize;
     let mut trace_metadata = None;
     let mut files = std::fs::read_dir(dir)?
         .map(|entry| entry.map(|entry| entry.path()))
@@ -328,8 +329,12 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
 
         if name == "000-trace-metadata.json" {
             trace_metadata = Some(value);
-        } else if name.ends_with("-profile-summary.json") {
-            embedded_profile_summary = Some(value);
+        } else if is_profile_summary_trace_file(name) {
+            let rank = profile_summary_rank(name, turn);
+            if rank >= embedded_profile_summary_rank {
+                embedded_profile_summary_rank = rank;
+                embedded_profile_summary = Some(value);
+            }
         } else if name.ends_with("-request-input.json") {
             let input_chars = value
                 .get("input")
@@ -387,6 +392,22 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
 
 fn is_tool_result_trace_file(name: &str) -> bool {
     name.ends_with("-tool-result.json") || name.contains("-tool-result-")
+}
+
+fn is_profile_summary_trace_file(name: &str) -> bool {
+    name.ends_with("-profile-summary.json") || name.contains("-profile-summary-")
+}
+
+fn profile_summary_rank(name: &str, turn: usize) -> usize {
+    let Some(stem) = name.strip_suffix(".json") else {
+        return turn.saturating_mul(10_000);
+    };
+    let duplicate = stem
+        .split_once("-profile-summary")
+        .and_then(|(_, suffix)| suffix.strip_prefix('-'))
+        .and_then(|suffix| suffix.parse::<usize>().ok())
+        .unwrap_or(1);
+    turn.saturating_mul(10_000).saturating_add(duplicate)
 }
 
 struct TraceToolResult {
@@ -803,12 +824,21 @@ mod tests {
             .expect("serialize profile"),
         )
         .expect("write profile");
+        std::fs::write(
+            dir.path().join("001-profile-summary-002.json"),
+            serde_json::to_vec_pretty(&json!({
+                "requests": 1,
+                "stale": false
+            }))
+            .expect("serialize latest profile"),
+        )
+        .expect("write latest profile");
 
         let summary = analyze_trace(dir.path()).expect("analyze trace");
 
         assert_eq!(summary["requests"], 1);
-        assert_eq!(summary["embedded_profile_summary"]["requests"], 999);
-        assert_eq!(summary["embedded_profile_summary"]["stale"], true);
+        assert_eq!(summary["embedded_profile_summary"]["requests"], 1);
+        assert_eq!(summary["embedded_profile_summary"]["stale"], false);
     }
 
     #[test]

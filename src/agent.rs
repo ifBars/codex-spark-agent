@@ -131,6 +131,19 @@ impl AgentRunner {
         &self.loaded_skills
     }
 
+    pub async fn compact_now(&mut self) -> Result<Option<Value>> {
+        let tools = builtin_tools();
+        let report = self.compact_once(&tools, true).await?;
+        if let Some(report) = &report {
+            self.profiler.record_compaction(report);
+            if let Some(trace) = &mut self.trace {
+                trace.write(self.request_seq + 1, "compaction", report)?;
+            }
+            self.emit_profile_summary()?;
+        }
+        Ok(report)
+    }
+
     pub fn load_skill_context(&mut self, name: &str, summary: &str) -> bool {
         if self.loaded_skills.iter().any(|loaded| loaded == name) {
             return false;
@@ -198,7 +211,7 @@ impl AgentRunner {
                 anyhow::bail!(message);
             }
 
-            match self.compact_if_needed(&tools).await {
+            match self.compact_once(&tools, false).await {
                 Ok(Some(report)) => {
                     self.profiler.record_compaction(&report);
                     if let Some(trace) = &mut self.trace {
@@ -350,16 +363,17 @@ impl AgentRunner {
         self.emit_profile_summary()
     }
 
-    async fn compact_if_needed(
+    async fn compact_once(
         &mut self,
         tools: &[crate::tools::ToolDescriptor],
+        force: bool,
     ) -> Result<Option<Value>> {
-        if self.compact_after_chars == 0 {
+        if self.input.is_empty() {
             return Ok(None);
         }
 
         let before = serde_json::to_string(&self.input)?.len();
-        if before <= self.compact_after_chars {
+        if !force && (self.compact_after_chars == 0 || before <= self.compact_after_chars) {
             return Ok(None);
         }
 
@@ -376,6 +390,7 @@ impl AgentRunner {
                 self.input = replacement;
                 Ok(Some(json!({
                     "method": "responses_compact",
+                    "forced": force,
                     "before_chars": before,
                     "compact_request_chars": serde_json::to_string(&compact_input)?.len(),
                     "after_chars": after,
@@ -389,6 +404,7 @@ impl AgentRunner {
                 if let Some(report) = fallback {
                     Ok(Some(json!({
                         "method": "local_fallback",
+                        "forced": force,
                         "remote_error": error.to_string(),
                         "fallback": report,
                     })))

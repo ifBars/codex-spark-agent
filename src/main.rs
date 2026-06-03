@@ -282,7 +282,7 @@ async fn run_interactive_chat(
             "/exit" | "/quit" => return Ok(()),
             "/help" => {
                 println!(
-                    "Commands: /help, /status, /session, /new, /skill, /skills, /save, /clear, /exit"
+                    "Commands: /help, /status, /compact, /session, /new, /skill, /skills, /save, /clear, /exit"
                 );
                 println!(
                     "Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>"
@@ -295,6 +295,24 @@ async fn run_interactive_chat(
             "/status" => {
                 println!("conversation input JSON chars: {}", runner.input_chars()?);
                 println!("{}", runner.profile_status());
+                continue;
+            }
+            "/compact" => {
+                match runner.compact_now().await {
+                    Ok(Some(report)) => {
+                        println!("{}", serde_json::to_string_pretty(&report)?);
+                        println!("conversation input JSON chars: {}", runner.input_chars()?);
+                        if let Some(path) = &session_path {
+                            runner.save_session(path)?;
+                        }
+                    }
+                    Ok(None) => {
+                        println!("nothing to compact");
+                    }
+                    Err(error) => {
+                        eprintln!("error: {error:#}");
+                    }
+                }
                 continue;
             }
             "/clear" => {
@@ -587,6 +605,9 @@ mod tests {
             command_args("/skill load rust", "/skill"),
             Some("load rust")
         );
+        assert_eq!(command_args("/compact", "/compact"), Some(""));
+        assert_eq!(command_args("/compact now", "/compact"), Some("now"));
+        assert_eq!(command_args("/compaction", "/compact"), None);
         assert_eq!(command_args("/skills", "/skill"), None);
         assert_eq!(command_args("/sessions", "/session"), None);
     }

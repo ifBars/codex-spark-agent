@@ -102,6 +102,7 @@ Inside `spark chat`:
 
 - `/help` shows commands.
 - `/status` prints conversation/profile status.
+- `/compact` manually runs Codex-like compaction on the active conversation.
 - `/session` shows the active session.
 - `/session list` lists saved sessions.
 - `/session open <name>` opens an existing session.
@@ -169,6 +170,8 @@ Spark has a 128k context window. This harness has two guardrails:
 - `--max-input-chars` defaults to `500000` request JSON characters.
 
 When history grows past the compaction threshold, the harness first tries Codex-like remote compaction through `/responses/compact`, normalizes returned `compaction_summary` items to Codex-style `compaction` items, and replaces live history with the compacted transcript.
+
+In interactive chat, `/compact` runs the same remote-first compaction path immediately and saves the active session afterward. Use it before a large follow-up when a natural conversation has accumulated noisy tool output.
 
 If remote compaction still leaves history above the threshold, the harness applies a local pressure pass before sending the next Spark request. Traces mark this as `local_pressure` under the remote compaction report so those runs can be separated from clean remote compactions during profiling.
 
