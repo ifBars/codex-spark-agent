@@ -424,6 +424,19 @@ impl AgentProfiler {
             }));
         }
 
+        if self.response_text_chars == 0 && self.max_consecutive_tool_only_turns >= 8 {
+            diagnostics.push(json!({
+                "level": "warning",
+                "kind": "completion_starvation",
+                "message": "Spark kept calling tools across many turns without emitting any user-facing response text. Profile tool-call sequence, compaction timing, and context growth before adding stop conditions or changing defaults.",
+                "tool_only_turns": self.tool_only_turns,
+                "max_consecutive": self.max_consecutive_tool_only_turns,
+                "compactions": self.compactions,
+                "remote_compactions": self.remote_compactions,
+                "fallback_compactions": self.fallback_compactions,
+            }));
+        }
+
         if self.compactions > 0 && self.remote_compactions == 0 {
             diagnostics.push(json!({
                 "level": "warning",
@@ -840,6 +853,22 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         if let Some(report) = &tool_failure_recovery_report {
             object.insert("tool_failure_recovery".to_string(), report.clone());
         }
+        let response_text_chars = object
+            .get("response_text_chars")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let compactions = object
+            .get("compactions")
+            .cloned()
+            .unwrap_or_else(|| json!(0));
+        let remote_compactions = object
+            .get("remote_compactions")
+            .cloned()
+            .unwrap_or_else(|| json!(0));
+        let fallback_compactions = object
+            .get("fallback_compactions")
+            .cloned()
+            .unwrap_or_else(|| json!(0));
         if let Some(diagnostics) = object.get_mut("diagnostics").and_then(Value::as_array_mut) {
             if !required_action_report.missing.is_empty() {
                 diagnostics.push(json!({
@@ -925,6 +954,26 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                     "count": tool_only_turn_report.get("count").cloned().unwrap_or_else(|| json!(0)),
                     "max_consecutive": tool_only_turn_report.get("max_consecutive").cloned().unwrap_or_else(|| json!(0)),
                     "turns": tool_only_turn_report.get("turns").cloned().unwrap_or_else(|| json!([])),
+                }));
+            }
+            if tool_only_turn_report
+                .get("max_consecutive")
+                .and_then(Value::as_u64)
+                .is_some_and(|count| count >= 8)
+                && response_text_chars == 0
+                && !diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic["kind"] == "completion_starvation")
+            {
+                diagnostics.push(json!({
+                    "level": "warning",
+                    "kind": "completion_starvation",
+                    "message": "Spark kept calling tools across many turns without emitting any user-facing response text. Profile tool-call sequence, compaction timing, and context growth before adding stop conditions or changing defaults.",
+                    "tool_only_turns": tool_only_turn_report.get("count").cloned().unwrap_or_else(|| json!(0)),
+                    "max_consecutive": tool_only_turn_report.get("max_consecutive").cloned().unwrap_or_else(|| json!(0)),
+                    "compactions": compactions,
+                    "remote_compactions": remote_compactions,
+                    "fallback_compactions": fallback_compactions,
                 }));
             }
             if let Some(report) = &tool_failure_recovery_report {
@@ -2985,6 +3034,27 @@ mod tests {
     }
 
     #[test]
+    fn profiler_diagnoses_completion_starvation() {
+        let mut profiler = AgentProfiler::default();
+
+        for turn in 1..=8 {
+            profiler.record_turn_activity(turn, true, 0);
+        }
+
+        let summary = profiler.to_json();
+        let diagnostic = summary["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .find(|diagnostic| diagnostic["kind"] == "completion_starvation")
+            .expect("completion starvation diagnostic");
+
+        assert_eq!(diagnostic["level"], "warning");
+        assert_eq!(diagnostic["tool_only_turns"], 8);
+        assert_eq!(diagnostic["max_consecutive"], 8);
+    }
+
+    #[test]
     fn profiler_records_readonly_cache_hits() {
         let args = json!({"path": "a.txt"});
         let mut profiler = AgentProfiler::default();
@@ -3769,7 +3839,7 @@ mod tests {
     #[test]
     fn analyze_trace_reports_tool_only_turn_streaks() {
         let dir = tempfile::tempdir().expect("tempdir");
-        for turn in 1..=3 {
+        for turn in 1..=8 {
             std::fs::write(
                 dir.path().join(format!("{turn:03}-request-input.json")),
                 serde_json::to_vec_pretty(&json!({
@@ -3800,9 +3870,12 @@ mod tests {
 
         let summary = analyze_trace(dir.path()).expect("analyze trace");
 
-        assert_eq!(summary["tool_only_turns"]["count"], 3);
-        assert_eq!(summary["tool_only_turns"]["max_consecutive"], 3);
-        assert_eq!(summary["tool_only_turns"]["turns"], json!([1, 2, 3]));
+        assert_eq!(summary["tool_only_turns"]["count"], 8);
+        assert_eq!(summary["tool_only_turns"]["max_consecutive"], 8);
+        assert_eq!(
+            summary["tool_only_turns"]["turns"],
+            json!([1, 2, 3, 4, 5, 6, 7, 8])
+        );
         assert!(
             summary["diagnostics"]
                 .as_array()
@@ -3811,12 +3884,19 @@ mod tests {
                 .any(|diagnostic| diagnostic["kind"] == "tool_only_turn_streak")
         );
         assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "completion_starvation")
+        );
+        assert!(
             format_trace_timeline(&summary)
-                .contains("tool-only-turns: count=3 max_consecutive=3 turns=[1,2,3]")
+                .contains("tool-only-turns: count=8 max_consecutive=8 turns=[1,2,3,4,5,6,7,8]")
         );
         assert!(
             format_trace_summary_row(".spark-runs/run-1", &summary)
-                .contains("tool_only=3 max_tool_only_streak=3")
+                .contains("tool_only=8 max_tool_only_streak=8")
         );
     }
 
