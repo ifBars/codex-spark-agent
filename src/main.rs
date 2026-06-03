@@ -859,8 +859,9 @@ fn profile_scenario_prompts(
              Required actions:\n\
              1. Use fs.write on .spark-scenarios/file-ops/drafts/report-draft.md with a short markdown report containing the exact phrase: Spark rename path verified.\n\
              2. Use fs.rename to move .spark-scenarios/file-ops/drafts/report-draft.md to .spark-scenarios/file-ops/final/report.md.\n\
-             3. Use fs.read on .spark-scenarios/file-ops/final/report.md to verify the final contents.\n\
-             4. Use fs.search under .spark-scenarios/file-ops for Spark rename path verified.\n\
+             3. Use fs.stat on .spark-scenarios/file-ops/final/report.md to verify the final path exists before reading it.\n\
+             4. Use fs.read on .spark-scenarios/file-ops/final/report.md to verify the final contents.\n\
+             5. Use fs.search under .spark-scenarios/file-ops for Spark rename path verified.\n\
              Finish with the native tools used, whether verification passed, and any harness behavior that made the workflow easier or harder."
                 .to_string(),
         ]),
@@ -943,6 +944,7 @@ fn profile_scenario_expected_tool_groups(scenario: ProfileScenarioKind) -> Vec<V
             vec![
                 vec!["fs.write"],
                 vec!["fs.rename"],
+                vec!["fs.stat"],
                 vec!["fs.read"],
                 vec!["fs.search"],
             ]
@@ -979,6 +981,10 @@ fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind) -> Vec<Va
                 "tool": "fs.rename",
                 "from": ".spark-scenarios/file-ops/drafts/report-draft.md",
                 "to": ".spark-scenarios/file-ops/final/report.md",
+            }),
+            json!({
+                "tool": "fs.stat",
+                "path": ".spark-scenarios/file-ops/final/report.md",
             }),
             json!({
                 "tool": "fs.read",
@@ -1370,6 +1376,7 @@ mod tests {
         assert!(prompt.contains("Work only under .spark-scenarios/file-ops"));
         assert!(prompt.contains("Use fs.write"));
         assert!(prompt.contains("Use fs.rename"));
+        assert!(prompt.contains("Use fs.stat"));
         assert!(prompt.contains("Use fs.search"));
         assert!(prompt.contains("not cmd.exec"));
     }
@@ -1397,6 +1404,7 @@ mod tests {
             vec![
                 vec!["fs.write"],
                 vec!["fs.rename"],
+                vec!["fs.stat"],
                 vec!["fs.read"],
                 vec!["fs.search"]
             ]
@@ -1407,7 +1415,7 @@ mod tests {
     fn file_ops_scenario_declares_expected_exact_tool_calls() {
         let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::FileOps);
 
-        assert_eq!(calls.len(), 4);
+        assert_eq!(calls.len(), 5);
         assert_eq!(calls[0]["tool"], "fs.write");
         assert_eq!(
             calls[0]["path"],
@@ -1419,13 +1427,18 @@ mod tests {
             ".spark-scenarios/file-ops/drafts/report-draft.md"
         );
         assert_eq!(calls[1]["to"], ".spark-scenarios/file-ops/final/report.md");
-        assert_eq!(calls[2]["tool"], "fs.read");
+        assert_eq!(calls[2]["tool"], "fs.stat");
         assert_eq!(
             calls[2]["path"],
             ".spark-scenarios/file-ops/final/report.md"
         );
-        assert_eq!(calls[3]["tool"], "fs.search");
-        assert_eq!(calls[3]["path"], ".spark-scenarios/file-ops");
+        assert_eq!(calls[3]["tool"], "fs.read");
+        assert_eq!(
+            calls[3]["path"],
+            ".spark-scenarios/file-ops/final/report.md"
+        );
+        assert_eq!(calls[4]["tool"], "fs.search");
+        assert_eq!(calls[4]["path"], ".spark-scenarios/file-ops");
     }
 
     #[test]

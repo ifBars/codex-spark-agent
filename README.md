@@ -184,6 +184,7 @@ If the source skill changes, Spark recompiles the compact skill cache on first l
 
 - `fs.read`
 - `fs.list`
+- `fs.stat`
 - `fs.search`
 - `fs.write`
 - `fs.replace`
@@ -193,11 +194,11 @@ If the source skill changes, Spark recompiles the compact skill cache on first l
 
 Tool schemas are intentionally small. The harness accepts JSON-string or object arguments, reports bad arguments as tool observations, and preserves function-call outputs in the next request.
 
-`fs.list` and `fs.search` skip generated/runtime directories such as `target/`, `.git/`, `node_modules/`, `.spark/`, `.spark-runs/`, and `.spark-profile/` during recursive discovery. Direct paths remain readable, so profiling artifacts can still be inspected explicitly. `fs.read` returns line-window metadata (`returned_lines`, `total_lines`, `has_more`, and `next_offset`) so Spark can choose the next chunk without guessing.
+`fs.list` and `fs.search` skip generated/runtime directories such as `target/`, `.git/`, `node_modules/`, `.spark/`, `.spark-runs/`, and `.spark-profile/` during recursive discovery. Direct paths remain readable, so profiling artifacts can still be inspected explicitly. `fs.stat` returns compact path metadata, including `exists:false` for missing workspace paths, without reading file contents. `fs.read` returns line-window metadata (`returned_lines`, `total_lines`, `has_more`, and `next_offset`) so Spark can choose the next chunk without guessing.
 
 `fs.write` creates parent directories when needed and reports whether the file was newly created, plus previous and new byte counts. `fs.rename` moves one file or directory inside the workspace, creates destination parents, and refuses to overwrite an existing destination. Both tools report `created_parent_dirs`, which helps Spark notice when a mutation created an unexpected path segment. That makes common file mutations visible in traces and profile timelines without falling back to shell commands.
 
-Repeated read-only observations from `fs.read`, `fs.list`, and `fs.search` are served from a per-run cache, including failed observations such as missing files. File mutation tools and `cmd.exec` clear that cache so Spark can retry after the workspace may have changed.
+Repeated read-only observations from `fs.read`, `fs.list`, `fs.stat`, and `fs.search` are served from a per-run cache, including failed observations such as missing files. File mutation tools and `cmd.exec` clear that cache so Spark can retry after the workspace may have changed.
 
 Native tool invocation errors return structured observations with `error_kind`, `message`, `tool`, `args_shape`, and a retry `hint`. This gives Spark a compact recovery path when it sends incomplete arguments, picks a stale path, or calls an unavailable tool.
 
@@ -254,7 +255,7 @@ Use `--trace` to save run metadata, raw request, response, tool-result, compacti
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, profile flag, interactive/session mode, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
 
-`spark profile-scenario <name>` runs canned prompts through the same `AgentRunner` used by `spark chat`, with tracing and profile output enabled by default. `repo-survey` exercises normal read/list/search behavior. `file-edit` creates an ignored `.spark-scenarios/file-edit/` scratch fixture and exercises native read/edit/write verification. `file-ops` creates an ignored `.spark-scenarios/file-ops/` scratch fixture and exercises native write/rename/read/search verification. `natural-compaction` sends three normal conversation turns through one runner, defaulting to about 45k total estimated prompt tokens, so retained chat history crosses the default compaction threshold below Spark's 128k context window. `compaction-pressure` generates one synthetic long-context prompt with the same default size. Scenario runs store their name and prompt sizing in trace metadata, and they print a trace summary row even when Spark fails. Use `spark traces --summary --scenario <name> --aggregate` to compare recent matching runs by success/failure count, max context pressure, latency, tools, compactions, and diagnostics.
+`spark profile-scenario <name>` runs canned prompts through the same `AgentRunner` used by `spark chat`, with tracing and profile output enabled by default. `repo-survey` exercises normal read/list/search behavior. `file-edit` creates an ignored `.spark-scenarios/file-edit/` scratch fixture and exercises native read/edit/write verification. `file-ops` creates an ignored `.spark-scenarios/file-ops/` scratch fixture and exercises native write/rename/stat/read/search verification. `natural-compaction` sends three normal conversation turns through one runner, defaulting to about 45k total estimated prompt tokens, so retained chat history crosses the default compaction threshold below Spark's 128k context window. `compaction-pressure` generates one synthetic long-context prompt with the same default size. Scenario runs store their name and prompt sizing in trace metadata, and they print a trace summary row even when Spark fails. Use `spark traces --summary --scenario <name> --aggregate` to compare recent matching runs by success/failure count, max context pressure, latency, tools, compactions, and diagnostics.
 
 Token counts are approximate and use a simple 4 chars/token estimate. They are profiling signals for comparing harness behavior, not authoritative tokenizer output.
 

@@ -667,7 +667,7 @@ fn compact_input_locally(input: &mut Vec<Value>, max_chars: usize) -> Result<Opt
 }
 
 fn is_cacheable_readonly_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "fs.read" | "fs.list" | "fs.search")
+    matches!(tool_name, "fs.read" | "fs.list" | "fs.stat" | "fs.search")
 }
 
 fn should_cache_readonly_result(result: &ToolResult) -> bool {
@@ -984,6 +984,7 @@ fn is_high_signal_intent_line(line: &str) -> bool {
 fn mentions_native_file_tool_action(line: &str) -> bool {
     (line.contains("fs.list")
         || line.contains("fs.read")
+        || line.contains("fs.stat")
         || line.contains("fs.search")
         || line.contains("fs.replace")
         || line.contains("fs.edit")
@@ -1008,9 +1009,10 @@ fn parse_native_tool_action(line: &str) -> Option<String> {
     if let Some(action) = parse_rename_tool_action(line) {
         return Some(action);
     }
-    const TOOLS: [&str; 6] = [
+    const TOOLS: [&str; 7] = [
         "fs.list",
         "fs.read",
+        "fs.stat",
         "fs.search",
         "fs.replace",
         "fs.edit",
@@ -1446,6 +1448,7 @@ mod tests {
              - whether the task remained understandable,\n\
              - which tool you used,\n\
              Next, use fs.read on README.md.\n\
+             Then use fs.stat on .spark-scenarios/file-ops/final/report.md.\n\
              Then use fs.write on .spark-scenarios/file-ops/drafts/report-draft.md.\n\
              Then use fs.rename to move .spark-scenarios/file-ops/drafts/report-draft.md to .spark-scenarios/file-ops/final/report.md.\n\
              Synthetic payload follows. Preserve the high-level instruction above; payload rows are intentionally repetitive profiling filler.\n\
@@ -1464,14 +1467,17 @@ mod tests {
         assert!(!lines.iter().any(|line| line.starts_with("row ")));
         assert!(block.contains("retained_intent_lines="));
         assert!(block.contains("intent_1=Profile scenario: compaction-pressure."));
-        assert!(block.contains("required_actions=4"));
+        assert!(block.contains("required_actions=5"));
         assert!(block.contains("action_1=tool=fs.list path=src recursive=false"));
         assert!(block.contains("action_2=tool=fs.read path=README.md"));
         assert!(block.contains(
             "action_3=tool=fs.rename from=.spark-scenarios/file-ops/drafts/report-draft.md to=.spark-scenarios/file-ops/final/report.md"
         ));
+        assert!(
+            block.contains("action_4=tool=fs.stat path=.spark-scenarios/file-ops/final/report.md")
+        );
         assert!(block.contains(
-            "action_4=tool=fs.write path=.spark-scenarios/file-ops/drafts/report-draft.md"
+            "action_5=tool=fs.write path=.spark-scenarios/file-ops/drafts/report-draft.md"
         ));
     }
 
@@ -1483,6 +1489,8 @@ mod tests {
         .expect("list action");
         let read_action =
             parse_native_tool_action("Next, use fs.read on `README.md`.").expect("read action");
+        let stat_action =
+            parse_native_tool_action("Then use fs.stat on `src/main.rs`.").expect("stat action");
         let search_action = parse_native_tool_action("Then run fs.search in src for compact.")
             .expect("search action");
         let write_action = parse_native_tool_action(
@@ -1496,6 +1504,7 @@ mod tests {
 
         assert_eq!(list_action, "tool=fs.list path=src recursive=false");
         assert_eq!(read_action, "tool=fs.read path=README.md");
+        assert_eq!(stat_action, "tool=fs.stat path=src/main.rs");
         assert_eq!(search_action, "tool=fs.search path=src");
         assert_eq!(
             write_action,
@@ -1638,6 +1647,7 @@ mod tests {
 
     #[test]
     fn readonly_cache_policy_keeps_successes_and_failures() {
+        assert!(is_cacheable_readonly_tool("fs.stat"));
         assert!(should_cache_readonly_result(&ToolResult {
             ok: true,
             data: json!({"path": "README.md"}),

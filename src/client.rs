@@ -428,6 +428,7 @@ fn wire_tool_name_to_local(name: &str) -> String {
     match name {
         "fs_read" => "fs.read",
         "fs_list" => "fs.list",
+        "fs_stat" => "fs.stat",
         "fs_write" => "fs.write",
         "fs_search" => "fs.search",
         "fs_replace" => "fs.replace",

@@ -54,6 +54,18 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
             }),
         },
         ToolDescriptor {
+            name: "fs.stat".to_string(),
+            description: "Return compact metadata for one workspace path without reading file contents.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"}
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDescriptor {
             name: "fs.write".to_string(),
             description: "Write a UTF-8 text file under the workspace, creating parent directories if needed.".to_string(),
             input_schema: json!({
@@ -158,6 +170,7 @@ async fn invoke_inner(cwd: &Path, tool_name: &str, args: Value) -> Result<ToolRe
     match tool_name {
         "fs.read" => fs_read(cwd, args),
         "fs.list" => fs_list(cwd, args),
+        "fs.stat" => fs_stat(cwd, args),
         "fs.write" => fs_write(cwd, args),
         "fs.search" => fs_search(cwd, args),
         "fs.replace" => fs_replace(cwd, args),
@@ -345,6 +358,40 @@ fn fs_list(cwd: &Path, args: Value) -> Result<ToolResult> {
     Ok(ToolResult {
         ok: true,
         data: json!({"path": display_rel(cwd, &root), "entries": entries, "truncated": truncated}),
+        error: None,
+    })
+}
+
+fn fs_stat(cwd: &Path, args: Value) -> Result<ToolResult> {
+    let path = required_str(&args, "path")?;
+    let full = if cwd.join(path).exists() {
+        resolve_under(cwd, path)?
+    } else {
+        resolve_under_for_write(cwd, path)?
+    };
+    if !full.exists() {
+        return Ok(ToolResult {
+            ok: true,
+            data: json!({
+                "path": display_rel(cwd, &full),
+                "exists": false,
+            }),
+            error: None,
+        });
+    }
+    let meta =
+        std::fs::metadata(&full).with_context(|| format!("failed to stat {}", full.display()))?;
+    Ok(ToolResult {
+        ok: true,
+        data: json!({
+            "path": display_rel(cwd, &full),
+            "exists": true,
+            "is_dir": meta.is_dir(),
+            "is_file": meta.is_file(),
+            "is_symlink": meta.file_type().is_symlink(),
+            "size": meta.len(),
+            "readonly": meta.permissions().readonly(),
+        }),
         error: None,
     })
 }
@@ -869,8 +916,9 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
 
-        assert_eq!(names.len(), 8);
+        assert_eq!(names.len(), 9);
         assert!(!names.iter().any(|name| name == "agent.complete"));
+        assert!(names.iter().any(|name| name == "fs.stat"));
         assert!(names.iter().any(|name| name == "fs.rename"));
         assert!(names.iter().any(|name| name == "cmd.exec"));
     }
@@ -956,6 +1004,33 @@ mod tests {
         assert_eq!(result.data["total_lines"], 3);
         assert_eq!(result.data["has_more"], true);
         assert_eq!(result.data["next_offset"], 3);
+    }
+
+    #[test]
+    fn fs_stat_reports_existing_file_metadata_without_contents() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("sample.txt"), "hello").expect("write sample");
+
+        let result = fs_stat(dir.path(), json!({"path": "sample.txt"})).expect("stat");
+
+        assert!(result.ok);
+        assert_eq!(result.data["path"], "sample.txt");
+        assert_eq!(result.data["exists"], true);
+        assert_eq!(result.data["is_file"], true);
+        assert_eq!(result.data["is_dir"], false);
+        assert_eq!(result.data["size"], 5);
+        assert!(result.data.get("content").is_none());
+    }
+
+    #[test]
+    fn fs_stat_reports_missing_workspace_path_without_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let result = fs_stat(dir.path(), json!({"path": "missing/sample.txt"})).expect("stat");
+
+        assert!(result.ok);
+        assert_eq!(result.data["path"], "missing/sample.txt");
+        assert_eq!(result.data["exists"], false);
     }
 
     #[test]
