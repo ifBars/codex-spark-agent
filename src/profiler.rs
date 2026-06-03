@@ -583,6 +583,7 @@ struct RequiredAction {
 
 #[derive(Debug, Clone)]
 struct ObservedToolCall {
+    turn: usize,
     tool_name: String,
     args: Value,
 }
@@ -669,6 +670,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             for (tool_name, args) in function_calls_from_trace_response(&value) {
                 profiler.record_tool_call(turn, &tool_name, &args);
                 observed_tool_calls.push(ObservedToolCall {
+                    turn,
                     tool_name: tool_name.clone(),
                     args: args.clone(),
                 });
@@ -769,8 +771,11 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         required_action_report(&retained_required_actions, &observed_tool_calls);
     let scenario_tool_expectation_report =
         scenario_tool_expectation_report(trace_metadata.as_ref(), &observed_tool_calls);
-    let scenario_call_expectation_report =
-        scenario_tool_call_expectation_report(trace_metadata.as_ref(), &observed_tool_calls);
+    let scenario_call_expectation_report = scenario_tool_call_expectation_report(
+        trace_metadata.as_ref(),
+        &observed_tool_calls,
+        &timeline,
+    );
     let scenario_skill_expectation_report =
         scenario_skill_expectation_report(trace_metadata.as_ref(), &loaded_skill_contexts);
     let tool_only_turn_report = tool_only_turn_report(&timeline);
@@ -885,7 +890,10 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                     "kind": "profile_scenario_extra_calls_after_expected",
                     "message": "Spark satisfied all exact native tool calls expected for this profiling scenario, then made additional tool calls before completing.",
                     "extra_calls_after_satisfied": report.get("extra_calls_after_satisfied").cloned().unwrap_or_else(|| json!(0)),
+                    "extra_turns_after_satisfied": report.get("extra_turns_after_satisfied").cloned().unwrap_or_else(|| json!(0)),
+                    "context_growth_after_satisfied_chars": report.get("context_growth_after_satisfied_chars").cloned().unwrap_or_else(|| json!(0)),
                     "first_satisfied_call_index": report.get("first_satisfied_call_index").cloned().unwrap_or(Value::Null),
+                    "first_satisfied_turn": report.get("first_satisfied_turn").cloned().unwrap_or(Value::Null),
                 }));
             }
             if let Some(report) = &scenario_skill_expectation_report
@@ -1498,8 +1506,20 @@ fn format_scenario_call_expectations(summary: &Value) -> Option<String> {
         .filter(|count| *count > 0)
         .map(|count| format!(" extra_after={count}"))
         .unwrap_or_default();
+    let extra_turns = report
+        .get("extra_turns_after_satisfied")
+        .and_then(Value::as_u64)
+        .filter(|count| *count > 0)
+        .map(|count| format!(" extra_turns={count}"))
+        .unwrap_or_default();
+    let growth = report
+        .get("context_growth_after_satisfied_chars")
+        .and_then(Value::as_u64)
+        .filter(|chars| *chars > 0)
+        .map(|chars| format!(" post_satisfied_chars={chars}"))
+        .unwrap_or_default();
     Some(format!(
-        "scenario-calls: satisfied={satisfied}/{total} missing={missing}{extra} calls=[{calls}]",
+        "scenario-calls: satisfied={satisfied}/{total} missing={missing}{extra}{extra_turns}{growth} calls=[{calls}]",
     ))
 }
 
@@ -1576,7 +1596,19 @@ fn format_scenario_calls_for_summary_row(summary: &Value) -> String {
         .filter(|count| *count > 0)
         .map(|count| format!(" extra_calls={count}"))
         .unwrap_or_default();
-    format!(" scenario_calls={satisfied}/{total}{extra}")
+    let extra_turns = report
+        .get("extra_turns_after_satisfied")
+        .and_then(Value::as_u64)
+        .filter(|count| *count > 0)
+        .map(|count| format!(" extra_turns={count}"))
+        .unwrap_or_default();
+    let growth = report
+        .get("context_growth_after_satisfied_chars")
+        .and_then(Value::as_u64)
+        .filter(|chars| *chars > 0)
+        .map(|chars| format!(" context_growth={chars}"))
+        .unwrap_or_default();
+    format!(" scenario_calls={satisfied}/{total}{extra}{extra_turns}{growth}")
 }
 
 fn format_scenario_skills_for_summary_row(summary: &Value) -> String {
@@ -2454,6 +2486,7 @@ fn scenario_tool_expectation_report(
 fn scenario_tool_call_expectation_report(
     metadata: Option<&Value>,
     calls: &[ObservedToolCall],
+    timeline: &BTreeMap<usize, Map<String, Value>>,
 ) -> Option<Value> {
     let expected_calls = metadata?
         .pointer("/context/profile_scenario/expected_tool_calls")?
@@ -2492,6 +2525,20 @@ fn scenario_tool_call_expectation_report(
     let extra_calls_after_satisfied = first_satisfied_call_index
         .map(|index| calls.len().saturating_sub(index + 1))
         .unwrap_or(0);
+    let first_satisfied_turn = first_satisfied_call_index.map(|index| calls[index].turn);
+    let final_tool_call_turn = calls.last().map(|call| call.turn);
+    let extra_turns_after_satisfied = match (first_satisfied_turn, final_tool_call_turn) {
+        (Some(first), Some(final_turn)) => final_turn.saturating_sub(first),
+        _ => 0,
+    };
+    let input_chars_at_satisfaction =
+        first_satisfied_turn.and_then(|turn| request_input_chars_for_turn(timeline, turn));
+    let final_request_input_chars = latest_request_input_chars(timeline);
+    let context_growth_after_satisfied_chars =
+        match (input_chars_at_satisfaction, final_request_input_chars) {
+            (Some(first), Some(final_chars)) => final_chars.saturating_sub(first),
+            _ => 0,
+        };
     let extra_calls = first_satisfied_call_index
         .map(|index| {
             calls
@@ -2499,6 +2546,7 @@ fn scenario_tool_call_expectation_report(
                 .skip(index + 1)
                 .map(|call| {
                     json!({
+                        "turn": call.turn,
                         "tool": &call.tool_name,
                         "signature": tool_signature(&call.tool_name, &call.args),
                     })
@@ -2514,9 +2562,32 @@ fn scenario_tool_call_expectation_report(
         "missing_calls": missing,
         "satisfied_tool_calls": satisfied,
         "first_satisfied_call_index": first_satisfied_call_index,
+        "first_satisfied_turn": first_satisfied_turn,
+        "final_tool_call_turn": final_tool_call_turn,
         "extra_calls_after_satisfied": extra_calls_after_satisfied,
+        "extra_turns_after_satisfied": extra_turns_after_satisfied,
+        "input_chars_at_satisfaction": input_chars_at_satisfaction,
+        "final_request_input_chars": final_request_input_chars,
+        "context_growth_after_satisfied_chars": context_growth_after_satisfied_chars,
         "extra_tool_calls": extra_calls,
     }))
+}
+
+fn request_input_chars_for_turn(
+    timeline: &BTreeMap<usize, Map<String, Value>>,
+    turn: usize,
+) -> Option<u64> {
+    timeline
+        .get(&turn)?
+        .get("request_input_chars")
+        .and_then(Value::as_u64)
+}
+
+fn latest_request_input_chars(timeline: &BTreeMap<usize, Map<String, Value>>) -> Option<u64> {
+    timeline
+        .values()
+        .rev()
+        .find_map(|entry| entry.get("request_input_chars").and_then(Value::as_u64))
 }
 
 fn tool_failure_recovery_report(results: &[ObservedToolResult]) -> Option<Value> {
@@ -3537,44 +3608,51 @@ mod tests {
                 }
             ]),
         );
-        std::fs::write(
-            dir.path().join("001-response.json"),
-            serde_json::to_vec_pretty(&json!({
-                "raw": {
-                    "events": [
-                        {
+        for (turn, (tool_name, arguments)) in [
+            ("fs_read", "{\"path\":\"src/main.rs\"}"),
+            (
+                "fs_search",
+                "{\"path\":\"src\",\"query\":\"load_skill_mentions\"}",
+            ),
+            ("fs_read", "{\"path\":\"src/skills.rs\"}"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let turn = turn + 1;
+            std::fs::write(
+                dir.path().join(format!("{turn:03}-request-input.json")),
+                serde_json::to_vec_pretty(&json!({
+                    "input": [{
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "x".repeat(turn * 100)
+                        }]
+                    }]
+                }))
+                .expect("serialize request"),
+            )
+            .expect("write request");
+            std::fs::write(
+                dir.path().join(format!("{turn:03}-response.json")),
+                serde_json::to_vec_pretty(&json!({
+                    "raw": {
+                        "events": [{
                             "type": "response.output_item.done",
                             "output_index": 0,
                             "item": {
                                 "type": "function_call",
-                                "name": "fs_read",
-                                "arguments": "{\"path\":\"src/main.rs\"}"
+                                "name": tool_name,
+                                "arguments": arguments
                             }
-                        },
-                        {
-                            "type": "response.output_item.done",
-                            "output_index": 1,
-                            "item": {
-                                "type": "function_call",
-                                "name": "fs_search",
-                                "arguments": "{\"path\":\"src\",\"query\":\"load_skill_mentions\"}"
-                            }
-                        },
-                        {
-                            "type": "response.output_item.done",
-                            "output_index": 2,
-                            "item": {
-                                "type": "function_call",
-                                "name": "fs_read",
-                                "arguments": "{\"path\":\"src/skills.rs\"}"
-                            }
-                        }
-                    ]
-                }
-            }))
-            .expect("serialize response"),
-        )
-        .expect("write response");
+                        }]
+                    }
+                }))
+                .expect("serialize response"),
+            )
+            .expect("write response");
+        }
 
         let summary = analyze_trace(dir.path()).expect("analyze trace");
 
@@ -3587,8 +3665,30 @@ mod tests {
             1
         );
         assert_eq!(
+            summary["profile_scenario_call_expectations"]["first_satisfied_turn"],
+            2
+        );
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["final_tool_call_turn"],
+            3
+        );
+        assert_eq!(
             summary["profile_scenario_call_expectations"]["extra_calls_after_satisfied"],
             1
+        );
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["extra_turns_after_satisfied"],
+            1
+        );
+        assert!(
+            summary["profile_scenario_call_expectations"]["context_growth_after_satisfied_chars"]
+                .as_u64()
+                .expect("context growth")
+                > 0
+        );
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["extra_tool_calls"][0]["turn"],
+            3
         );
         assert_eq!(
             summary["profile_scenario_call_expectations"]["extra_tool_calls"][0]["tool"],
@@ -3603,10 +3703,10 @@ mod tests {
                     diagnostic["kind"] == "profile_scenario_extra_calls_after_expected"
                 })
         );
-        assert!(format_trace_timeline(&summary).contains("extra_after=1"));
+        assert!(format_trace_timeline(&summary).contains("extra_after=1 extra_turns=1"));
         assert!(
             format_trace_summary_row(".spark-runs/run-1", &summary)
-                .contains("scenario_calls=2/2 extra_calls=1")
+                .contains("scenario_calls=2/2 extra_calls=1 extra_turns=1")
         );
     }
 
