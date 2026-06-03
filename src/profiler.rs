@@ -216,6 +216,28 @@ impl AgentProfiler {
                     "after_chars": after,
                 }));
             }
+
+            if report
+                .get("local_pressure")
+                .is_some_and(|pressure| !pressure.is_null())
+            {
+                let made_progress = report
+                    .pointer("/local_pressure/made_progress")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                diagnostics.push(json!({
+                    "level": if made_progress { "info" } else { "warning" },
+                    "kind": "remote_compaction_local_pressure",
+                    "message": if made_progress {
+                        "Remote Codex compaction returned history above the harness threshold, so a local pressure pass reduced retained context before the next Spark request."
+                    } else {
+                        "Remote Codex compaction returned history above the harness threshold, and the local pressure pass could not reduce retained context."
+                    },
+                    "remote_after_chars": report.pointer("/local_pressure/remote_after_chars").cloned(),
+                    "final_chars": report.pointer("/local_pressure/final_chars").cloned(),
+                    "made_progress": made_progress,
+                }));
+            }
         }
 
         if self.max_input_chars >= 450_000 {
@@ -517,6 +539,37 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic["kind"] == "weak_compaction_shrink")
         );
+    }
+
+    #[test]
+    fn profiler_reports_remote_compaction_local_pressure() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_compaction(&json!({
+            "method": "responses_compact",
+            "before_chars": 220_000,
+            "after_chars": 100_000,
+            "local_pressure": {
+                "reason": "remote_compaction_above_threshold",
+                "remote_after_chars": 190_000,
+                "final_chars": 100_000,
+                "made_progress": true
+            }
+        }));
+
+        let diagnostics = profiler
+            .to_json()
+            .get("diagnostics")
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("diagnostics");
+
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic["kind"] == "remote_compaction_local_pressure"
+                && diagnostic["remote_after_chars"] == 190_000
+                && diagnostic["final_chars"] == 100_000
+                && diagnostic["made_progress"] == true
+        }));
     }
 
     #[test]

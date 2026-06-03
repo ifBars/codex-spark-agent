@@ -168,6 +168,8 @@ Spark has a 128k context window. This harness has two guardrails:
 
 When history grows past the compaction threshold, the harness first tries Codex-like remote compaction through `/responses/compact`, normalizes returned `compaction_summary` items to Codex-style `compaction` items, and replaces live history with the compacted transcript.
 
+If remote compaction still leaves history above the threshold, the harness applies a local pressure pass before sending the next Spark request. Traces mark this as `local_pressure` under the remote compaction report so those runs can be separated from clean remote compactions during profiling.
+
 If remote compaction fails, local preview compaction trims older tool outputs and older messages. Treat the local fallback as a debugging path, not the preferred steady state.
 
 ## Profiling

@@ -360,7 +360,11 @@ impl AgentRunner {
             trim_codex_generated_tail_to_fit(self.input.clone(), self.max_input_chars)?;
         match self.client.responses_compact(&compact_input, tools).await {
             Ok((remote_output, raw)) => {
-                let replacement = install_remote_compaction_history(&compact_input, remote_output);
+                let (replacement, pressure_report) = compact_remote_history_to_threshold(
+                    &compact_input,
+                    remote_output,
+                    self.compact_after_chars,
+                )?;
                 let after = serde_json::to_string(&replacement)?.len();
                 self.input = replacement;
                 Ok(Some(json!({
@@ -369,6 +373,7 @@ impl AgentRunner {
                     "compact_request_chars": serde_json::to_string(&compact_input)?.len(),
                     "after_chars": after,
                     "threshold_chars": self.compact_after_chars,
+                    "local_pressure": pressure_report,
                     "raw": raw,
                 })))
             }
@@ -388,6 +393,31 @@ impl AgentRunner {
             }
         }
     }
+}
+
+fn compact_remote_history_to_threshold(
+    prompt_input: &[Value],
+    remote_output: Vec<Value>,
+    max_chars: usize,
+) -> Result<(Vec<Value>, Option<Value>)> {
+    let mut replacement = install_remote_compaction_history(prompt_input, remote_output);
+    let remote_after_chars = serde_json::to_string(&replacement)?.len();
+    if max_chars == 0 || remote_after_chars <= max_chars {
+        return Ok((replacement, None));
+    }
+
+    let pressure_report = compact_input_locally(&mut replacement, max_chars)?;
+    let final_chars = serde_json::to_string(&replacement)?.len();
+    Ok((
+        replacement,
+        Some(json!({
+            "reason": "remote_compaction_above_threshold",
+            "remote_after_chars": remote_after_chars,
+            "final_chars": final_chars,
+            "made_progress": pressure_report.is_some(),
+            "fallback": pressure_report,
+        })),
+    ))
 }
 
 fn compact_input_locally(input: &mut Vec<Value>, max_chars: usize) -> Result<Option<Value>> {
@@ -844,6 +874,42 @@ mod tests {
         assert_eq!(replacement.len(), 2);
         assert_eq!(message_text_from_value(&replacement[0]), "first");
         assert_eq!(message_text_from_value(&replacement[1]), "second");
+    }
+
+    #[test]
+    fn remote_compaction_above_threshold_gets_local_pressure_pass() {
+        let remote_output = (0..12)
+            .map(|index| {
+                json!({
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": format!("remote retained message {index} {}", "x".repeat(10_000))
+                    }]
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let (replacement, pressure) =
+            compact_remote_history_to_threshold(&[], remote_output, 90_000)
+                .expect("compact remote history");
+        let final_chars = serde_json::to_string(&replacement)
+            .expect("serialize replacement")
+            .len();
+        let pressure = pressure.expect("local pressure report");
+        let remote_after_chars = pressure["remote_after_chars"]
+            .as_u64()
+            .expect("remote after chars") as usize;
+
+        assert_eq!(pressure["reason"], "remote_compaction_above_threshold");
+        assert!(remote_after_chars > 90_000);
+        assert!(final_chars < remote_after_chars);
+        assert_eq!(pressure["made_progress"], true);
+        assert_eq!(
+            pressure["final_chars"].as_u64().expect("final chars") as usize,
+            final_chars
+        );
     }
 
     #[test]
