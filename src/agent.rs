@@ -899,16 +899,18 @@ fn compact_message_item(item: &mut Value, max_chars: usize) -> Result<bool> {
         let Some(raw) = text.as_str() else {
             continue;
         };
-        if raw.starts_with("[older conversation turn compacted;") {
+        if raw.starts_with("[spark local message compaction]") {
             continue;
         }
         if raw.len() <= max_chars {
             continue;
         }
+        let preview = compact_text(raw, max_chars);
         *text = Value::String(format!(
-            "[older conversation turn compacted; original_chars={}]\n{}",
+            "[spark local message compaction]\noriginal_chars={}\npreview_chars={}\nretained=head+tail\nexact_content=omitted; rerun/read the relevant source if exact text matters\n[/spark local message compaction]\n{}",
             raw.len(),
-            compact_text(raw, max_chars)
+            preview.len(),
+            preview
         ));
         changed = true;
     }
@@ -1159,7 +1161,8 @@ mod tests {
         let retained = message_text_from_value(&replacement[0]);
         assert!(retained.contains("important instruction"));
         assert!(retained.contains("final instruction"));
-        assert!(retained.contains("[older conversation turn compacted;"));
+        assert!(retained.contains("[spark local message compaction]"));
+        assert!(retained.contains("exact_content=omitted"));
     }
 
     #[test]
@@ -1226,7 +1229,27 @@ mod tests {
         assert!(final_chars < 40_000);
         assert!(retained.contains("must keep start"));
         assert!(retained.contains("must keep end"));
-        assert!(retained.contains("[older conversation turn compacted;"));
+        assert!(retained.contains("[spark local message compaction]"));
+        assert!(retained.contains("retained=head+tail"));
+    }
+
+    #[test]
+    fn compact_message_item_is_idempotent_for_local_handoff() {
+        let mut item = json!({
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": format!("first\n{}\nlast", "x".repeat(20_000))
+            }]
+        });
+
+        assert!(compact_message_item(&mut item, 1200).expect("first compact"));
+        let once = message_text_from_value(&item);
+        assert!(!compact_message_item(&mut item, 1200).expect("second compact"));
+        let twice = message_text_from_value(&item);
+
+        assert_eq!(once, twice);
+        assert!(once.contains("preview_chars="));
     }
 
     #[test]
