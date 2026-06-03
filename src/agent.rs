@@ -634,6 +634,20 @@ fn compact_input_locally(input: &mut Vec<Value>, max_chars: usize) -> Result<Opt
                 compacted_messages += 1;
             }
         }
+
+        while serde_json::to_string(input)?.len() > max_chars {
+            let mut made_progress = false;
+            for index in message_indexes.iter().rev().copied() {
+                if compact_message_item(&mut input[index], 1200)? {
+                    compacted_messages += 1;
+                    made_progress = true;
+                    break;
+                }
+            }
+            if !made_progress {
+                break;
+            }
+        }
     }
 
     let after = serde_json::to_string(input)?.len();
@@ -1187,6 +1201,32 @@ mod tests {
                     + report["compacted_messages"].as_u64().unwrap()
             )
         );
+    }
+
+    #[test]
+    fn local_compaction_can_shrink_single_large_recent_user_message() {
+        let mut input = vec![json!({
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": format!("must keep start\n{}\nmust keep end", "x".repeat(180_000))
+            }]
+        })];
+
+        let report = compact_input_locally(&mut input, 40_000)
+            .expect("local compact")
+            .expect("report");
+        let final_chars = serde_json::to_string(&input)
+            .expect("serialize compacted input")
+            .len();
+        let retained = message_text_from_value(&input[0]);
+
+        assert_eq!(report["compacted_tool_outputs"], 0);
+        assert_eq!(report["compacted_messages"], 1);
+        assert!(final_chars < 40_000);
+        assert!(retained.contains("must keep start"));
+        assert!(retained.contains("must keep end"));
+        assert!(retained.contains("[older conversation turn compacted;"));
     }
 
     #[test]
