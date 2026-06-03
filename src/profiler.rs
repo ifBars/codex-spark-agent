@@ -699,6 +699,8 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         required_action_report(&retained_required_actions, &observed_tool_calls);
     let scenario_tool_expectation_report =
         scenario_tool_expectation_report(trace_metadata.as_ref(), &observed_tool_calls);
+    let scenario_call_expectation_report =
+        scenario_tool_call_expectation_report(trace_metadata.as_ref(), &observed_tool_calls);
     if let Some(object) = summary.as_object_mut() {
         object.insert(
             "timeline".to_string(),
@@ -735,6 +737,12 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 report.clone(),
             );
         }
+        if let Some(report) = &scenario_call_expectation_report {
+            object.insert(
+                "profile_scenario_call_expectations".to_string(),
+                report.clone(),
+            );
+        }
         if let Some(diagnostics) = object.get_mut("diagnostics").and_then(Value::as_array_mut) {
             if !required_action_report.missing.is_empty() {
                 diagnostics.push(json!({
@@ -763,6 +771,19 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                     "kind": "profile_scenario_expected_tools_missing",
                     "message": "The trace did not include all native tool groups expected for this profiling scenario.",
                     "missing_groups": report.get("missing_groups").cloned().unwrap_or_else(|| json!([])),
+                }));
+            }
+            if let Some(report) = &scenario_call_expectation_report
+                && report
+                    .get("missing_calls")
+                    .and_then(Value::as_array)
+                    .is_some_and(|missing| !missing.is_empty())
+            {
+                diagnostics.push(json!({
+                    "level": "warning",
+                    "kind": "profile_scenario_expected_calls_missing",
+                    "message": "The trace did not include all exact native tool calls expected for this profiling scenario.",
+                    "missing_calls": report.get("missing_calls").cloned().unwrap_or_else(|| json!([])),
                 }));
             }
         }
@@ -817,6 +838,9 @@ pub fn format_trace_timeline(summary: &Value) -> String {
     if let Some(scenario_tools) = format_scenario_tool_expectations(summary) {
         lines.push(scenario_tools);
     }
+    if let Some(scenario_calls) = format_scenario_call_expectations(summary) {
+        lines.push(scenario_calls);
+    }
 
     let Some(timeline) = summary.get("timeline").and_then(Value::as_array) else {
         lines.push("timeline: none".to_string());
@@ -860,6 +884,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     let fallback_compactions = number_field(summary, "fallback_compactions");
     let local_pressure_compactions = compactions_with_local_pressure(summary);
     let scenario_tools = format_scenario_tools_for_summary_row(summary);
+    let scenario_calls = format_scenario_calls_for_summary_row(summary);
     let diagnostics = diagnostic_kinds(summary);
     let diagnostics = if diagnostics.is_empty() {
         "none".to_string()
@@ -868,7 +893,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     };
 
     format!(
-        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{scenario_tools} diagnostics={diagnostics}"
+        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{scenario_tools}{scenario_calls} diagnostics={diagnostics}"
     )
 }
 
@@ -1055,6 +1080,40 @@ fn format_scenario_tool_expectations(summary: &Value) -> Option<String> {
     ))
 }
 
+fn format_scenario_call_expectations(summary: &Value) -> Option<String> {
+    let report = summary.get("profile_scenario_call_expectations")?;
+    let total = report
+        .get("total_calls")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if total == 0 {
+        return None;
+    }
+    let satisfied = report
+        .get("satisfied_calls")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let missing = report
+        .get("missing_calls")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let calls = report
+        .get("expected_calls")
+        .and_then(Value::as_array)
+        .map(|calls| {
+            calls
+                .iter()
+                .map(format_required_action)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    Some(format!(
+        "scenario-calls: satisfied={satisfied}/{total} missing={missing} calls=[{calls}]"
+    ))
+}
+
 fn format_scenario_tools_for_summary_row(summary: &Value) -> String {
     let Some(report) = summary.get("profile_scenario_tool_expectations") else {
         return String::new();
@@ -1071,6 +1130,24 @@ fn format_scenario_tools_for_summary_row(summary: &Value) -> String {
         .and_then(Value::as_u64)
         .unwrap_or(0);
     format!(" scenario_tools={satisfied}/{total}")
+}
+
+fn format_scenario_calls_for_summary_row(summary: &Value) -> String {
+    let Some(report) = summary.get("profile_scenario_call_expectations") else {
+        return String::new();
+    };
+    let total = report
+        .get("total_calls")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if total == 0 {
+        return String::new();
+    }
+    let satisfied = report
+        .get("satisfied_calls")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    format!(" scenario_calls={satisfied}/{total}")
 }
 
 fn format_tool_group(group: &Value) -> Option<String> {
@@ -1714,6 +1791,59 @@ fn scenario_tool_expectation_report(
     }))
 }
 
+fn scenario_tool_call_expectation_report(
+    metadata: Option<&Value>,
+    calls: &[ObservedToolCall],
+) -> Option<Value> {
+    let expected_calls = metadata?
+        .pointer("/context/profile_scenario/expected_tool_calls")?
+        .as_array()?
+        .iter()
+        .filter_map(required_action_from_value)
+        .collect::<Vec<_>>();
+    if expected_calls.is_empty() {
+        return None;
+    }
+
+    let mut satisfied = Vec::new();
+    let mut missing = Vec::new();
+    for expected in &expected_calls {
+        if calls
+            .iter()
+            .any(|call| required_action_matches_call(expected, call))
+        {
+            satisfied.push(expected.clone());
+        } else {
+            missing.push(expected.clone());
+        }
+    }
+
+    Some(json!({
+        "expected_calls": expected_calls,
+        "total_calls": satisfied.len() + missing.len(),
+        "satisfied_calls": satisfied.len(),
+        "missing_calls": missing,
+        "satisfied_tool_calls": satisfied,
+    }))
+}
+
+fn required_action_from_value(value: &Value) -> Option<RequiredAction> {
+    let tool = value.get("tool").and_then(Value::as_str)?.to_string();
+    Some(RequiredAction {
+        tool,
+        path: value
+            .get("path")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        from: value
+            .get("from")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        to: value.get("to").and_then(Value::as_str).map(str::to_string),
+        recursive: value.get("recursive").and_then(Value::as_bool),
+    })
+}
+
 fn required_action_matches_call(action: &RequiredAction, call: &ObservedToolCall) -> bool {
     if action.tool != call.tool_name {
         return false;
@@ -1876,6 +2006,23 @@ mod tests {
                     "profile_scenario": {
                         "name": "file-ops",
                         "expected_tool_groups": groups,
+                    }
+                }
+            }))
+            .expect("serialize metadata"),
+        )
+        .expect("write metadata");
+    }
+
+    fn write_trace_metadata_with_expected_tool_calls(dir: &Path, calls: Value) {
+        std::fs::write(
+            dir.join("000-trace-metadata.json"),
+            serde_json::to_vec_pretty(&json!({
+                "model": "gpt-5.3-codex-spark",
+                "context": {
+                    "profile_scenario": {
+                        "name": "file-ops",
+                        "expected_tool_calls": calls,
                     }
                 }
             }))
@@ -2500,6 +2647,82 @@ mod tests {
         ));
         assert!(
             format_trace_summary_row(".spark-runs/run-1", &summary).contains("scenario_tools=2/4")
+        );
+    }
+
+    #[test]
+    fn analyze_trace_reports_missing_profile_scenario_exact_tool_calls() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_trace_metadata_with_expected_tool_calls(
+            dir.path(),
+            json!([
+                {
+                    "tool": "fs.rename",
+                    "from": ".spark-scenarios/file-ops/drafts/report-draft.md",
+                    "to": ".spark-scenarios/file-ops/final/report.md"
+                },
+                {
+                    "tool": "fs.read",
+                    "path": ".spark-scenarios/file-ops/final/report.md"
+                }
+            ]),
+        );
+        std::fs::write(
+            dir.path().join("001-response.json"),
+            serde_json::to_vec_pretty(&json!({
+                "raw": {
+                    "events": [
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 0,
+                            "item": {
+                                "type": "function_call",
+                                "name": "fs_rename",
+                                "arguments": "{\"from\":\".spark-scenarios/file-ops/drafts/report-draft.md\",\"to\":\".spark-scenarios/file-sops/final/report.md\"}"
+                            }
+                        },
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 1,
+                            "item": {
+                                "type": "function_call",
+                                "name": "fs_read",
+                                "arguments": "{\"path\":\".spark-scenarios/file-ops/final/report.md\"}"
+                            }
+                        }
+                    ]
+                }
+            }))
+            .expect("serialize response"),
+        )
+        .expect("write response");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["total_calls"],
+            2
+        );
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["satisfied_calls"],
+            1
+        );
+        assert_eq!(
+            summary["profile_scenario_call_expectations"]["missing_calls"][0]["tool"],
+            "fs.rename"
+        );
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "profile_scenario_expected_calls_missing")
+        );
+        assert!(
+            format_trace_timeline(&summary).contains("scenario-calls: satisfied=1/2 missing=1")
+        );
+        assert!(
+            format_trace_summary_row(".spark-runs/run-1", &summary).contains("scenario_calls=1/2")
         );
     }
 

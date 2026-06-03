@@ -272,6 +272,8 @@ When local compaction retained required native file-tool actions, `analyze-trace
 
 Profiling scenarios also store expected native tool groups in trace metadata. `analyze-trace` reports `scenario_tools=<satisfied>/<total>` in summary rows and prints a `scenario-tools` timeline header, so a run that finishes without hard errors can still be checked against the intended harness behavior.
 
+Scenarios can also store exact expected native calls with path arguments. `analyze-trace` reports `scenario_calls=<satisfied>/<total>` and prints a `scenario-calls` timeline header, which separates clean path-following runs from runs where Spark used the right tool type but drifted to a wrong path and later recovered.
+
 `.spark-runs/`, `.spark-profile/`, `.spark/`, `target/`, and local auth/session state are ignored by git.
 
 ## Observed Spark Notes

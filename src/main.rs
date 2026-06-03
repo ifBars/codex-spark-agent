@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use serde_json::json;
+use serde_json::{Value, json};
 
 const DEFAULT_MODEL: &str = "gpt-5.3-codex-spark";
 const DEFAULT_COMPACT_AFTER_CHARS: usize = 160_000;
@@ -466,6 +466,7 @@ async fn main() -> Result<()> {
                         "prompt_chars": total_prompt_chars,
                         "approx_prompt_tokens": total_prompt_chars / APPROX_CHARS_PER_TOKEN,
                         "expected_tool_groups": profile_scenario_expected_tool_groups(scenario),
+                        "expected_tool_calls": profile_scenario_expected_tool_calls(scenario),
                     }
                 })),
             )?;
@@ -949,6 +950,48 @@ fn profile_scenario_expected_tool_groups(scenario: ProfileScenarioKind) -> Vec<V
     }
 }
 
+fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind) -> Vec<Value> {
+    match scenario {
+        ProfileScenarioKind::RepoSurvey => vec![],
+        ProfileScenarioKind::NaturalCompaction | ProfileScenarioKind::CompactionPressure => {
+            vec![json!({
+                "tool": "fs.list",
+                "path": "src",
+                "recursive": false,
+            })]
+        }
+        ProfileScenarioKind::FileEdit => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/file-edit/notes.md",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/file-edit/summary.txt",
+            }),
+        ],
+        ProfileScenarioKind::FileOps => vec![
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/file-ops/drafts/report-draft.md",
+            }),
+            json!({
+                "tool": "fs.rename",
+                "from": ".spark-scenarios/file-ops/drafts/report-draft.md",
+                "to": ".spark-scenarios/file-ops/final/report.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/file-ops/final/report.md",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": ".spark-scenarios/file-ops",
+            }),
+        ],
+    }
+}
+
 async fn handle_skill_command(
     runner: &mut agent::AgentRunner,
     cwd: &PathBuf,
@@ -1135,8 +1178,9 @@ mod tests {
     use super::{
         APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, ProfileScenarioKind, command_args,
         contains_skill_mention, latest_trace_dir, list_trace_dirs, mentioned_skill_names,
-        prepare_profile_scenario, profile_scenario_expected_tool_groups, profile_scenario_prompts,
-        resolve_char_threshold, trace_runs_root,
+        prepare_profile_scenario, profile_scenario_expected_tool_calls,
+        profile_scenario_expected_tool_groups, profile_scenario_prompts, resolve_char_threshold,
+        trace_runs_root,
     };
 
     #[test]
@@ -1357,6 +1401,31 @@ mod tests {
                 vec!["fs.search"]
             ]
         );
+    }
+
+    #[test]
+    fn file_ops_scenario_declares_expected_exact_tool_calls() {
+        let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::FileOps);
+
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[0]["tool"], "fs.write");
+        assert_eq!(
+            calls[0]["path"],
+            ".spark-scenarios/file-ops/drafts/report-draft.md"
+        );
+        assert_eq!(calls[1]["tool"], "fs.rename");
+        assert_eq!(
+            calls[1]["from"],
+            ".spark-scenarios/file-ops/drafts/report-draft.md"
+        );
+        assert_eq!(calls[1]["to"], ".spark-scenarios/file-ops/final/report.md");
+        assert_eq!(calls[2]["tool"], "fs.read");
+        assert_eq!(
+            calls[2]["path"],
+            ".spark-scenarios/file-ops/final/report.md"
+        );
+        assert_eq!(calls[3]["tool"], "fs.search");
+        assert_eq!(calls[3]["path"], ".spark-scenarios/file-ops");
     }
 
     #[test]
