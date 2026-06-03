@@ -13,6 +13,7 @@ pub struct AgentProfiler {
     tool_calls: usize,
     tool_results: usize,
     tool_failures: usize,
+    truncated_tool_results: usize,
     repeated_tool_calls: usize,
     consecutive_duplicate_tool_calls: usize,
     compactions: usize,
@@ -27,6 +28,7 @@ pub struct AgentProfiler {
     compaction_reports: Vec<Value>,
     tool_counts: BTreeMap<String, usize>,
     tool_failure_counts: BTreeMap<String, usize>,
+    tool_truncation_counts: BTreeMap<String, usize>,
     signature_counts: BTreeMap<String, usize>,
     last_signature: Option<String>,
     signals: Vec<Value>,
@@ -81,10 +83,25 @@ impl AgentProfiler {
         turn: usize,
         tool_name: &str,
         ok: bool,
+        data: &Value,
         output_chars: usize,
         error: Option<&str>,
     ) {
         self.tool_results += 1;
+        if tool_result_is_truncated(data) {
+            self.truncated_tool_results += 1;
+            *self
+                .tool_truncation_counts
+                .entry(tool_name.to_string())
+                .or_default() += 1;
+            self.push_signal(json!({
+                "kind": "tool_result_truncated",
+                "turn": turn,
+                "tool": tool_name,
+                "output_chars": output_chars,
+                "truncation": tool_truncation_fields(data),
+            }));
+        }
         if !ok {
             self.tool_failures += 1;
             *self
@@ -150,6 +167,7 @@ impl AgentProfiler {
             "tool_calls": self.tool_calls,
             "tool_results": self.tool_results,
             "tool_failures": self.tool_failures,
+            "truncated_tool_results": self.truncated_tool_results,
             "repeated_tool_calls": self.repeated_tool_calls,
             "consecutive_duplicate_tool_calls": self.consecutive_duplicate_tool_calls,
             "compactions": self.compactions,
@@ -168,6 +186,7 @@ impl AgentProfiler {
             "compaction_reports": self.compaction_reports,
             "tool_counts": self.tool_counts,
             "tool_failure_counts": self.tool_failure_counts,
+            "tool_truncation_counts": self.tool_truncation_counts,
             "diagnostics": diagnostics,
             "recent_signals": self.signals,
         })
@@ -226,6 +245,16 @@ impl AgentProfiler {
                 "message": "One or more native tools returned a failure observation. Inspect recent_signals and tool_failure_counts before changing prompts or model settings.",
                 "count": self.tool_failures,
                 "tool_failure_counts": self.tool_failure_counts,
+            }));
+        }
+
+        if self.truncated_tool_results > 0 {
+            diagnostics.push(json!({
+                "level": "info",
+                "kind": "tool_result_truncation",
+                "message": "One or more tool observations were truncated before being returned to Spark. Inspect recent_signals and rerun narrower commands or searches when exact output matters.",
+                "count": self.truncated_tool_results,
+                "tool_truncation_counts": self.tool_truncation_counts,
             }));
         }
 
@@ -342,6 +371,22 @@ fn context_window_pct(chars: usize) -> f64 {
     (approx_tokens / SPARK_CONTEXT_WINDOW_TOKENS as f64) * 100.0
 }
 
+fn tool_result_is_truncated(data: &Value) -> bool {
+    data.get("truncated").and_then(Value::as_bool) == Some(true)
+        || data.get("stdout_truncated").and_then(Value::as_bool) == Some(true)
+        || data.get("stderr_truncated").and_then(Value::as_bool) == Some(true)
+}
+
+fn tool_truncation_fields(data: &Value) -> Value {
+    let mut fields = Map::new();
+    copy_field(data, &mut fields, "truncated");
+    copy_field(data, &mut fields, "stdout_truncated");
+    copy_field(data, &mut fields, "stderr_truncated");
+    copy_field(data, &mut fields, "stdout_chars");
+    copy_field(data, &mut fields, "stderr_chars");
+    Value::Object(fields)
+}
+
 pub fn tool_signature(tool_name: &str, args: &Value) -> String {
     format!("{tool_name}:{}", canonical_json(args))
 }
@@ -396,6 +441,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                     turn,
                     &result.tool_name,
                     result.ok,
+                    &result.data,
                     result.output_chars,
                     result.error.as_deref(),
                 );
@@ -517,6 +563,7 @@ struct TraceToolResult {
     tool_name: String,
     args: Value,
     ok: bool,
+    data: Value,
     output_chars: usize,
     error: Option<String>,
     cached_observation: bool,
@@ -531,6 +578,7 @@ fn tool_result_from_trace(value: &Value) -> Result<Option<TraceToolResult>> {
     };
     let args = value.get("args").cloned().unwrap_or_else(|| json!({}));
     let ok = result.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let data = result.get("data").cloned().unwrap_or_else(|| json!({}));
     let output_chars = serde_json::to_string(result)?.len();
     let error = result
         .get("error")
@@ -544,6 +592,7 @@ fn tool_result_from_trace(value: &Value) -> Result<Option<TraceToolResult>> {
         tool_name: tool_name.to_string(),
         args,
         ok,
+        data,
         output_chars,
         error,
         cached_observation,
@@ -703,6 +752,7 @@ mod tests {
             1,
             "cmd.exec",
             false,
+            &json!({"code": 1}),
             128,
             Some("command exited with code 1"),
         );
@@ -719,6 +769,45 @@ mod tests {
                 .expect("diagnostics")
                 .iter()
                 .any(|diagnostic| diagnostic["kind"] == "tool_failures")
+        );
+    }
+
+    #[test]
+    fn profiler_records_tool_result_truncation() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_tool_result(
+            1,
+            "cmd.exec",
+            true,
+            &json!({
+                "stdout_truncated": true,
+                "stderr_truncated": false,
+                "stdout_chars": 40_000,
+                "stderr_chars": 0
+            }),
+            24_512,
+            None,
+        );
+
+        let summary = profiler.to_json();
+
+        assert_eq!(summary["truncated_tool_results"], 1);
+        assert_eq!(summary["tool_truncation_counts"]["cmd.exec"], 1);
+        assert_eq!(
+            summary["recent_signals"][0]["kind"],
+            "tool_result_truncated"
+        );
+        assert_eq!(
+            summary["recent_signals"][0]["truncation"]["stdout_truncated"],
+            true
+        );
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "tool_result_truncation")
         );
     }
 
@@ -972,7 +1061,7 @@ mod tests {
                 "tool": "cmd.exec",
                 "result": {
                     "ok": false,
-                    "data": {"code": 1},
+                    "data": {"code": 1, "stdout_truncated": true, "stdout_chars": 40000},
                     "error": "command failed"
                 }
             }))
@@ -999,8 +1088,10 @@ mod tests {
 
         assert_eq!(summary["tool_results"], 2);
         assert_eq!(summary["tool_failures"], 1);
+        assert_eq!(summary["truncated_tool_results"], 1);
         assert_eq!(summary["readonly_tool_cache_hits"], 1);
         assert_eq!(summary["tool_failure_counts"]["cmd.exec"], 1);
+        assert_eq!(summary["tool_truncation_counts"]["cmd.exec"], 1);
     }
 
     #[test]

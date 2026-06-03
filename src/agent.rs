@@ -287,6 +287,7 @@ impl AgentRunner {
                     self.request_seq,
                     &tool_name,
                     result.ok,
+                    &result.data,
                     output.len(),
                     result.error.as_deref(),
                 );
