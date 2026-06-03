@@ -171,10 +171,17 @@ fn fs_read(cwd: &Path, args: Value) -> Result<ToolResult> {
         .unwrap_or(true);
     let content = std::fs::read_to_string(&full)
         .with_context(|| format!("failed to read {}", full.display()))?;
-    let lines = content
+    let total_lines = content.lines().count();
+    let start_index = (offset - 1) as usize;
+    let selected = content
         .lines()
-        .skip((offset - 1) as usize)
+        .skip(start_index)
         .take(limit as usize)
+        .collect::<Vec<_>>();
+    let returned_lines = selected.len();
+    let has_more = start_index.saturating_add(returned_lines) < total_lines;
+    let lines = selected
+        .into_iter()
         .enumerate()
         .map(|(idx, line)| {
             if line_numbers {
@@ -187,7 +194,16 @@ fn fs_read(cwd: &Path, args: Value) -> Result<ToolResult> {
         .join("\n");
     Ok(ToolResult {
         ok: true,
-        data: json!({"path": display_rel(cwd, &full), "content": lines, "offset": offset, "limit": limit}),
+        data: json!({
+            "path": display_rel(cwd, &full),
+            "content": lines,
+            "offset": offset,
+            "limit": limit,
+            "returned_lines": returned_lines,
+            "total_lines": total_lines,
+            "has_more": has_more,
+            "next_offset": has_more.then_some(offset + returned_lines as u64),
+        }),
         error: None,
     })
 }
@@ -215,6 +231,9 @@ fn fs_list(cwd: &Path, args: Value) -> Result<ToolResult> {
             let entry = entry?;
             let path = entry.path();
             let meta = entry.metadata()?;
+            if meta.is_dir() && should_skip_discovery_dir(&root, &path) {
+                continue;
+            }
             entries.push(json!({
                 "path": display_rel(cwd, &path),
                 "is_dir": meta.is_dir(),
@@ -304,7 +323,7 @@ fn fs_search(cwd: &Path, args: Value) -> Result<ToolResult> {
             Err(_) => continue,
         };
         if metadata.is_dir() {
-            if depth > max_depth || is_ignored_dir(&path) {
+            if depth > max_depth || should_skip_discovery_dir(&root, &path) {
                 continue;
             }
             let mut children = std::fs::read_dir(&path)
@@ -576,11 +595,22 @@ fn display_rel(cwd: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn is_ignored_dir(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(".git" | "target" | "node_modules" | ".spark-runs")
-    )
+fn should_skip_discovery_dir(root: &Path, path: &Path) -> bool {
+    path != root
+        && matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some(
+                ".git"
+                    | ".hg"
+                    | ".svn"
+                    | "target"
+                    | "node_modules"
+                    | ".spark"
+                    | ".spark-runs"
+                    | ".spark-profile"
+                    | ".spark-codex"
+            )
+        )
 }
 
 #[cfg(test)]
@@ -622,6 +652,72 @@ mod tests {
                 .expect("snippet")
                 .contains("1: alpha")
         );
+    }
+
+    #[test]
+    fn fs_read_reports_window_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("sample.txt"), "one\ntwo\nthree\n").expect("write sample");
+
+        let result = fs_read(
+            dir.path(),
+            json!({"path": "sample.txt", "offset": 1, "limit": 2}),
+        )
+        .expect("read");
+
+        assert_eq!(result.data["returned_lines"], 2);
+        assert_eq!(result.data["total_lines"], 3);
+        assert_eq!(result.data["has_more"], true);
+        assert_eq!(result.data["next_offset"], 3);
+    }
+
+    #[test]
+    fn fs_list_skips_generated_dirs_during_recursive_discovery() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("target/debug")).expect("create target");
+        std::fs::create_dir_all(dir.path().join(".spark-runs/run-1")).expect("create traces");
+        std::fs::create_dir_all(dir.path().join("src")).expect("create src");
+        std::fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").expect("write src");
+        std::fs::write(dir.path().join("target/debug/generated.txt"), "generated\n")
+            .expect("write generated");
+
+        let result = fs_list(
+            dir.path(),
+            json!({"path": ".", "recursive": true, "max_depth": 4, "limit": 100}),
+        )
+        .expect("list");
+        let entries = result.data["entries"].as_array().expect("entries");
+        let paths = entries
+            .iter()
+            .filter_map(|entry| entry["path"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(paths.contains(&"src"));
+        assert!(paths.contains(&"src/main.rs"));
+        assert!(!paths.iter().any(|path| path.starts_with("target")));
+        assert!(!paths.iter().any(|path| path.starts_with(".spark-runs")));
+    }
+
+    #[test]
+    fn fs_search_skips_generated_dirs_during_recursive_discovery() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("target")).expect("create target");
+        std::fs::create_dir_all(dir.path().join("src")).expect("create src");
+        std::fs::write(dir.path().join("target/generated.txt"), "needle\n").expect("write target");
+        std::fs::write(dir.path().join("src/main.rs"), "needle\n").expect("write src");
+
+        let result = fs_search(
+            dir.path(),
+            json!({"query": "needle", "path": ".", "max_depth": 4}),
+        )
+        .expect("search");
+        let matches = result.data["matches"].as_array().expect("matches");
+        let paths = matches
+            .iter()
+            .filter_map(|entry| entry["path"].as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(paths, vec!["src/main.rs"]);
     }
 
     #[test]
