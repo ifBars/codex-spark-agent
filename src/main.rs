@@ -465,6 +465,7 @@ async fn main() -> Result<()> {
                         "prompt_count": prompts.len(),
                         "prompt_chars": total_prompt_chars,
                         "approx_prompt_tokens": total_prompt_chars / APPROX_CHARS_PER_TOKEN,
+                        "expected_tool_groups": profile_scenario_expected_tool_groups(scenario),
                     }
                 })),
             )?;
@@ -924,6 +925,30 @@ fn natural_compaction_scenario_prompts(target_tokens: usize) -> Result<Vec<Strin
     Ok(prompts)
 }
 
+fn profile_scenario_expected_tool_groups(scenario: ProfileScenarioKind) -> Vec<Vec<&'static str>> {
+    match scenario {
+        ProfileScenarioKind::RepoSurvey => {
+            vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
+        }
+        ProfileScenarioKind::NaturalCompaction | ProfileScenarioKind::CompactionPressure => {
+            vec![vec!["fs.list"]]
+        }
+        ProfileScenarioKind::FileEdit => vec![
+            vec!["fs.read"],
+            vec!["fs.edit", "fs.replace"],
+            vec!["fs.write"],
+        ],
+        ProfileScenarioKind::FileOps => {
+            vec![
+                vec!["fs.write"],
+                vec!["fs.rename"],
+                vec!["fs.read"],
+                vec!["fs.search"],
+            ]
+        }
+    }
+}
+
 async fn handle_skill_command(
     runner: &mut agent::AgentRunner,
     cwd: &PathBuf,
@@ -1110,8 +1135,8 @@ mod tests {
     use super::{
         APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, ProfileScenarioKind, command_args,
         contains_skill_mention, latest_trace_dir, list_trace_dirs, mentioned_skill_names,
-        prepare_profile_scenario, profile_scenario_prompts, resolve_char_threshold,
-        trace_runs_root,
+        prepare_profile_scenario, profile_scenario_expected_tool_groups, profile_scenario_prompts,
+        resolve_char_threshold, trace_runs_root,
     };
 
     #[test]
@@ -1317,6 +1342,21 @@ mod tests {
 
         assert!(root.join("drafts").is_dir());
         assert!(manifest.contains("expected_final=final/report.md"));
+    }
+
+    #[test]
+    fn file_ops_scenario_declares_expected_tool_groups() {
+        let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::FileOps);
+
+        assert_eq!(
+            groups,
+            vec![
+                vec!["fs.write"],
+                vec!["fs.rename"],
+                vec!["fs.read"],
+                vec!["fs.search"]
+            ]
+        );
     }
 
     #[test]

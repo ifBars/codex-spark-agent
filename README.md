@@ -270,6 +270,8 @@ If a run fails after starting, the harness saves a `*-error.json` trace entry an
 
 When local compaction retained required native file-tool actions, `analyze-trace` compares those actions with observed tool calls and reports executed, missing, and delayed required actions. `spark analyze-trace --timeline` also prints a `required-actions` header so post-compaction detours are visible without opening raw JSON.
 
+Profiling scenarios also store expected native tool groups in trace metadata. `analyze-trace` reports `scenario_tools=<satisfied>/<total>` in summary rows and prints a `scenario-tools` timeline header, so a run that finishes without hard errors can still be checked against the intended harness behavior.
+
 `.spark-runs/`, `.spark-profile/`, `.spark/`, `target/`, and local auth/session state are ignored by git.
 
 ## Observed Spark Notes
