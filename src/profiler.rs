@@ -651,8 +651,11 @@ pub fn format_trace_timeline(summary: &Value) -> String {
             .and_then(Value::as_u64)
             .map(|value| value.to_string())
             .unwrap_or_else(|| "?".to_string());
+        let scenario = trace_scenario_name(metadata)
+            .map(|name| format!(" scenario={name}"))
+            .unwrap_or_default();
         lines.push(format!(
-            "trace model={model} max_turns={max_turns} compact_after_chars={compact_after} max_input_chars={max_input}"
+            "trace model={model}{scenario} max_turns={max_turns} compact_after_chars={compact_after} max_input_chars={max_input}"
         ));
     } else {
         lines.push("trace".to_string());
@@ -690,6 +693,11 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
         .pointer("/trace_metadata/model")
         .and_then(Value::as_str)
         .unwrap_or("unknown-model");
+    let scenario = summary
+        .get("trace_metadata")
+        .and_then(trace_scenario_name)
+        .map(|name| format!(" scenario={name}"))
+        .unwrap_or_default();
     let requests = number_field(summary, "requests");
     let max_tokens = number_field(summary, "max_approx_input_tokens");
     let context_pct = summary
@@ -711,8 +719,14 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     };
 
     format!(
-        "{label} | model={model} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} diagnostics={diagnostics}"
+        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} diagnostics={diagnostics}"
     )
+}
+
+fn trace_scenario_name(metadata: &Value) -> Option<&str> {
+    metadata
+        .pointer("/context/profile_scenario/name")
+        .and_then(Value::as_str)
 }
 
 fn number_field(summary: &Value, key: &str) -> String {
@@ -1637,6 +1651,7 @@ mod tests {
         let summary = json!({
             "trace_metadata": {
                 "model": "gpt-5.3-codex-spark",
+                "context": {"profile_scenario": {"name": "compaction-pressure"}},
                 "max_turns": null,
                 "compact_after_chars": 160000,
                 "max_input_chars": 500000
@@ -1666,7 +1681,7 @@ mod tests {
 
         let output = format_trace_timeline(&summary);
 
-        assert!(output.contains("trace model=gpt-5.3-codex-spark"));
+        assert!(output.contains("trace model=gpt-5.3-codex-spark scenario=compaction-pressure"));
         assert!(output.contains("diagnostics: tool_failures"));
         assert!(output.contains("turn 1: input=120000 chars (~30000 tok, 23.4%)"));
         assert!(output.contains("calls=[fs.read]"));
@@ -1678,7 +1693,10 @@ mod tests {
     #[test]
     fn formats_trace_summary_row_for_run_comparison() {
         let summary = json!({
-            "trace_metadata": {"model": "gpt-5.3-codex-spark"},
+            "trace_metadata": {
+                "model": "gpt-5.3-codex-spark",
+                "context": {"profile_scenario": {"name": "repo-survey"}}
+            },
             "requests": 3,
             "max_approx_input_tokens": 42000,
             "max_context_window_pct": 32.8125,
@@ -1693,7 +1711,7 @@ mod tests {
 
         let row = format_trace_summary_row(".spark-runs/run-1", &summary);
 
-        assert!(row.contains(".spark-runs/run-1 | model=gpt-5.3-codex-spark"));
+        assert!(row.contains(".spark-runs/run-1 | model=gpt-5.3-codex-spark scenario=repo-survey"));
         assert!(row.contains("requests=3"));
         assert!(row.contains("max_tokens=42000 (32.8%)"));
         assert!(row.contains("tools=7 failures=1"));

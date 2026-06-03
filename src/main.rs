@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use serde_json::json;
 
 const DEFAULT_MODEL: &str = "gpt-5.3-codex-spark";
 const DEFAULT_COMPACT_AFTER_CHARS: usize = 160_000;
@@ -159,6 +160,15 @@ enum ProfileScenarioKind {
     CompactionPressure,
 }
 
+impl ProfileScenarioKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::RepoSurvey => "repo-survey",
+            Self::CompactionPressure => "compaction-pressure",
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -238,6 +248,7 @@ async fn main() -> Result<()> {
                 interactive,
                 session_name.clone(),
                 new_session,
+                None,
             )?;
             let session_path = session_name
                 .as_deref()
@@ -293,6 +304,7 @@ async fn main() -> Result<()> {
                     false,
                     None,
                     false,
+                    None,
                 )?;
                 for source in skills::discover_sources(&cwd)? {
                     let skill = compile_skill_cached(&runner, &cwd, &source.name, true).await?;
@@ -397,19 +409,36 @@ async fn main() -> Result<()> {
                 false,
                 None,
                 false,
+                Some(json!({
+                    "profile_scenario": {
+                        "name": scenario.name(),
+                        "target_tokens": target_tokens,
+                        "prompt_chars": prompt.len(),
+                        "approx_prompt_tokens": prompt.len() / APPROX_CHARS_PER_TOKEN,
+                    }
+                })),
             )?;
-            runner.run(&prompt).await?;
+            let run_result = runner.run(&prompt).await;
             if !no_trace {
-                let latest = latest_trace_dir(&trace_runs_root(&cwd))?;
-                let summary = profiler::analyze_trace(&latest)?;
-                println!(
-                    "{}",
-                    profiler::format_trace_summary_row(
-                        &display_trace_dir(&cwd, &latest).display().to_string(),
-                        &summary,
-                    )
-                );
+                match latest_trace_dir(&trace_runs_root(&cwd)).and_then(|latest| {
+                    let summary = profiler::analyze_trace(&latest)?;
+                    Ok((latest, summary))
+                }) {
+                    Ok((latest, summary)) => {
+                        println!(
+                            "{}",
+                            profiler::format_trace_summary_row(
+                                &display_trace_dir(&cwd, &latest).display().to_string(),
+                                &summary,
+                            )
+                        );
+                    }
+                    Err(error) => {
+                        eprintln!("warning: failed to summarize scenario trace: {error:#}");
+                    }
+                }
             }
+            run_result?;
         }
     }
 

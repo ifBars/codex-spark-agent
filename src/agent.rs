@@ -62,6 +62,7 @@ impl AgentRunner {
         interactive: bool,
         session_name: Option<String>,
         new_session: bool,
+        trace_context: Option<Value>,
     ) -> Result<Self> {
         if auth::is_expired(&auth_tokens) {
             println!("Refreshing ChatGPT token...");
@@ -81,6 +82,7 @@ impl AgentRunner {
             interactive,
             session_name,
             new_session,
+            context: trace_context,
         };
 
         Ok(Self {
@@ -923,6 +925,7 @@ struct TraceMetadata {
     interactive: bool,
     session_name: Option<String>,
     new_session: bool,
+    context: Option<Value>,
 }
 
 impl TraceWriter {
@@ -945,6 +948,7 @@ impl TraceWriter {
                 "interactive": metadata.interactive,
                 "session": metadata.session_name,
                 "new_session": metadata.new_session,
+                "context": metadata.context,
                 "compact_after_chars": metadata.compact_after_chars,
                 "compact_after_approx_tokens": approx_token_count_from_chars(metadata.compact_after_chars),
                 "max_input_chars": metadata.max_input_chars,
@@ -1287,6 +1291,12 @@ mod tests {
                 interactive: true,
                 session_name: Some("demo-session".to_string()),
                 new_session: true,
+                context: Some(json!({
+                    "profile_scenario": {
+                        "name": "compaction-pressure",
+                        "target_tokens": 45_000
+                    }
+                })),
             },
         )
         .expect("trace writer");
@@ -1302,6 +1312,10 @@ mod tests {
         assert_eq!(metadata["interactive"], true);
         assert_eq!(metadata["session"], "demo-session");
         assert_eq!(metadata["new_session"], true);
+        assert_eq!(
+            metadata["context"]["profile_scenario"]["name"],
+            "compaction-pressure"
+        );
     }
 
     #[test]
