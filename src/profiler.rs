@@ -480,12 +480,35 @@ pub fn tool_signature(tool_name: &str, args: &Value) -> String {
     format!("{tool_name}:{}", canonical_json(args))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct RequiredAction {
+    tool: String,
+    path: Option<String>,
+    recursive: Option<bool>,
+}
+
+#[derive(Debug, Clone)]
+struct ObservedToolCall {
+    tool_name: String,
+    args: Value,
+}
+
+#[derive(Debug)]
+struct RequiredActionReport {
+    actions: Vec<RequiredAction>,
+    executed: Vec<RequiredAction>,
+    missing: Vec<RequiredAction>,
+    calls_before_first_required_action: usize,
+}
+
 pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let mut profiler = AgentProfiler::default();
     let mut embedded_profile_summary = None;
     let mut embedded_profile_summary_rank = 0usize;
     let mut trace_metadata = None;
     let mut timeline = BTreeMap::<usize, Map<String, Value>>::new();
+    let mut retained_required_actions = Vec::<RequiredAction>::new();
+    let mut observed_tool_calls = Vec::<ObservedToolCall>::new();
     let mut files = std::fs::read_dir(dir)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
@@ -528,6 +551,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 "context_window_pct".to_string(),
                 json!(context_window_pct(input_chars)),
             );
+            retained_required_actions.extend(required_actions_from_request_input(&value));
         } else if name.ends_with("-response.json") {
             if let Some(duration_ms) = value.get("duration_ms").and_then(Value::as_u64) {
                 profiler.record_request_duration(turn, duration_ms);
@@ -536,6 +560,10 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             }
             for (tool_name, args) in function_calls_from_trace_response(&value) {
                 profiler.record_tool_call(turn, &tool_name, &args);
+                observed_tool_calls.push(ObservedToolCall {
+                    tool_name: tool_name.clone(),
+                    args: args.clone(),
+                });
                 push_timeline_array(
                     &mut timeline,
                     turn,
@@ -611,7 +639,17 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         }
     }
 
+    retained_required_actions.sort_by(|left, right| {
+        left.tool
+            .cmp(&right.tool)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.recursive.cmp(&right.recursive))
+    });
+    retained_required_actions.dedup();
+
     let mut summary = profiler.to_json();
+    let required_action_report =
+        required_action_report(&retained_required_actions, &observed_tool_calls);
     if let Some(object) = summary.as_object_mut() {
         object.insert(
             "timeline".to_string(),
@@ -625,6 +663,40 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 "embedded_profile_summary".to_string(),
                 sanitize_profile_summary(embedded),
             );
+        }
+        object.insert(
+            "retained_required_actions".to_string(),
+            json!(&required_action_report.actions),
+        );
+        object.insert(
+            "retained_required_actions_executed".to_string(),
+            json!(&required_action_report.executed),
+        );
+        object.insert(
+            "retained_required_actions_missing".to_string(),
+            json!(&required_action_report.missing),
+        );
+        object.insert(
+            "tool_calls_before_first_required_action".to_string(),
+            json!(required_action_report.calls_before_first_required_action),
+        );
+        if let Some(diagnostics) = object.get_mut("diagnostics").and_then(Value::as_array_mut) {
+            if !required_action_report.missing.is_empty() {
+                diagnostics.push(json!({
+                    "level": "warning",
+                    "kind": "retained_required_actions_missing",
+                    "message": "One or more required actions retained by local compaction were not observed in the trace tool calls.",
+                    "missing": &required_action_report.missing,
+                }));
+            }
+            if required_action_report.calls_before_first_required_action > 0 {
+                diagnostics.push(json!({
+                    "level": "info",
+                    "kind": "retained_required_action_detour",
+                    "message": "Spark made tool calls before executing the first required action retained by local compaction.",
+                    "calls_before_first_required_action": required_action_report.calls_before_first_required_action,
+                }));
+            }
         }
     }
     Ok(summary)
@@ -1197,6 +1269,113 @@ fn tool_result_from_trace(value: &Value) -> Result<Option<TraceToolResult>> {
     }))
 }
 
+fn required_actions_from_request_input(value: &Value) -> Vec<RequiredAction> {
+    let mut actions = Vec::new();
+    for text in request_input_texts(value) {
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(action) = line
+                .strip_prefix("action_")
+                .and_then(|line| line.split_once('='))
+                .and_then(|(_, action)| parse_required_action(action))
+            {
+                actions.push(action);
+            }
+        }
+    }
+    actions.sort_by(|left, right| {
+        left.tool
+            .cmp(&right.tool)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.recursive.cmp(&right.recursive))
+    });
+    actions.dedup();
+    actions
+}
+
+fn request_input_texts(value: &Value) -> Vec<String> {
+    value
+        .get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn parse_required_action(raw: &str) -> Option<RequiredAction> {
+    let mut tool = None;
+    let mut path = None;
+    let mut recursive = None;
+    for part in raw.split_whitespace() {
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
+        match key {
+            "tool" => tool = Some(value.to_string()),
+            "path" => path = Some(value.trim_matches('`').to_string()),
+            "recursive" => match value {
+                "true" => recursive = Some(true),
+                "false" => recursive = Some(false),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    Some(RequiredAction {
+        tool: tool?,
+        path,
+        recursive,
+    })
+}
+
+fn required_action_report(
+    actions: &[RequiredAction],
+    calls: &[ObservedToolCall],
+) -> RequiredActionReport {
+    let mut executed = Vec::new();
+    let mut missing = Vec::new();
+    let mut first_required_call_index = None;
+    for action in actions {
+        if let Some(index) = calls
+            .iter()
+            .position(|call| required_action_matches_call(action, call))
+        {
+            executed.push(action.clone());
+            first_required_call_index =
+                Some(first_required_call_index.map_or(index, |current: usize| current.min(index)));
+        } else {
+            missing.push(action.clone());
+        }
+    }
+    RequiredActionReport {
+        actions: actions.to_vec(),
+        executed,
+        missing,
+        calls_before_first_required_action: first_required_call_index.unwrap_or(0),
+    }
+}
+
+fn required_action_matches_call(action: &RequiredAction, call: &ObservedToolCall) -> bool {
+    if action.tool != call.tool_name {
+        return false;
+    }
+    if let Some(path) = &action.path
+        && call.args.get("path").and_then(Value::as_str) != Some(path.as_str())
+    {
+        return false;
+    }
+    if let Some(recursive) = action.recursive
+        && call.args.get("recursive").and_then(Value::as_bool) != Some(recursive)
+    {
+        return false;
+    }
+    true
+}
+
 fn function_calls_from_trace_response(value: &Value) -> Vec<(String, Value)> {
     output_items_from_trace_response(value)
         .into_iter()
@@ -1293,9 +1472,34 @@ fn canonical_value(value: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use serde_json::json;
 
     use super::*;
+
+    fn write_request_with_required_action(dir: &Path, action: &str) {
+        write_turn_request_with_required_action(dir, 1, action);
+    }
+
+    fn write_turn_request_with_required_action(dir: &Path, turn: usize, action: &str) {
+        std::fs::write(
+            dir.join(format!("{turn:03}-request-input.json")),
+            serde_json::to_vec_pretty(&json!({
+                "input": [{
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": format!(
+                            "[spark local message compaction]\nrequired_actions=1\n{action}\n[/spark local message compaction]"
+                        )
+                    }]
+                }]
+            }))
+            .expect("serialize request"),
+        )
+        .expect("write request");
+    }
 
     #[test]
     fn tool_signature_is_stable_for_object_key_order() {
@@ -1719,6 +1923,105 @@ mod tests {
         assert_eq!(summary["timeline"][0]["request_duration_ms"], 1234);
         assert_eq!(summary["timeline"][0]["response_text_chars"], 4);
         assert_eq!(summary["timeline"][0]["tool_calls"][0]["tool"], "fs.read");
+    }
+
+    #[test]
+    fn analyze_trace_matches_retained_required_actions_to_tool_calls() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_request_with_required_action(
+            dir.path(),
+            "action_1=tool=fs.list path=src recursive=false",
+        );
+        write_turn_request_with_required_action(
+            dir.path(),
+            2,
+            "action_1=tool=fs.list path=src recursive=false",
+        );
+        std::fs::write(
+            dir.path().join("001-response.json"),
+            serde_json::to_vec_pretty(&json!({
+                "raw": {
+                    "events": [{
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": {
+                            "type": "function_call",
+                            "name": "fs_list",
+                            "arguments": "{\"path\":\"src\",\"recursive\":false}"
+                        }
+                    }]
+                }
+            }))
+            .expect("serialize response"),
+        )
+        .expect("write response");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(
+            summary["retained_required_actions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(summary["retained_required_actions"][0]["tool"], "fs.list");
+        assert_eq!(
+            summary["retained_required_actions_executed"][0]["path"],
+            "src"
+        );
+        assert_eq!(summary["retained_required_actions_missing"], json!([]));
+        assert_eq!(summary["tool_calls_before_first_required_action"], 0);
+    }
+
+    #[test]
+    fn analyze_trace_reports_detour_before_retained_required_action() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_request_with_required_action(
+            dir.path(),
+            "action_1=tool=fs.list path=src recursive=false",
+        );
+        std::fs::write(
+            dir.path().join("001-response.json"),
+            serde_json::to_vec_pretty(&json!({
+                "raw": {
+                    "events": [
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 0,
+                            "item": {
+                                "type": "function_call",
+                                "name": "fs_list",
+                                "arguments": "{\"path\":\".\",\"recursive\":false}"
+                            }
+                        },
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 1,
+                            "item": {
+                                "type": "function_call",
+                                "name": "fs_list",
+                                "arguments": "{\"path\":\"src\",\"recursive\":false}"
+                            }
+                        }
+                    ]
+                }
+            }))
+            .expect("serialize response"),
+        )
+        .expect("write response");
+
+        let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+        assert_eq!(summary["retained_required_actions_missing"], json!([]));
+        assert_eq!(summary["tool_calls_before_first_required_action"], 1);
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "retained_required_action_detour")
+        );
     }
 
     #[test]
