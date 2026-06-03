@@ -24,6 +24,8 @@ pub struct AgentProfiler {
     remote_compactions: usize,
     fallback_compactions: usize,
     readonly_tool_cache_hits: usize,
+    #[serde(default)]
+    mutation_parent_dir_creations: usize,
     max_input_chars: usize,
     total_input_chars: usize,
     input_chars_by_request: Vec<usize>,
@@ -36,6 +38,8 @@ pub struct AgentProfiler {
     tool_counts: BTreeMap<String, usize>,
     tool_failure_counts: BTreeMap<String, usize>,
     tool_truncation_counts: BTreeMap<String, usize>,
+    #[serde(default)]
+    mutation_parent_dir_creation_counts: BTreeMap<String, usize>,
     tool_duration_ms_by_tool: BTreeMap<String, u64>,
     max_tool_duration_ms_by_tool: BTreeMap<String, u64>,
     signature_counts: BTreeMap<String, usize>,
@@ -144,6 +148,21 @@ impl AgentProfiler {
                 "truncation": tool_truncation_fields(data),
             }));
         }
+        if let Some(created_parent_dirs) = created_parent_dirs(data)
+            && !created_parent_dirs.is_empty()
+        {
+            self.mutation_parent_dir_creations += created_parent_dirs.len();
+            *self
+                .mutation_parent_dir_creation_counts
+                .entry(tool_name.to_string())
+                .or_default() += created_parent_dirs.len();
+            self.push_signal(json!({
+                "kind": "mutation_created_parent_dirs",
+                "turn": turn,
+                "tool": tool_name,
+                "created_parent_dirs": created_parent_dirs,
+            }));
+        }
         if !ok {
             self.tool_failures += 1;
             *self
@@ -219,6 +238,7 @@ impl AgentProfiler {
             "remote_compactions": self.remote_compactions,
             "fallback_compactions": self.fallback_compactions,
             "readonly_tool_cache_hits": self.readonly_tool_cache_hits,
+            "mutation_parent_dir_creations": self.mutation_parent_dir_creations,
             "max_input_chars": self.max_input_chars,
             "approx_context_window_tokens": SPARK_CONTEXT_WINDOW_TOKENS,
             "max_approx_input_tokens": approx_token_count_from_chars(self.max_input_chars),
@@ -236,6 +256,7 @@ impl AgentProfiler {
             "tool_counts": self.tool_counts,
             "tool_failure_counts": self.tool_failure_counts,
             "tool_truncation_counts": self.tool_truncation_counts,
+            "mutation_parent_dir_creation_counts": self.mutation_parent_dir_creation_counts,
             "tool_duration_ms_by_tool": self.tool_duration_ms_by_tool,
             "max_tool_duration_ms_by_tool": self.max_tool_duration_ms_by_tool,
             "diagnostics": diagnostics,
@@ -307,6 +328,16 @@ impl AgentProfiler {
                 "message": "One or more tool observations were truncated before being returned to Spark. Inspect recent_signals and rerun narrower commands or searches when exact output matters.",
                 "count": self.truncated_tool_results,
                 "tool_truncation_counts": self.tool_truncation_counts,
+            }));
+        }
+
+        if self.mutation_parent_dir_creations > 0 {
+            diagnostics.push(json!({
+                "level": "info",
+                "kind": "mutation_created_parent_dirs",
+                "message": "One or more native file mutations created parent directories. Inspect recent_signals when unexpected path segments may indicate a typo.",
+                "count": self.mutation_parent_dir_creations,
+                "tool_counts": self.mutation_parent_dir_creation_counts,
             }));
         }
 
@@ -466,6 +497,17 @@ fn tool_result_timed_out(data: &Value) -> bool {
     data.get("timed_out").and_then(Value::as_bool) == Some(true)
 }
 
+fn created_parent_dirs(data: &Value) -> Option<Vec<String>> {
+    Some(
+        data.get("created_parent_dirs")?
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
 fn tool_truncation_fields(data: &Value) -> Value {
     let mut fields = Map::new();
     copy_field(data, &mut fields, "truncated");
@@ -608,6 +650,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                         "cached_observation": result.cached_observation,
                         "truncated": tool_result_is_truncated(&result.data),
                         "timed_out": tool_result_timed_out(&result.data),
+                        "created_parent_dirs": created_parent_dirs(&result.data).unwrap_or_default(),
                     }),
                 );
             }
@@ -1199,12 +1242,25 @@ fn format_tool_results(results: &[Value]) -> String {
             {
                 suffix.push("timeout");
             }
+            let parent_suffix = result
+                .get("created_parent_dirs")
+                .and_then(Value::as_array)
+                .filter(|dirs| !dirs.is_empty())
+                .map(|dirs| {
+                    let dirs = dirs
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("|");
+                    format!(" parents={dirs}")
+                })
+                .unwrap_or_default();
             let suffix = if suffix.is_empty() {
                 String::new()
             } else {
                 format!(" {}", suffix.join("+"))
             };
-            format!("{tool}:{ok} {duration_ms}ms {output_chars} chars{suffix}")
+            format!("{tool}:{ok} {duration_ms}ms {output_chars} chars{suffix}{parent_suffix}")
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -1944,6 +2000,43 @@ mod tests {
     }
 
     #[test]
+    fn profiler_records_parent_dirs_created_by_mutation_tools() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_tool_result(
+            3,
+            "fs.rename",
+            true,
+            &json!({"created_parent_dirs": ["nested", "nested/final"]}),
+            128,
+            1,
+            None,
+        );
+        let summary = profiler.to_json();
+
+        assert_eq!(summary["mutation_parent_dir_creations"], 2);
+        assert_eq!(
+            summary["mutation_parent_dir_creation_counts"]["fs.rename"],
+            2
+        );
+        assert_eq!(
+            summary["recent_signals"][0]["kind"],
+            "mutation_created_parent_dirs"
+        );
+        assert_eq!(
+            summary["recent_signals"][0]["created_parent_dirs"],
+            json!(["nested", "nested/final"])
+        );
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "mutation_created_parent_dirs")
+        );
+    }
+
+    #[test]
     fn profiler_records_tool_duration_and_slow_diagnostics() {
         let mut profiler = AgentProfiler::default();
 
@@ -2498,7 +2591,8 @@ mod tests {
                     "output_chars": 512,
                     "cached_observation": true,
                     "truncated": false,
-                    "timed_out": true
+                    "timed_out": true,
+                    "created_parent_dirs": ["nested"]
                 }],
                 "compactions": [{
                     "method": "responses_compact",
@@ -2519,7 +2613,9 @@ mod tests {
         assert!(output.contains("required-actions: total=1 executed=1 missing=0 detours_before_first=0 actions=[tool=fs.list path=src recursive=false]"));
         assert!(output.contains("turn 1: input=120000 chars (~30000 tok, 23.4%)"));
         assert!(output.contains("calls=[fs.read]"));
-        assert!(output.contains("results=[fs.read:ok 9ms 512 chars cached+timeout]"));
+        assert!(
+            output.contains("results=[fs.read:ok 9ms 512 chars cached+timeout parents=nested]")
+        );
         assert!(output.contains(
             "compactions=[responses_compact 200000->90000 remote=210000 105.0% local_pressure=210000->90000]"
         ));
@@ -2667,7 +2763,7 @@ mod tests {
                 "duration_ms": 4,
                 "result": {
                     "ok": true,
-                    "data": {"path": "README.md", "cached_observation": true},
+                    "data": {"path": "README.md", "cached_observation": true, "created_parent_dirs": ["nested"]},
                     "error": null
                 }
             }))
@@ -2698,6 +2794,10 @@ mod tests {
         assert_eq!(
             summary["timeline"][0]["tool_results"][1]["cached_observation"],
             true
+        );
+        assert_eq!(
+            summary["timeline"][0]["tool_results"][1]["created_parent_dirs"],
+            json!(["nested"])
         );
     }
 

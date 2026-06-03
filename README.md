@@ -248,7 +248,7 @@ Use `--profile` for a compact summary after a prompt:
 - consecutive duplicate calls,
 - read-only cache hits,
 - remote/local compaction counts,
-- derived diagnostics for request failures, repeated tool loops, weak or expanding compaction, and near-limit context pressure.
+- derived diagnostics for request failures, repeated tool loops, mutation-created parent dirs, weak or expanding compaction, and near-limit context pressure.
 
 Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`. Use `spark traces` to list recent trace directories, or `spark traces --summary` to compare recent runs by request size, latency, tools, compactions, and diagnostics. Use `spark analyze-trace` without a path to summarize the latest trace.
 
