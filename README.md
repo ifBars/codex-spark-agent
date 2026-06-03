@@ -197,6 +197,8 @@ Tool schemas are intentionally small. The harness accepts JSON-string or object 
 
 Repeated read-only observations from `fs.read`, `fs.list`, and `fs.search` are served from a per-run cache, including failed observations such as missing files. File mutation tools and `cmd.exec` clear that cache so Spark can retry after the workspace may have changed.
 
+Native tool invocation errors return structured observations with `error_kind`, `message`, `tool`, `args_shape`, and a retry `hint`. This gives Spark a compact recovery path when it sends incomplete arguments, picks a stale path, or calls an unavailable tool.
+
 `cmd.exec` bounds stdout and stderr before returning them to Spark. Long streams keep their head and tail plus `stdout_chars`/`stderr_chars` and truncation flags, which keeps command-heavy runs from poisoning the next request with accidental massive output. Timed-out commands are returned as failed tool observations with `timed_out` and `timeout_ms` fields. Non-zero exits keep stdout/stderr and add an explicit error such as `command exited with code 7` so Spark can recover or choose a narrower command.
 
 ## Compaction

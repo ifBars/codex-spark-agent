@@ -131,11 +131,11 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
 }
 
 pub async fn invoke(cwd: &Path, tool_name: &str, args: Value) -> ToolResult {
-    match invoke_inner(cwd, tool_name, args).await {
+    match invoke_inner(cwd, tool_name, args.clone()).await {
         Ok(result) => result,
         Err(error) => ToolResult {
             ok: false,
-            data: json!({}),
+            data: structured_tool_error(tool_name, &args, &error.to_string()),
             error: Some(error.to_string()),
         },
     }
@@ -151,6 +151,78 @@ async fn invoke_inner(cwd: &Path, tool_name: &str, args: Value) -> Result<ToolRe
         "fs.edit" => fs_edit(cwd, args),
         "cmd.exec" => cmd_exec(cwd, args).await,
         _ => anyhow::bail!("unknown tool: {tool_name}"),
+    }
+}
+
+fn structured_tool_error(tool_name: &str, args: &Value, message: &str) -> Value {
+    let kind = tool_error_kind(message);
+    json!({
+        "error_kind": kind,
+        "message": message,
+        "tool": tool_name,
+        "args_shape": args_shape(args),
+        "hint": tool_error_hint(kind),
+    })
+}
+
+fn args_shape(args: &Value) -> Value {
+    match args {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), Value::String(value_kind(value).to_string())))
+                .collect(),
+        ),
+        other => json!({"_root": value_kind(other)}),
+    }
+}
+
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn tool_error_kind(message: &str) -> &'static str {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("unknown tool") {
+        "unknown_tool"
+    } else if lower.contains(" is required")
+        || lower.contains("must not be empty")
+        || lower.contains("expected")
+    {
+        "invalid_arguments"
+    } else if lower.contains("escapes workspace") {
+        "workspace_escape"
+    } else if lower.contains("failed to read")
+        || lower.contains("failed to list")
+        || lower.contains("old text not found")
+        || lower.contains("no such file")
+        || lower.contains("cannot find the file")
+    {
+        "not_found_or_unavailable"
+    } else {
+        "tool_error"
+    }
+}
+
+fn tool_error_hint(kind: &str) -> &'static str {
+    match kind {
+        "unknown_tool" => "Use one of the advertised native tool names exactly.",
+        "invalid_arguments" => {
+            "Retry the same tool with the required schema fields and valid values."
+        }
+        "workspace_escape" => "Use a path inside the configured workspace.",
+        "not_found_or_unavailable" => {
+            "List or search the workspace to find the correct path, then retry with a narrower tool call."
+        }
+        _ => {
+            "Inspect the message, adjust the tool arguments, and retry if the task still requires this tool."
+        }
     }
 }
 
@@ -728,6 +800,49 @@ mod tests {
         assert_eq!(names.len(), 7);
         assert!(!names.iter().any(|name| name == "agent.complete"));
         assert!(names.iter().any(|name| name == "cmd.exec"));
+    }
+
+    #[tokio::test]
+    async fn invoke_returns_structured_error_for_missing_required_args() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let result = invoke(dir.path(), "fs.read", json!({"limit": 10})).await;
+
+        assert!(!result.ok);
+        assert_eq!(result.data["error_kind"], "invalid_arguments");
+        assert_eq!(result.data["tool"], "fs.read");
+        assert_eq!(result.data["args_shape"]["limit"], "number");
+        assert!(
+            result.data["hint"]
+                .as_str()
+                .expect("hint")
+                .contains("required schema fields")
+        );
+        assert!(
+            result
+                .error
+                .as_deref()
+                .expect("error")
+                .contains("path is required")
+        );
+    }
+
+    #[tokio::test]
+    async fn invoke_returns_structured_error_for_unknown_tool() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let result = invoke(dir.path(), "fs.missing", json!({"path": "README.md"})).await;
+
+        assert!(!result.ok);
+        assert_eq!(result.data["error_kind"], "unknown_tool");
+        assert_eq!(result.data["tool"], "fs.missing");
+        assert_eq!(result.data["args_shape"]["path"], "string");
+        assert!(
+            result.data["hint"]
+                .as_str()
+                .expect("hint")
+                .contains("advertised native tool names")
+        );
     }
 
     #[test]
