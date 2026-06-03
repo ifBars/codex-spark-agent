@@ -607,7 +607,7 @@ async fn run_interactive_chat(
                     "Commands: /help, /status, /profile, /compact, /session, /new, /skill, /skills, /save, /clear, /exit"
                 );
                 println!(
-                    "Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>"
+                    "Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>"
                 );
                 println!(
                     "Skill commands: /skills, /skill load <name>, /skill refresh, /skill list"
@@ -734,6 +734,15 @@ fn handle_session_command(
                 /*load_existing*/ target.exists(),
             )?;
         }
+        Some("rename" | "mv") => {
+            let first = required_session_arg(parts.next(), "rename")?;
+            let second = parts.next();
+            rename_session(runner, session_path, first, second)?;
+        }
+        Some("delete" | "rm") => {
+            let name = required_session_arg(parts.next(), "delete")?;
+            delete_session(session_path, name)?;
+        }
         Some(name) => {
             let target = config::session_path(name)?;
             switch_session(
@@ -780,6 +789,87 @@ fn switch_session(
     }
     *session_path = Some(target);
     Ok(())
+}
+
+fn rename_session(
+    runner: &agent::AgentRunner,
+    session_path: &mut Option<PathBuf>,
+    first: &str,
+    second: Option<&str>,
+) -> Result<()> {
+    let (source, new_name) = match second {
+        Some(new_name) => (config::session_path(first)?, new_name),
+        None => {
+            let Some(current) = session_path.as_ref() else {
+                anyhow::bail!("/session rename <new> requires an active session");
+            };
+            (current.clone(), first)
+        }
+    };
+    if !source.exists() {
+        anyhow::bail!(
+            "session `{}` does not exist",
+            session_name_for_display(&source)
+        );
+    }
+    let target = config::session_path(new_name)?;
+    if target.exists() {
+        anyhow::bail!("session `{new_name}` already exists");
+    }
+    if is_active_session(session_path, &source) {
+        runner.save_session(&source)?;
+    }
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| anyhow::anyhow!("failed to create {}: {error}", parent.display()))?;
+    }
+    std::fs::rename(&source, &target).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to rename {} to {}: {error}",
+            source.display(),
+            target.display()
+        )
+    })?;
+    if is_active_session(session_path, &source) {
+        *session_path = Some(target.clone());
+    }
+    println!(
+        "renamed session: {} -> {}",
+        source.display(),
+        target.display()
+    );
+    Ok(())
+}
+
+fn delete_session(session_path: &Option<PathBuf>, name: &str) -> Result<()> {
+    let target = config::session_path(name)?;
+    if is_active_session(session_path, &target) {
+        anyhow::bail!("cannot delete the active session; switch or start /new first");
+    }
+    if !target.exists() {
+        anyhow::bail!("session `{name}` does not exist");
+    }
+    std::fs::remove_file(&target)
+        .map_err(|error| anyhow::anyhow!("failed to delete {}: {error}", target.display()))?;
+    println!("deleted session: {}", target.display());
+    Ok(())
+}
+
+fn is_active_session(session_path: &Option<PathBuf>, target: &Path) -> bool {
+    session_path
+        .as_ref()
+        .is_some_and(|active| normalize_session_path(active) == normalize_session_path(target))
+}
+
+fn normalize_session_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn session_name_for_display(path: &Path) -> String {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("<unknown>")
+        .to_string()
 }
 
 fn save_current_session(runner: &agent::AgentRunner, session_path: &Option<PathBuf>) -> Result<()> {
@@ -1300,12 +1390,14 @@ fn list_trace_dirs(root: &Path, limit: usize) -> Result<Vec<PathBuf>> {
 mod tests {
     use super::{
         APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, ProfileScenarioKind, command_args,
-        contains_skill_mention, latest_trace_dir, list_trace_dirs, mentioned_skill_names,
-        prepare_profile_scenario, profile_scenario_expected_tool_calls,
+        contains_skill_mention, is_active_session, latest_trace_dir, list_trace_dirs,
+        mentioned_skill_names, prepare_profile_scenario, profile_scenario_expected_tool_calls,
         profile_scenario_expected_tool_groups, profile_scenario_prompts, resolve_char_threshold,
-        trace_filter_label, trace_has_all_diagnostics, trace_runs_root, validate_scenario_repeat,
+        session_name_for_display, trace_filter_label, trace_has_all_diagnostics, trace_runs_root,
+        validate_scenario_repeat,
     };
     use serde_json::json;
+    use std::path::PathBuf;
 
     #[test]
     fn slash_commands_match_exactly_or_with_whitespace() {
@@ -1475,6 +1567,27 @@ mod tests {
                 ],
             ),
             "tool-recovery diagnostics=tool_failures,tool_failure_recovered"
+        );
+    }
+
+    #[test]
+    fn active_session_matching_handles_same_path() {
+        let path = PathBuf::from("session-a.json");
+        let active = Some(path.clone());
+
+        assert!(is_active_session(&active, &path));
+        assert!(!is_active_session(
+            &active,
+            &PathBuf::from("session-b.json")
+        ));
+        assert!(!is_active_session(&None, &path));
+    }
+
+    #[test]
+    fn session_display_name_uses_file_stem() {
+        assert_eq!(
+            session_name_for_display(&PathBuf::from("demo.session.json")),
+            "demo.session"
         );
     }
 

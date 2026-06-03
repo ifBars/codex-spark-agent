@@ -147,6 +147,9 @@ Inside `spark chat`:
 - `/session open <name>` opens an existing session.
 - `/session use <name>` opens the named session or creates it if missing.
 - `/session new <name>` starts a new named session.
+- `/session rename <new>` renames the active session.
+- `/session rename <old> <new>` renames a saved session.
+- `/session delete <name>` deletes a saved inactive session.
 - `/new` starts a new timestamped session.
 - `/new <name>` starts a new named session.
 - `/save` saves the current session.
