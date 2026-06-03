@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 const SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+const SLOW_SPARK_REQUEST_MS: u64 = 30_000;
 const SLOW_TOOL_RESULT_MS: u64 = 10_000;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -26,6 +27,9 @@ pub struct AgentProfiler {
     max_input_chars: usize,
     total_input_chars: usize,
     input_chars_by_request: Vec<usize>,
+    total_request_duration_ms: u64,
+    max_request_duration_ms: u64,
+    request_duration_ms_by_request: Vec<u64>,
     response_text_chars: usize,
     errors: Vec<Value>,
     compaction_reports: Vec<Value>,
@@ -45,6 +49,19 @@ impl AgentProfiler {
         self.max_input_chars = self.max_input_chars.max(input_chars);
         self.total_input_chars = self.total_input_chars.saturating_add(input_chars);
         self.input_chars_by_request.push(input_chars);
+    }
+
+    pub fn record_request_duration(&mut self, turn: usize, duration_ms: u64) {
+        self.total_request_duration_ms = self.total_request_duration_ms.saturating_add(duration_ms);
+        self.max_request_duration_ms = self.max_request_duration_ms.max(duration_ms);
+        self.request_duration_ms_by_request.push(duration_ms);
+        if duration_ms >= SLOW_SPARK_REQUEST_MS {
+            self.push_signal(json!({
+                "kind": "slow_spark_request",
+                "turn": turn,
+                "duration_ms": duration_ms,
+            }));
+        }
     }
 
     pub fn record_response_text(&mut self, text: &str) {
@@ -209,6 +226,10 @@ impl AgentProfiler {
             "average_input_chars": if self.requests == 0 { 0 } else { self.total_input_chars / self.requests },
             "input_chars_by_request": self.input_chars_by_request,
             "approx_input_tokens_by_request": self.input_chars_by_request.iter().copied().map(approx_token_count_from_chars).collect::<Vec<_>>(),
+            "total_request_duration_ms": self.total_request_duration_ms,
+            "max_request_duration_ms": self.max_request_duration_ms,
+            "average_request_duration_ms": if self.request_duration_ms_by_request.is_empty() { 0 } else { self.total_request_duration_ms / self.request_duration_ms_by_request.len() as u64 },
+            "request_duration_ms_by_request": self.request_duration_ms_by_request,
             "response_text_chars": self.response_text_chars,
             "errors": self.errors,
             "compaction_reports": self.compaction_reports,
@@ -224,8 +245,9 @@ impl AgentProfiler {
 
     pub fn status_line(&self) -> String {
         format!(
-            "profile: requests={}, tool_calls={}, tool_failures={}, repeated_calls={}, consecutive_duplicates={}, readonly_cache_hits={}, compactions={} (remote={}, fallback={}), max_input_chars={}, max_approx_input_tokens={} ({:.1}% of 128k)",
+            "profile: requests={}, max_request_ms={}, tool_calls={}, tool_failures={}, repeated_calls={}, consecutive_duplicates={}, readonly_cache_hits={}, compactions={} (remote={}, fallback={}), max_input_chars={}, max_approx_input_tokens={} ({:.1}% of 128k)",
             self.requests,
+            self.max_request_duration_ms,
             self.tool_calls,
             self.tool_failures,
             self.repeated_tool_calls,
@@ -298,6 +320,16 @@ impl AgentProfiler {
             }));
         }
 
+        if self.max_request_duration_ms >= SLOW_SPARK_REQUEST_MS {
+            diagnostics.push(json!({
+                "level": "info",
+                "kind": "slow_spark_requests",
+                "message": "One or more Spark response requests took at least 30 seconds. Compare request_duration_ms_by_request with input size and compaction timing.",
+                "max_request_duration_ms": self.max_request_duration_ms,
+                "request_duration_ms_by_request": self.request_duration_ms_by_request,
+            }));
+        }
+
         if self.repeated_tool_calls > 2 {
             diagnostics.push(json!({
                 "level": "warning",
@@ -316,6 +348,19 @@ impl AgentProfiler {
         }
 
         for report in &self.compaction_reports {
+            if let Some(duration_ms) = report.get("duration_ms").and_then(Value::as_u64)
+                && duration_ms >= SLOW_SPARK_REQUEST_MS
+            {
+                diagnostics.push(json!({
+                    "level": "info",
+                    "kind": "slow_compaction",
+                    "message": "A compaction request took at least 30 seconds. Compare duration_ms with before/after size and whether the compaction was forced.",
+                    "duration_ms": duration_ms,
+                    "forced": report.get("forced").and_then(Value::as_bool).unwrap_or(false),
+                    "method": report.get("method").and_then(Value::as_str).unwrap_or("unknown"),
+                }));
+            }
+
             let before = report
                 .get("before_chars")
                 .or_else(|| report.pointer("/fallback/before_chars"))
@@ -469,6 +514,9 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 .unwrap_or(raw.len());
             profiler.record_request(input_chars);
         } else if name.ends_with("-response.json") {
+            if let Some(duration_ms) = value.get("duration_ms").and_then(Value::as_u64) {
+                profiler.record_request_duration(turn, duration_ms);
+            }
             for (tool_name, args) in function_calls_from_trace_response(&value) {
                 profiler.record_tool_call(turn, &tool_name, &args);
             }
@@ -528,6 +576,7 @@ fn summarize_compaction_report(report: &Value) -> Value {
     let mut summary = Map::new();
     copy_field(report, &mut summary, "method");
     copy_field(report, &mut summary, "forced");
+    copy_field(report, &mut summary, "duration_ms");
     copy_field(report, &mut summary, "before_chars");
     copy_field(report, &mut summary, "compact_request_chars");
     copy_field(report, &mut summary, "after_chars");
@@ -681,7 +730,8 @@ fn wire_tool_name_to_local(name: &str) -> String {
 }
 
 fn output_items_from_trace_response(value: &Value) -> Vec<Value> {
-    if let Some(items) = value
+    let response_value = value.get("raw").unwrap_or(value);
+    if let Some(items) = response_value
         .get("response")
         .and_then(|response| response.get("output"))
         .and_then(Value::as_array)
@@ -690,7 +740,7 @@ fn output_items_from_trace_response(value: &Value) -> Vec<Value> {
         return items.clone();
     }
 
-    let mut indexed = value
+    let mut indexed = response_value
         .get("events")
         .and_then(Value::as_array)
         .into_iter()
@@ -884,6 +934,29 @@ mod tests {
     }
 
     #[test]
+    fn profiler_records_request_duration_and_slow_diagnostics() {
+        let mut profiler = AgentProfiler::default();
+
+        profiler.record_request(120);
+        profiler.record_request_duration(1, 31_000);
+
+        let summary = profiler.to_json();
+
+        assert_eq!(summary["total_request_duration_ms"], 31_000);
+        assert_eq!(summary["max_request_duration_ms"], 31_000);
+        assert_eq!(summary["average_request_duration_ms"], 31_000);
+        assert_eq!(summary["request_duration_ms_by_request"], json!([31_000]));
+        assert_eq!(summary["recent_signals"][0]["kind"], "slow_spark_request");
+        assert!(
+            summary["diagnostics"]
+                .as_array()
+                .expect("diagnostics")
+                .iter()
+                .any(|diagnostic| diagnostic["kind"] == "slow_spark_requests")
+        );
+    }
+
+    #[test]
     fn profiler_records_input_size_sequence_and_errors() {
         let mut profiler = AgentProfiler::default();
 
@@ -984,6 +1057,7 @@ mod tests {
         profiler.record_compaction(&json!({
             "method": "responses_compact",
             "forced": true,
+            "duration_ms": 31_000,
             "before_chars": 200,
             "after_chars": 1200
         }));
@@ -1000,6 +1074,11 @@ mod tests {
                 && diagnostic["forced"] == true
                 && diagnostic["method"] == "responses_compact"
         }));
+        assert!(diagnostics.iter().any(|diagnostic| {
+            diagnostic["kind"] == "slow_compaction"
+                && diagnostic["duration_ms"] == 31_000
+                && diagnostic["forced"] == true
+        }));
         assert!(
             diagnostics
                 .iter()
@@ -1014,6 +1093,7 @@ mod tests {
         profiler.record_compaction(&json!({
             "method": "responses_compact",
             "forced": true,
+            "duration_ms": 1234,
             "before_chars": 200,
             "after_chars": 1200,
             "raw": {
@@ -1036,6 +1116,7 @@ mod tests {
         assert!(report.get("raw").is_none());
         assert_eq!(report["method"], "responses_compact");
         assert_eq!(report["forced"], true);
+        assert_eq!(report["duration_ms"], 1234);
         assert_eq!(report["raw_summary"]["id"], "resp_123");
         assert_eq!(report["raw_summary"]["output_items"], 1);
         assert_eq!(
@@ -1090,26 +1171,29 @@ mod tests {
         std::fs::write(
             dir.path().join("001-response.json"),
             serde_json::to_vec_pretty(&json!({
-                "response": {"output": []},
-                "events": [
-                    {
-                        "type": "response.output_item.done",
-                        "output_index": 0,
-                        "item": {
-                            "type": "function_call",
-                            "name": "fs_read",
-                            "arguments": "{\"path\":\"a.txt\",\"limit\":5}"
+                "duration_ms": 1234,
+                "raw": {
+                    "response": {"output": []},
+                    "events": [
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 0,
+                            "item": {
+                                "type": "function_call",
+                                "name": "fs_read",
+                                "arguments": "{\"path\":\"a.txt\",\"limit\":5}"
+                            }
+                        },
+                        {
+                            "type": "response.output_item.done",
+                            "output_index": 1,
+                            "item": {
+                                "type": "message",
+                                "content": [{"type": "output_text", "text": "done"}]
+                            }
                         }
-                    },
-                    {
-                        "type": "response.output_item.done",
-                        "output_index": 1,
-                        "item": {
-                            "type": "message",
-                            "content": [{"type": "output_text", "text": "done"}]
-                        }
-                    }
-                ]
+                    ]
+                }
             }))
             .expect("serialize response"),
         )
@@ -1121,6 +1205,8 @@ mod tests {
         assert_eq!(summary["tool_calls"], 1);
         assert_eq!(summary["tool_counts"]["fs.read"], 1);
         assert_eq!(summary["response_text_chars"], 4);
+        assert_eq!(summary["request_duration_ms_by_request"], json!([1234]));
+        assert_eq!(summary["max_request_duration_ms"], 1234);
     }
 
     #[test]

@@ -184,6 +184,7 @@ Use `--profile` for a compact summary after a prompt:
 - request count,
 - max/average input size,
 - exact request-size sequence,
+- Spark request and compaction duration,
 - approximate token sequence and percent of Spark's 128k context window,
 - response text size,
 - tool count by tool,

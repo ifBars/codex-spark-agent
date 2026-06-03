@@ -251,6 +251,7 @@ impl AgentRunner {
                 )?;
             }
 
+            let request_started = std::time::Instant::now();
             let (response, raw) = match self.client.responses_create(&self.input, &tools).await {
                 Ok(result) => result,
                 Err(error) => {
@@ -258,8 +259,15 @@ impl AgentRunner {
                     return Err(error);
                 }
             };
+            let request_duration_ms = request_started.elapsed().as_millis() as u64;
+            self.profiler
+                .record_request_duration(self.request_seq, request_duration_ms);
             if let Some(trace) = &mut self.trace {
-                trace.write(self.request_seq, "response", &raw)?;
+                trace.write(
+                    self.request_seq,
+                    "response",
+                    &json!({"duration_ms": request_duration_ms, "raw": raw}),
+                )?;
             }
 
             let text = response_text(&response);
@@ -385,8 +393,10 @@ impl AgentRunner {
 
         let compact_input =
             trim_codex_generated_tail_to_fit(self.input.clone(), self.max_input_chars)?;
+        let compaction_started = std::time::Instant::now();
         match self.client.responses_compact(&compact_input, tools).await {
             Ok((remote_output, raw)) => {
+                let duration_ms = compaction_started.elapsed().as_millis() as u64;
                 let (replacement, pressure_report) = compact_remote_history_to_threshold(
                     &compact_input,
                     remote_output,
@@ -397,6 +407,7 @@ impl AgentRunner {
                 Ok(Some(json!({
                     "method": "responses_compact",
                     "forced": force,
+                    "duration_ms": duration_ms,
                     "before_chars": before,
                     "compact_request_chars": serde_json::to_string(&compact_input)?.len(),
                     "after_chars": after,
@@ -406,11 +417,13 @@ impl AgentRunner {
                 })))
             }
             Err(error) => {
+                let duration_ms = compaction_started.elapsed().as_millis() as u64;
                 let fallback = compact_input_locally(&mut self.input, self.compact_after_chars)?;
                 if let Some(report) = fallback {
                     Ok(Some(json!({
                         "method": "local_fallback",
                         "forced": force,
+                        "duration_ms": duration_ms,
                         "remote_error": error.to_string(),
                         "fallback": report,
                     })))
