@@ -8,10 +8,11 @@ use serde_json::{Value, json};
 use crate::auth::{self, AuthTokens};
 use crate::client::{SparkClient, function_calls, output_items_for_next_input, response_text};
 use crate::config;
-use crate::profiler::{AgentProfiler, tool_signature};
+use crate::profiler::{
+    AgentProfiler, SPARK_CONTEXT_WINDOW_TOKENS, approx_token_count_from_chars, context_window_pct,
+    tool_signature,
+};
 use crate::tools::{ToolResult, builtin_tools, invoke};
-
-const SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
 
 pub struct AgentRunner {
     client: SparkClient,
@@ -109,11 +110,42 @@ impl AgentRunner {
     }
 
     pub fn profile_status(&self) -> String {
-        self.profiler.status_line()
+        let live =
+            context_pressure_json(&self.input, self.compact_after_chars, self.max_input_chars)
+                .unwrap_or_else(|error| json!({"error": error.to_string()}));
+        let live_input_chars = live
+            .get("input_chars")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let live_approx_tokens = live
+            .get("approx_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        let live_context_pct = live
+            .get("context_window_pct")
+            .and_then(Value::as_f64)
+            .unwrap_or_default();
+        format!(
+            "{}; live_input_chars={}, live_approx_input_tokens={} ({:.1}% of 128k), compact_after_chars={}, max_input_chars={}",
+            self.profiler.status_line(),
+            live_input_chars,
+            live_approx_tokens,
+            live_context_pct,
+            self.compact_after_chars,
+            self.max_input_chars
+        )
     }
 
     pub fn profile_summary(&self) -> Value {
-        self.profiler.to_json()
+        let mut summary = self.profiler.to_json();
+        if let Some(object) = summary.as_object_mut() {
+            object.insert(
+                "live_context".to_string(),
+                context_pressure_json(&self.input, self.compact_after_chars, self.max_input_chars)
+                    .unwrap_or_else(|error| json!({"error": error.to_string()})),
+            );
+        }
+        summary
     }
 
     pub fn snapshot(&self) -> AgentSnapshot {
@@ -464,6 +496,24 @@ fn compact_remote_history_to_threshold(
             "fallback": pressure_report,
         })),
     ))
+}
+
+fn context_pressure_json(
+    input: &[Value],
+    compact_after_chars: usize,
+    max_input_chars: usize,
+) -> Result<Value> {
+    let input_chars = serde_json::to_string(input)?.len();
+    Ok(json!({
+        "input_chars": input_chars,
+        "approx_input_tokens": approx_token_count_from_chars(input_chars),
+        "context_window_tokens": SPARK_CONTEXT_WINDOW_TOKENS,
+        "context_window_pct": context_window_pct(input_chars),
+        "compact_after_chars": compact_after_chars,
+        "compact_after_exceeded": compact_after_chars != 0 && input_chars > compact_after_chars,
+        "max_input_chars": max_input_chars,
+        "max_input_exceeded": input_chars > max_input_chars,
+    }))
 }
 
 fn compact_input_locally(input: &mut Vec<Value>, max_chars: usize) -> Result<Option<Value>> {
@@ -973,6 +1023,21 @@ mod tests {
             pressure["final_chars"].as_u64().expect("final chars") as usize,
             final_chars
         );
+    }
+
+    #[test]
+    fn context_pressure_reports_live_thresholds() {
+        let input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "x".repeat(120)}]
+        })];
+
+        let pressure = context_pressure_json(&input, 40, 10_000).expect("context pressure");
+
+        assert!(pressure["input_chars"].as_u64().expect("input chars") > 40);
+        assert_eq!(pressure["compact_after_exceeded"], true);
+        assert_eq!(pressure["max_input_exceeded"], false);
+        assert_eq!(pressure["context_window_tokens"], 128_000);
     }
 
     #[test]

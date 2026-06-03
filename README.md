@@ -113,7 +113,7 @@ By default each user message loops until Spark finishes. `--max-turns <n>` is av
 Inside `spark chat`:
 
 - `/help` shows commands.
-- `/status` prints conversation/profile status.
+- `/status` prints conversation/profile status, including live context pressure before the next Spark request.
 - `/profile` prints the full live profiler JSON.
 - `/compact` manually runs Codex-like compaction on the active conversation.
 - `/session` shows the active session.
@@ -185,6 +185,8 @@ Spark has a 128k context window. This harness has two guardrails:
 When history grows past the compaction threshold, the harness first tries Codex-like remote compaction through `/responses/compact`, normalizes returned `compaction_summary` items to Codex-style `compaction` items, and replaces live history with the compacted transcript.
 
 In interactive chat, `/compact` runs the same remote-first compaction path immediately and saves the active session afterward. Use it before a large follow-up when a natural conversation has accumulated noisy tool output.
+
+`/status` and `/profile` include live context pressure for the active session, so long natural conversations can be checked before the next message triggers auto compaction.
 
 If remote compaction still leaves history above the threshold, the harness applies a local pressure pass before sending the next Spark request. Traces mark this as `local_pressure` under the remote compaction report so those runs can be separated from clean remote compactions during profiling.
 

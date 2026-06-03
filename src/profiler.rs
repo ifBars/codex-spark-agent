@@ -5,7 +5,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-const SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+pub const SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
 const SLOW_SPARK_REQUEST_MS: u64 = 30_000;
 const SLOW_TOOL_RESULT_MS: u64 = 10_000;
 
@@ -447,11 +447,11 @@ impl AgentProfiler {
     }
 }
 
-fn approx_token_count_from_chars(chars: usize) -> usize {
+pub fn approx_token_count_from_chars(chars: usize) -> usize {
     chars.div_ceil(4)
 }
 
-fn context_window_pct(chars: usize) -> f64 {
+pub fn context_window_pct(chars: usize) -> f64 {
     let approx_tokens = approx_token_count_from_chars(chars) as f64;
     (approx_tokens / SPARK_CONTEXT_WINDOW_TOKENS as f64) * 100.0
 }
