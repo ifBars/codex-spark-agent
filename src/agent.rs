@@ -14,6 +14,8 @@ use crate::profiler::{
 };
 use crate::tools::{ToolResult, builtin_tools, invoke};
 
+const AGENT_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+
 pub struct AgentRunner {
     client: SparkClient,
     cwd: PathBuf,
@@ -31,6 +33,8 @@ pub struct AgentRunner {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSnapshot {
+    #[serde(default = "default_agent_snapshot_schema_version")]
+    pub schema_version: u32,
     pub input: Vec<Value>,
     pub request_seq: usize,
     pub profiler: AgentProfiler,
@@ -150,6 +154,7 @@ impl AgentRunner {
 
     pub fn snapshot(&self) -> AgentSnapshot {
         AgentSnapshot {
+            schema_version: AGENT_SNAPSHOT_SCHEMA_VERSION,
             input: self.input.clone(),
             request_seq: self.request_seq,
             profiler: self.profiler.clone(),
@@ -472,6 +477,10 @@ impl AgentRunner {
             }
         }
     }
+}
+
+fn default_agent_snapshot_schema_version() -> u32 {
+    AGENT_SNAPSHOT_SCHEMA_VERSION
 }
 
 fn compact_remote_history_to_threshold(
@@ -1248,6 +1257,7 @@ mod tests {
     #[test]
     fn agent_snapshot_round_trips_history_and_profile() {
         let snapshot = AgentSnapshot {
+            schema_version: AGENT_SNAPSHOT_SCHEMA_VERSION,
             input: vec![json!({
                 "role": "user",
                 "content": [{"type": "input_text", "text": "hello"}]
@@ -1261,9 +1271,27 @@ mod tests {
         let decoded =
             serde_json::from_str::<AgentSnapshot>(&encoded).expect("deserialize snapshot");
 
+        assert_eq!(decoded.schema_version, AGENT_SNAPSHOT_SCHEMA_VERSION);
         assert_eq!(decoded.input, snapshot.input);
         assert_eq!(decoded.request_seq, 7);
         assert_eq!(decoded.loaded_skills, vec!["demo"]);
         assert_eq!(decoded.profiler.to_json()["requests"], 0);
+    }
+
+    #[test]
+    fn agent_snapshot_defaults_schema_version_for_existing_sessions() {
+        let decoded = serde_json::from_value::<AgentSnapshot>(json!({
+            "input": [{
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}]
+            }],
+            "request_seq": 1,
+            "profiler": AgentProfiler::default(),
+            "loaded_skills": []
+        }))
+        .expect("deserialize old snapshot");
+
+        assert_eq!(decoded.schema_version, AGENT_SNAPSHOT_SCHEMA_VERSION);
+        assert_eq!(decoded.request_seq, 1);
     }
 }
