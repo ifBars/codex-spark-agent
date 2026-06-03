@@ -723,10 +723,93 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     )
 }
 
+pub fn trace_profile_scenario_name(summary: &Value) -> Option<&str> {
+    summary.get("trace_metadata").and_then(trace_scenario_name)
+}
+
+pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
+    let count = summaries.len();
+    if count == 0 {
+        return format!("{label} aggregate | runs=0");
+    }
+
+    let successes = summaries
+        .iter()
+        .filter(|summary| {
+            summary
+                .get("errors")
+                .and_then(Value::as_array)
+                .is_none_or(Vec::is_empty)
+        })
+        .count();
+    let failures = count.saturating_sub(successes);
+    let max_tokens = summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .get("max_approx_input_tokens")
+                .and_then(Value::as_u64)
+        })
+        .max()
+        .unwrap_or(0);
+    let max_context_pct = summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .get("max_context_window_pct")
+                .and_then(Value::as_f64)
+        })
+        .fold(0.0, f64::max);
+    let max_request_ms = summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .get("max_request_duration_ms")
+                .and_then(Value::as_u64)
+        })
+        .max()
+        .unwrap_or(0);
+    let total_tools = sum_summary_field(summaries, "tool_calls");
+    let total_tool_failures = sum_summary_field(summaries, "tool_failures");
+    let total_compactions = sum_summary_field(summaries, "compactions");
+    let total_remote_compactions = sum_summary_field(summaries, "remote_compactions");
+    let total_fallback_compactions = sum_summary_field(summaries, "fallback_compactions");
+    let diagnostics = aggregate_diagnostic_kinds(summaries);
+    let diagnostics = if diagnostics.is_empty() {
+        "none".to_string()
+    } else {
+        diagnostics.join(",")
+    };
+
+    format!(
+        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} diagnostics={diagnostics}"
+    )
+}
+
 fn trace_scenario_name(metadata: &Value) -> Option<&str> {
     metadata
         .pointer("/context/profile_scenario/name")
         .and_then(Value::as_str)
+}
+
+fn sum_summary_field(summaries: &[Value], key: &str) -> u64 {
+    summaries
+        .iter()
+        .filter_map(|summary| summary.get(key).and_then(Value::as_u64))
+        .sum()
+}
+
+fn aggregate_diagnostic_kinds(summaries: &[Value]) -> Vec<String> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for summary in summaries {
+        for kind in diagnostic_kinds(summary) {
+            *counts.entry(kind).or_default() += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(kind, count)| format!("{kind}:{count}"))
+        .collect()
 }
 
 fn number_field(summary: &Value, key: &str) -> String {
@@ -1717,6 +1800,61 @@ mod tests {
         assert!(row.contains("tools=7 failures=1"));
         assert!(row.contains("compactions=2 remote=1 fallback=1"));
         assert!(row.contains("diagnostics=tool_failures,weak_compaction_shrink"));
+    }
+
+    #[test]
+    fn extracts_profile_scenario_name_from_trace_summary() {
+        let summary = json!({
+            "trace_metadata": {
+                "context": {"profile_scenario": {"name": "compaction-pressure"}}
+            }
+        });
+
+        assert_eq!(
+            trace_profile_scenario_name(&summary),
+            Some("compaction-pressure")
+        );
+    }
+
+    #[test]
+    fn formats_trace_aggregate_row_for_run_comparison() {
+        let summaries = vec![
+            json!({
+                "errors": [],
+                "max_approx_input_tokens": 42000,
+                "max_context_window_pct": 32.8125,
+                "max_request_duration_ms": 1234,
+                "tool_calls": 2,
+                "tool_failures": 0,
+                "compactions": 1,
+                "remote_compactions": 1,
+                "fallback_compactions": 0,
+                "diagnostics": [{"kind": "remote_compaction_local_pressure"}]
+            }),
+            json!({
+                "errors": [{"stage": "response", "error": "stream ended"}],
+                "max_approx_input_tokens": 45000,
+                "max_context_window_pct": 35.15625,
+                "max_request_duration_ms": 0,
+                "tool_calls": 0,
+                "tool_failures": 0,
+                "compactions": 1,
+                "remote_compactions": 1,
+                "fallback_compactions": 0,
+                "diagnostics": [
+                    {"kind": "request_failure"},
+                    {"kind": "remote_compaction_local_pressure"}
+                ]
+            }),
+        ];
+
+        let row = format_trace_aggregate_row("compaction-pressure", &summaries);
+
+        assert!(row.contains("compaction-pressure aggregate | runs=2 success=1 failure=1"));
+        assert!(row.contains("max_tokens=45000 (35.2%)"));
+        assert!(row.contains("tools=2 failures=0"));
+        assert!(row.contains("compactions=2 remote=2 fallback=0"));
+        assert!(row.contains("diagnostics=remote_compaction_local_pressure:2,request_failure:1"));
     }
 
     #[test]

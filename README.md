@@ -116,6 +116,7 @@ Compare recent traces:
 
 ```powershell
 cargo run --bin spark -- traces --summary --limit 10
+cargo run --bin spark -- traces --summary --scenario compaction-pressure --aggregate --limit 20
 ```
 
 Run a repeatable profiling scenario through the real agent loop:
@@ -247,7 +248,7 @@ Use `--trace` to save run metadata, raw request, response, tool-result, compacti
 
 Each trace includes `000-trace-metadata.json` with the model, workspace, turn cap, profile flag, interactive/session mode, compaction threshold, and input guard used for the run. `analyze-trace` includes that metadata in its summary so profiling results can be compared across harness settings.
 
-`spark profile-scenario <name>` runs a canned prompt through the same `AgentRunner` used by `spark chat`, with tracing and profile output enabled by default. `repo-survey` exercises normal read/list/search behavior. `compaction-pressure` generates a synthetic long-context prompt, defaulting to about 45k estimated tokens, which is below Spark's 128k context window but above the default compaction threshold. Scenario runs store their name and prompt sizing in trace metadata, and they print a trace summary row even when Spark fails. Use them to compare whether Spark keeps task intent after auto compaction, whether remote compaction needs local pressure, and whether failures cluster around request size, latency, or tool loops.
+`spark profile-scenario <name>` runs a canned prompt through the same `AgentRunner` used by `spark chat`, with tracing and profile output enabled by default. `repo-survey` exercises normal read/list/search behavior. `compaction-pressure` generates a synthetic long-context prompt, defaulting to about 45k estimated tokens, which is below Spark's 128k context window but above the default compaction threshold. Scenario runs store their name and prompt sizing in trace metadata, and they print a trace summary row even when Spark fails. Use `spark traces --summary --scenario <name> --aggregate` to compare recent matching runs by success/failure count, max context pressure, latency, tools, compactions, and diagnostics.
 
 Token counts are approximate and use a simple 4 chars/token estimate. They are profiling signals for comparing harness behavior, not authoritative tokenizer output.
 

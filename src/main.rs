@@ -102,6 +102,12 @@ enum Command {
         /// Print one compact profile row per trace.
         #[arg(long)]
         summary: bool,
+        /// Only include traces for a profile scenario name.
+        #[arg(long)]
+        scenario: Option<String>,
+        /// Print an aggregate row for matching trace summaries.
+        #[arg(long)]
+        aggregate: bool,
     },
     /// Summarize a .spark-runs/run-* trace for repeated tool calls and compaction behavior.
     AnalyzeTrace {
@@ -322,12 +328,34 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Command::Traces { limit, summary } => {
+        Command::Traces {
+            limit,
+            summary,
+            scenario,
+            aggregate,
+        } => {
             let cwd = std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
+            let mut matching_summaries = Vec::new();
             for run in list_trace_dirs(&trace_runs_root(&cwd), limit)? {
                 let display = display_trace_dir(&cwd, &run);
+                let trace_summary = if summary || scenario.is_some() || aggregate {
+                    Some(profiler::analyze_trace(&run)?)
+                } else {
+                    None
+                };
+                if let Some(scenario) = scenario.as_deref()
+                    && trace_summary
+                        .as_ref()
+                        .and_then(profiler::trace_profile_scenario_name)
+                        != Some(scenario)
+                {
+                    continue;
+                }
+                if let Some(trace_summary) = &trace_summary {
+                    matching_summaries.push(trace_summary.clone());
+                }
                 if summary {
-                    let trace_summary = profiler::analyze_trace(&run)?;
+                    let trace_summary = trace_summary.expect("summary loaded");
                     println!(
                         "{}",
                         profiler::format_trace_summary_row(
@@ -338,6 +366,15 @@ async fn main() -> Result<()> {
                 } else {
                     println!("{}", display.display());
                 }
+            }
+            if aggregate {
+                println!(
+                    "{}",
+                    profiler::format_trace_aggregate_row(
+                        scenario.as_deref().unwrap_or("all"),
+                        &matching_summaries,
+                    )
+                );
             }
         }
         Command::AnalyzeTrace {
