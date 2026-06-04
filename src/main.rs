@@ -10,6 +10,7 @@ mod sessions;
 mod skill_commands;
 mod skills;
 mod tools;
+mod trace_cli;
 mod trace_commands;
 
 #[cfg(test)]
@@ -21,7 +22,7 @@ use anyhow::Result;
 use clap::Parser;
 use serde_json::json;
 
-use cli::{Cli, Command, TraceSort};
+use cli::{Cli, Command};
 
 const DEFAULT_MODEL: &str = "gpt-5.3-codex-spark";
 const DEFAULT_COMPACT_AFTER_CHARS: usize = 160_000;
@@ -201,159 +202,24 @@ async fn main() -> Result<()> {
             min_tool_only_streak,
             min_overrun_turns,
             min_overrun_context_chars,
+            min_compaction_regrowth_chars,
             json,
             jsonl,
         } => {
-            if json && jsonl {
-                anyhow::bail!("pass either --json or --jsonl, not both");
-            }
-            let cwd = std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
-            let mut matching_summaries = Vec::new();
-            let mut json_records = Vec::new();
-            let mut matching_records = Vec::new();
-            let analyze = summary
-                || scenario.is_some()
-                || !diagnostics.is_empty()
-                || aggregate
-                || sort != TraceSort::Newest
-                || min_tool_only_streak.is_some()
-                || min_overrun_turns.is_some()
-                || min_overrun_context_chars.is_some()
-                || json
-                || jsonl;
-            for run in
-                trace_commands::list_trace_dirs(&trace_commands::trace_runs_root(&cwd), limit)?
-            {
-                let display = trace_commands::display_trace_dir(&cwd, &run);
-                let trace_summary = if analyze {
-                    Some(profiler::analyze_trace(&run)?)
-                } else {
-                    None
-                };
-                if let Some(scenario) = scenario.as_deref()
-                    && trace_summary
-                        .as_ref()
-                        .and_then(profiler::trace_profile_scenario_name)
-                        != Some(scenario)
-                {
-                    continue;
-                }
-                if !diagnostics.is_empty()
-                    && !trace_commands::trace_has_all_diagnostics(
-                        trace_summary.as_ref().expect("summary loaded"),
-                        &diagnostics,
-                    )
-                {
-                    continue;
-                }
-                if !trace_commands::trace_matches_metric_filters(
-                    trace_summary.as_ref().expect("summary loaded"),
-                    min_tool_only_streak,
-                    min_overrun_turns,
-                    min_overrun_context_chars,
-                ) {
-                    continue;
-                }
-                if let Some(trace_summary) = &trace_summary {
-                    matching_summaries.push(trace_summary.clone());
-                }
-                matching_records.push(trace_commands::TraceListRecord {
-                    run,
-                    display,
-                    summary: trace_summary,
-                });
-            }
-            trace_commands::sort_trace_records(&mut matching_records, sort);
-            for record in &matching_records {
-                if json || jsonl {
-                    let record = trace_commands::trace_export_record(
-                        &cwd,
-                        &record.run,
-                        &record.display,
-                        record.summary.as_ref(),
-                    );
-                    if jsonl {
-                        println!("{}", serde_json::to_string(&record)?);
-                    } else {
-                        json_records.push(record);
-                    }
-                    continue;
-                }
-                if summary {
-                    let trace_summary = record.summary.as_ref().expect("summary loaded");
-                    println!(
-                        "{}",
-                        profiler::format_trace_summary_row(
-                            &record.display.display().to_string(),
-                            trace_summary
-                        )
-                    );
-                } else {
-                    println!("{}", record.display.display());
-                }
-            }
-            if json {
-                let output = json!({
-                    "filter": {
-                        "scenario": scenario,
-                        "diagnostics": diagnostics,
-                        "limit": limit,
-                        "sort": trace_commands::trace_sort_name(sort),
-                        "min_tool_only_streak": min_tool_only_streak,
-                        "min_overrun_turns": min_overrun_turns,
-                        "min_overrun_context_chars": min_overrun_context_chars,
-                    },
-                    "runs": json_records,
-                    "aggregate": aggregate.then(|| {
-                        profiler::trace_aggregate_json(
-                            trace_commands::trace_filter_label(
-                                scenario.as_deref(),
-                                &diagnostics,
-                                min_tool_only_streak,
-                                min_overrun_turns,
-                                min_overrun_context_chars,
-                            )
-                            .as_str(),
-                            &matching_summaries,
-                        )
-                    }),
-                });
-                println!("{}", serde_json::to_string_pretty(&output)?);
-            }
-            if aggregate {
-                if jsonl {
-                    let record = json!({
-                        "type": "aggregate",
-                        "aggregate": profiler::trace_aggregate_json(
-                            trace_commands::trace_filter_label(
-                                scenario.as_deref(),
-                                &diagnostics,
-                                min_tool_only_streak,
-                                min_overrun_turns,
-                                min_overrun_context_chars,
-                            )
-                            .as_str(),
-                            &matching_summaries,
-                        ),
-                    });
-                    println!("{}", serde_json::to_string(&record)?);
-                } else if !json {
-                    println!(
-                        "{}",
-                        profiler::format_trace_aggregate_row(
-                            trace_commands::trace_filter_label(
-                                scenario.as_deref(),
-                                &diagnostics,
-                                min_tool_only_streak,
-                                min_overrun_turns,
-                                min_overrun_context_chars,
-                            )
-                            .as_str(),
-                            &matching_summaries,
-                        )
-                    );
-                }
-            }
+            trace_cli::handle_traces(
+                limit,
+                summary,
+                scenario,
+                diagnostics,
+                aggregate,
+                sort,
+                min_tool_only_streak,
+                min_overrun_turns,
+                min_overrun_context_chars,
+                min_compaction_regrowth_chars,
+                json,
+                jsonl,
+            )?;
         }
         Command::AnalyzeTrace {
             dir,

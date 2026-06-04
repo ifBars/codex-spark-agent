@@ -12,6 +12,8 @@ use super::{
 
 #[path = "analyze/actions.rs"]
 mod actions;
+#[path = "analyze/diagnostics.rs"]
+mod diagnostics;
 #[path = "analyze/expectations.rs"]
 mod expectations;
 #[path = "analyze/trace_io.rs"]
@@ -23,6 +25,7 @@ use actions::{
     loaded_skill_contexts_from_request_input, required_action_report,
     required_actions_from_request_input,
 };
+use diagnostics::{AnalysisReports, insert_analysis_reports};
 use expectations::{
     compaction_regrowth_report, scenario_skill_expectation_report,
     scenario_tool_call_expectation_report, scenario_tool_expectation_report,
@@ -33,7 +36,7 @@ use trace_io::{
 };
 use trace_utils::{
     is_profile_summary_trace_file, is_tool_result_trace_file, profile_summary_rank,
-    push_timeline_array, sanitize_profile_summary, timeline_turn,
+    push_timeline_array, timeline_turn,
 };
 pub(super) use trace_utils::{summarize_compaction_report, trace_file_sort_key};
 
@@ -239,236 +242,22 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let compaction_regrowth_report = compaction_regrowth_report(&timeline);
     let tool_failure_recovery_report = tool_failure_recovery_report(&observed_tool_results);
     if let Some(object) = summary.as_object_mut() {
-        object.insert(
-            "timeline".to_string(),
-            Value::Array(timeline.into_values().map(Value::Object).collect()),
+        insert_analysis_reports(
+            object,
+            AnalysisReports {
+                timeline,
+                trace_metadata,
+                embedded_profile_summary,
+                required_action_report: &required_action_report,
+                loaded_skill_contexts: &loaded_skill_contexts,
+                tool_only_turn_report: &tool_only_turn_report,
+                compaction_regrowth_report: &compaction_regrowth_report,
+                scenario_tool_expectation_report: &scenario_tool_expectation_report,
+                scenario_call_expectation_report: &scenario_call_expectation_report,
+                scenario_skill_expectation_report: &scenario_skill_expectation_report,
+                tool_failure_recovery_report: &tool_failure_recovery_report,
+            },
         );
-        if let Some(metadata) = trace_metadata {
-            object.insert("trace_metadata".to_string(), metadata);
-        }
-        if let Some(embedded) = embedded_profile_summary {
-            object.insert(
-                "embedded_profile_summary".to_string(),
-                sanitize_profile_summary(embedded),
-            );
-        }
-        object.insert(
-            "retained_required_actions".to_string(),
-            json!(&required_action_report.actions),
-        );
-        object.insert(
-            "retained_required_actions_executed".to_string(),
-            json!(&required_action_report.executed),
-        );
-        object.insert(
-            "retained_required_actions_missing".to_string(),
-            json!(&required_action_report.missing),
-        );
-        object.insert(
-            "tool_calls_before_first_required_action".to_string(),
-            json!(required_action_report.calls_before_first_required_action),
-        );
-        object.insert(
-            "loaded_skill_contexts".to_string(),
-            json!(loaded_skill_contexts.iter().collect::<Vec<_>>()),
-        );
-        object.insert("tool_only_turns".to_string(), tool_only_turn_report.clone());
-        if compaction_regrowth_report
-            .get("count")
-            .and_then(Value::as_u64)
-            .is_some_and(|count| count > 0)
-        {
-            object.insert(
-                "compaction_regrowth".to_string(),
-                compaction_regrowth_report.clone(),
-            );
-        }
-        if let Some(report) = &scenario_tool_expectation_report {
-            object.insert(
-                "profile_scenario_tool_expectations".to_string(),
-                report.clone(),
-            );
-        }
-        if let Some(report) = &scenario_call_expectation_report {
-            object.insert(
-                "profile_scenario_call_expectations".to_string(),
-                report.clone(),
-            );
-        }
-        if let Some(report) = &scenario_skill_expectation_report {
-            object.insert(
-                "profile_scenario_skill_expectations".to_string(),
-                report.clone(),
-            );
-        }
-        if let Some(report) = &tool_failure_recovery_report {
-            object.insert("tool_failure_recovery".to_string(), report.clone());
-        }
-        let response_text_chars = object
-            .get("response_text_chars")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let compactions = object
-            .get("compactions")
-            .cloned()
-            .unwrap_or_else(|| json!(0));
-        let remote_compactions = object
-            .get("remote_compactions")
-            .cloned()
-            .unwrap_or_else(|| json!(0));
-        let fallback_compactions = object
-            .get("fallback_compactions")
-            .cloned()
-            .unwrap_or_else(|| json!(0));
-        if let Some(diagnostics) = object.get_mut("diagnostics").and_then(Value::as_array_mut) {
-            if !required_action_report.missing.is_empty() {
-                diagnostics.push(json!({
-                    "level": "warning",
-                    "kind": "retained_required_actions_missing",
-                    "message": "One or more required actions retained by local compaction were not observed in the trace tool calls.",
-                    "missing": &required_action_report.missing,
-                }));
-            }
-            if required_action_report.calls_before_first_required_action > 0 {
-                diagnostics.push(json!({
-                    "level": "info",
-                    "kind": "retained_required_action_detour",
-                    "message": "Spark made tool calls before executing the first required action retained by local compaction.",
-                    "calls_before_first_required_action": required_action_report.calls_before_first_required_action,
-                }));
-            }
-            if let Some(report) = &scenario_tool_expectation_report
-                && report
-                    .get("missing_groups")
-                    .and_then(Value::as_array)
-                    .is_some_and(|missing| !missing.is_empty())
-            {
-                diagnostics.push(json!({
-                    "level": "warning",
-                    "kind": "profile_scenario_expected_tools_missing",
-                    "message": "The trace did not include all native tool groups expected for this profiling scenario.",
-                    "missing_groups": report.get("missing_groups").cloned().unwrap_or_else(|| json!([])),
-                }));
-            }
-            if let Some(report) = &scenario_call_expectation_report
-                && report
-                    .get("missing_calls")
-                    .and_then(Value::as_array)
-                    .is_some_and(|missing| !missing.is_empty())
-            {
-                diagnostics.push(json!({
-                    "level": "warning",
-                    "kind": "profile_scenario_expected_calls_missing",
-                    "message": "The trace did not include all exact native tool calls expected for this profiling scenario.",
-                    "missing_calls": report.get("missing_calls").cloned().unwrap_or_else(|| json!([])),
-                }));
-            }
-            if let Some(report) = &scenario_call_expectation_report
-                && report
-                    .get("extra_calls_after_satisfied")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|count| count > 0)
-            {
-                diagnostics.push(json!({
-                    "level": "info",
-                    "kind": "profile_scenario_extra_calls_after_expected",
-                    "message": "Spark satisfied all exact native tool calls expected for this profiling scenario, then made additional tool calls before completing.",
-                    "extra_calls_after_satisfied": report.get("extra_calls_after_satisfied").cloned().unwrap_or_else(|| json!(0)),
-                    "extra_turns_after_satisfied": report.get("extra_turns_after_satisfied").cloned().unwrap_or_else(|| json!(0)),
-                    "context_growth_after_satisfied_chars": report.get("context_growth_after_satisfied_chars").cloned().unwrap_or_else(|| json!(0)),
-                    "first_satisfied_call_index": report.get("first_satisfied_call_index").cloned().unwrap_or(Value::Null),
-                    "first_satisfied_turn": report.get("first_satisfied_turn").cloned().unwrap_or(Value::Null),
-                }));
-            }
-            if let Some(report) = &scenario_skill_expectation_report
-                && report
-                    .get("missing_skills")
-                    .and_then(Value::as_array)
-                    .is_some_and(|missing| !missing.is_empty())
-            {
-                diagnostics.push(json!({
-                    "level": "warning",
-                    "kind": "profile_scenario_expected_skills_missing",
-                    "message": "The trace did not include all loaded skill contexts expected for this profiling scenario.",
-                    "missing_skills": report.get("missing_skills").cloned().unwrap_or_else(|| json!([])),
-                }));
-            }
-            if compaction_regrowth_report
-                .get("max_next_request_growth_chars")
-                .and_then(Value::as_u64)
-                .is_some_and(|chars| chars >= 100_000)
-            {
-                diagnostics.push(json!({
-                    "level": "info",
-                    "kind": "post_compaction_context_regrowth",
-                    "message": "Request input grew substantially after a compaction boundary. Compare the compaction_regrowth report with subsequent tool calls before tuning thresholds.",
-                    "max_same_turn_growth_chars": compaction_regrowth_report.get("max_same_turn_growth_chars").cloned().unwrap_or_else(|| json!(0)),
-                    "max_next_request_growth_chars": compaction_regrowth_report.get("max_next_request_growth_chars").cloned().unwrap_or_else(|| json!(0)),
-                }));
-            }
-            if tool_only_turn_report
-                .get("max_consecutive")
-                .and_then(Value::as_u64)
-                .is_some_and(|count| count >= 3)
-            {
-                diagnostics.push(json!({
-                    "level": "info",
-                    "kind": "tool_only_turn_streak",
-                    "message": "Spark spent several consecutive turns calling tools without producing user-facing text. Compare this with scenario completion and context growth before changing harness defaults.",
-                    "count": tool_only_turn_report.get("count").cloned().unwrap_or_else(|| json!(0)),
-                    "max_consecutive": tool_only_turn_report.get("max_consecutive").cloned().unwrap_or_else(|| json!(0)),
-                    "turns": tool_only_turn_report.get("turns").cloned().unwrap_or_else(|| json!([])),
-                }));
-            }
-            if tool_only_turn_report
-                .get("max_consecutive")
-                .and_then(Value::as_u64)
-                .is_some_and(|count| count >= 8)
-                && response_text_chars == 0
-                && !diagnostics
-                    .iter()
-                    .any(|diagnostic| diagnostic["kind"] == "completion_starvation")
-            {
-                diagnostics.push(json!({
-                    "level": "warning",
-                    "kind": "completion_starvation",
-                    "message": "Spark kept calling tools across many turns without emitting any user-facing response text. Profile tool-call sequence, compaction timing, and context growth before adding stop conditions or changing defaults.",
-                    "tool_only_turns": tool_only_turn_report.get("count").cloned().unwrap_or_else(|| json!(0)),
-                    "max_consecutive": tool_only_turn_report.get("max_consecutive").cloned().unwrap_or_else(|| json!(0)),
-                    "compactions": compactions,
-                    "remote_compactions": remote_compactions,
-                    "fallback_compactions": fallback_compactions,
-                }));
-            }
-            if let Some(report) = &tool_failure_recovery_report {
-                if report
-                    .get("recovered_failures")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|count| count > 0)
-                {
-                    diagnostics.push(json!({
-                        "level": "info",
-                        "kind": "tool_failure_recovered",
-                        "message": "Spark recovered from one or more failed native tool observations later in the trace.",
-                        "recovered_failures": report.get("recovered_failures").cloned().unwrap_or_else(|| json!(0)),
-                        "failed_tool_results": report.get("failed_tool_results").cloned().unwrap_or_else(|| json!(0)),
-                    }));
-                }
-                if report
-                    .get("unrecovered_failures")
-                    .and_then(Value::as_u64)
-                    .is_some_and(|count| count > 0)
-                {
-                    diagnostics.push(json!({
-                        "level": "warning",
-                        "kind": "tool_failure_unrecovered",
-                        "message": "One or more failed native tool observations had no later successful observation from the same tool.",
-                        "unrecovered_failures": report.get("unrecovered_failures").cloned().unwrap_or_else(|| json!(0)),
-                        "failed_tool_results": report.get("failed_tool_results").cloned().unwrap_or_else(|| json!(0)),
-                    }));
-                }
-            }
-        }
     }
     Ok(summary)
 }

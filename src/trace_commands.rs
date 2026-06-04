@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::{APPROX_CHARS_PER_TOKEN, TraceSort};
+use crate::{APPROX_CHARS_PER_TOKEN, cli::TraceSort};
 
 pub(crate) fn trace_runs_root(cwd: &Path) -> PathBuf {
     cwd.join(".spark-runs")
@@ -43,6 +43,7 @@ pub(crate) fn sort_trace_records(records: &mut [TraceListRecord], sort: TraceSor
         TraceSort::OverrunContext
         | TraceSort::OverrunTurns
         | TraceSort::ToolOnlyStreak
+        | TraceSort::CompactionRegrowth
         | TraceSort::Context
         | TraceSort::RequestMs => {
             records.sort_by(|left, right| {
@@ -67,6 +68,7 @@ pub(crate) fn trace_sort_metric(summary: Option<&Value>, sort: TraceSort) -> u64
             "/profile_scenario_call_expectations/extra_turns_after_satisfied"
         }
         TraceSort::ToolOnlyStreak => "/tool_only_turns/max_consecutive",
+        TraceSort::CompactionRegrowth => "/compaction_regrowth/max_next_request_growth_chars",
         TraceSort::Context => "/max_approx_input_tokens",
         TraceSort::RequestMs => "/max_request_duration_ms",
     };
@@ -82,6 +84,7 @@ pub(crate) fn trace_sort_name(sort: TraceSort) -> &'static str {
         TraceSort::OverrunContext => "overrun-context",
         TraceSort::OverrunTurns => "overrun-turns",
         TraceSort::ToolOnlyStreak => "tool-only-streak",
+        TraceSort::CompactionRegrowth => "compaction-regrowth",
         TraceSort::Context => "context",
         TraceSort::RequestMs => "request-ms",
     }
@@ -122,6 +125,7 @@ pub(crate) fn trace_matches_metric_filters(
     min_tool_only_streak: Option<u64>,
     min_overrun_turns: Option<u64>,
     min_overrun_context_chars: Option<u64>,
+    min_compaction_regrowth_chars: Option<u64>,
 ) -> bool {
     metric_at_least(
         summary,
@@ -135,6 +139,10 @@ pub(crate) fn trace_matches_metric_filters(
         summary,
         "/profile_scenario_call_expectations/context_growth_after_satisfied_chars",
         min_overrun_context_chars,
+    ) && metric_at_least(
+        summary,
+        "/compaction_regrowth/max_next_request_growth_chars",
+        min_compaction_regrowth_chars,
     )
 }
 
@@ -154,6 +162,7 @@ pub(crate) fn trace_filter_label(
     min_tool_only_streak: Option<u64>,
     min_overrun_turns: Option<u64>,
     min_overrun_context_chars: Option<u64>,
+    min_compaction_regrowth_chars: Option<u64>,
 ) -> String {
     let mut label = scenario.unwrap_or("all").to_string();
     if !diagnostics.is_empty() {
@@ -168,6 +177,9 @@ pub(crate) fn trace_filter_label(
     }
     if let Some(minimum) = min_overrun_context_chars {
         label.push_str(&format!(" min_overrun_context_chars={minimum}"));
+    }
+    if let Some(minimum) = min_compaction_regrowth_chars {
+        label.push_str(&format!(" min_compaction_regrowth_chars={minimum}"));
     }
     label
 }

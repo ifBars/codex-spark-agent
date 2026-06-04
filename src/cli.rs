@@ -110,6 +110,9 @@ pub(crate) enum Command {
         /// Only include traces whose post-satisfaction context growth is at least this many chars.
         #[arg(long)]
         min_overrun_context_chars: Option<u64>,
+        /// Only include traces whose post-compaction request regrowth is at least this many chars.
+        #[arg(long)]
+        min_compaction_regrowth_chars: Option<u64>,
         /// Print matching analyzed traces as one JSON object.
         #[arg(long)]
         json: bool,
@@ -200,6 +203,8 @@ pub(crate) enum TraceSort {
     OverrunTurns,
     /// Highest tool-only turn streak first.
     ToolOnlyStreak,
+    /// Highest post-compaction request context regrowth first.
+    CompactionRegrowth,
     /// Highest estimated request token count first.
     Context,
     /// Highest Spark request latency first.
