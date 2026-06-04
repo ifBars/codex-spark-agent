@@ -2,6 +2,7 @@
 /target/
 
 # Spark local runtime state
+/.agents/
 /.spark/
 /.spark-runs/
 /.spark-profile/
