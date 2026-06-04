@@ -31,6 +31,7 @@ struct BenchmarkRunRow {
     model: String,
     score: f64,
     task_quality_score: f64,
+    efficiency_score: f64,
     harness_pressure_score: f64,
     success: bool,
     validation_present: bool,
@@ -46,6 +47,8 @@ struct BenchmarkRunRow {
     max_context_window_pct: f64,
     max_request_duration_ms: u64,
     total_duration_ms: u64,
+    source_files: u64,
+    source_bytes: u64,
     compactions: u64,
     tool_failures: u64,
     recovered_tool_failures: u64,
@@ -101,6 +104,7 @@ struct ComparisonRow {
     model: String,
     score: f64,
     task_quality_score: f64,
+    efficiency_score: f64,
     harness_pressure_score: f64,
     success: bool,
     validation_exit_code: Option<i32>,
@@ -110,6 +114,8 @@ struct ComparisonRow {
     tool_or_item_calls: u64,
     input_tokens: u64,
     output_tokens: u64,
+    source_files: u64,
+    source_bytes: u64,
     failure_points: String,
     source: String,
 }
@@ -308,6 +314,9 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
     let browser_screenshot = browser_validation
         .map(|result| result.screenshot.clone())
         .unwrap_or_default();
+    let source_footprint = validation
+        .as_ref()
+        .and_then(|result| result.source_footprint.as_ref());
     let trace_success = summary
         .get("errors")
         .and_then(Value::as_array)
@@ -317,6 +326,7 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
         .is_none_or(|result| !result.timed_out && result.exit_code == Some(0))
         && browser_validation.is_none_or(|result| !result.timed_out && result.exit_code == Some(0));
     let failure_points = failure_points(
+        scenario_name(summary).unwrap_or("unknown"),
         summary,
         expected_groups,
         satisfied_groups,
@@ -341,6 +351,7 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
             .to_string(),
         score: 0.0,
         task_quality_score: 0.0,
+        efficiency_score: 0.0,
         harness_pressure_score: 0.0,
         success: trace_success && validation_success,
         validation_present,
@@ -357,6 +368,12 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
         max_request_duration_ms: value_u64(summary, "/max_request_duration_ms"),
         total_duration_ms: value_u64(summary, "/total_request_duration_ms")
             .saturating_add(value_u64(summary, "/total_tool_duration_ms")),
+        source_files: source_footprint
+            .map(|footprint| footprint.files)
+            .unwrap_or(0),
+        source_bytes: source_footprint
+            .map(|footprint| footprint.bytes)
+            .unwrap_or(0),
         compactions: value_u64(summary, "/compactions"),
         tool_failures: value_u64(summary, "/tool_failures"),
         recovered_tool_failures: recovered_failures,
@@ -385,6 +402,7 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
         failure_points: failure_points.join(";"),
     };
     row.task_quality_score = task_quality_score(&row);
+    row.efficiency_score = efficiency_score(row.total_duration_ms as u128, row.source_bytes);
     row.harness_pressure_score = harness_pressure_score(&row);
     row.score = benchmark_score(&row);
     row
@@ -394,6 +412,8 @@ fn aggregate_rows(suite: &str, rows: &[BenchmarkRunRow]) -> Value {
     let average_score = rows.iter().map(|row| row.score).sum::<f64>() / rows.len() as f64;
     let average_task_quality =
         rows.iter().map(|row| row.task_quality_score).sum::<f64>() / rows.len() as f64;
+    let average_efficiency =
+        rows.iter().map(|row| row.efficiency_score).sum::<f64>() / rows.len() as f64;
     let average_harness_pressure = rows
         .iter()
         .map(|row| row.harness_pressure_score)
@@ -412,11 +432,14 @@ fn aggregate_rows(suite: &str, rows: &[BenchmarkRunRow]) -> Value {
         "runs": rows.len(),
         "average_score": round1(average_score),
         "average_task_quality_score": round1(average_task_quality),
+        "average_efficiency_score": round1(average_efficiency),
         "average_harness_pressure_score": round1(average_harness_pressure),
         "min_score": rows.iter().map(|row| row.score).fold(100.0, f64::min),
         "max_score": rows.iter().map(|row| row.score).fold(0.0, f64::max),
         "successful_runs": rows.iter().filter(|row| row.success).count(),
         "total_tools": rows.iter().map(|row| row.tool_calls).sum::<u64>(),
+        "total_source_files": rows.iter().map(|row| row.source_files).sum::<u64>(),
+        "total_source_bytes": rows.iter().map(|row| row.source_bytes).sum::<u64>(),
         "total_tool_failures": rows.iter().map(|row| row.tool_failures).sum::<u64>(),
         "total_unrecovered_failures": rows.iter().map(|row| row.unrecovered_tool_failures).sum::<u64>(),
         "total_truncations": rows.iter().map(|row| row.truncated_tool_results).sum::<u64>(),
@@ -428,39 +451,19 @@ fn aggregate_rows(suite: &str, rows: &[BenchmarkRunRow]) -> Value {
 }
 
 fn benchmark_score(row: &BenchmarkRunRow) -> f64 {
-    let mut penalty = 0.0;
+    let mut score = row.task_quality_score * 0.85 + row.efficiency_score * 0.15;
+    if row.browser_validation_timed_out
+        || (row.browser_validation_present && row.browser_validation_exit_code != Some(0))
+    {
+        score = score.min(45.0);
+    }
+    if row.validation_timed_out || (row.validation_present && row.validation_exit_code != Some(0)) {
+        score = score.min(55.0);
+    }
     if !row.success {
-        penalty += 40.0;
+        score = score.min(60.0);
     }
-    penalty += row
-        .expected_tool_groups
-        .saturating_sub(row.satisfied_tool_groups) as f64
-        * 12.0;
-    penalty += row
-        .expected_tool_calls
-        .saturating_sub(row.satisfied_tool_calls) as f64
-        * 10.0;
-    penalty += row.unrecovered_tool_failures as f64 * 12.0;
-    penalty += row.truncated_tool_results as f64 * 4.0;
-    penalty += row.repeated_tool_calls as f64 * 2.0;
-    penalty += row.extra_calls_after_satisfied as f64 * 2.0;
-    penalty += row.extra_turns_after_satisfied as f64 * 3.0;
-    penalty += row.max_tool_only_streak.saturating_sub(4) as f64 * 2.0;
-    penalty += row.compactions as f64 * 1.5;
-    penalty += (row.max_context_window_pct - 20.0).max(0.0) * 0.5;
-    if row.validation_timed_out {
-        penalty += 25.0;
-    }
-    if row.validation_present && row.validation_exit_code != Some(0) {
-        penalty += 25.0;
-    }
-    if row.browser_validation_timed_out {
-        penalty += 30.0;
-    }
-    if row.browser_validation_present && row.browser_validation_exit_code != Some(0) {
-        penalty += 30.0;
-    }
-    round1((100.0 - penalty).clamp(0.0, 100.0))
+    round1(score.clamp(0.0, 100.0))
 }
 
 fn task_quality_score(row: &BenchmarkRunRow) -> f64 {
@@ -483,21 +486,39 @@ fn task_quality_score(row: &BenchmarkRunRow) -> f64 {
         penalty += 25.0;
     }
     if row.browser_validation_timed_out {
-        penalty += 30.0;
+        penalty += 35.0;
     }
     if row.browser_validation_present && row.browser_validation_exit_code != Some(0) {
-        penalty += 30.0;
+        penalty += 55.0;
+    }
+    round1((100.0 - penalty).clamp(0.0, 100.0))
+}
+
+fn efficiency_score(duration_ms: u128, source_bytes: u64) -> f64 {
+    let mut penalty = 0.0;
+    if duration_ms > 180_000 {
+        penalty += 15.0;
+    } else if duration_ms > 90_000 {
+        penalty += 8.0;
+    } else if duration_ms > 60_000 {
+        penalty += 3.0;
+    }
+    if source_bytes > 0 {
+        penalty += source_bytes.saturating_sub(12_000) as f64 / 1_000.0;
     }
     round1((100.0 - penalty).clamp(0.0, 100.0))
 }
 
 fn harness_pressure_score(row: &BenchmarkRunRow) -> f64 {
     let mut penalty = 0.0;
+    let exact_completion = exact_completion_pressure_scenario(&row.scenario);
     penalty += row.unrecovered_tool_failures as f64 * 12.0;
     penalty += row.truncated_tool_results as f64 * 4.0;
     penalty += row.repeated_tool_calls as f64 * 2.0;
-    penalty += row.extra_calls_after_satisfied as f64 * 2.0;
-    penalty += row.extra_turns_after_satisfied as f64 * 3.0;
+    if exact_completion {
+        penalty += row.extra_calls_after_satisfied as f64 * 2.0;
+        penalty += row.extra_turns_after_satisfied as f64 * 3.0;
+    }
     penalty += row.max_tool_only_streak.saturating_sub(4) as f64 * 2.0;
     penalty += row.compactions as f64 * 1.5;
     penalty += (row.max_context_window_pct - 20.0).max(0.0) * 0.5;
@@ -505,6 +526,7 @@ fn harness_pressure_score(row: &BenchmarkRunRow) -> f64 {
 }
 
 fn failure_points(
+    scenario: &str,
     summary: &Value,
     expected_groups: u64,
     satisfied_groups: u64,
@@ -541,10 +563,11 @@ fn failure_points(
     if value_u64(summary, "/repeated_tool_calls") > 0 {
         points.push("repeated_tool_call".to_string());
     }
-    if value_u64(
-        summary,
-        "/profile_scenario_call_expectations/extra_calls_after_satisfied",
-    ) > 0
+    if exact_completion_pressure_scenario(scenario)
+        && value_u64(
+            summary,
+            "/profile_scenario_call_expectations/extra_calls_after_satisfied",
+        ) > 0
     {
         points.push("extra_calls_after_expected".to_string());
     }
@@ -572,9 +595,22 @@ fn failure_points(
     points
 }
 
+fn exact_completion_pressure_scenario(scenario: &str) -> bool {
+    matches!(
+        scenario,
+        "file-edit"
+            | "file-ops"
+            | "tool-recovery"
+            | "react-calculator-scaffold"
+            | "rust-log-analyzer-scaffold"
+            | "natural-compaction"
+            | "compaction-pressure"
+    )
+}
+
 fn rows_to_csv(rows: &[BenchmarkRunRow]) -> String {
     let mut csv = String::from(
-        "run_id,trace_dir,suite,scenario,model,score,task_quality_score,harness_pressure_score,success,validation_present,validation_exit_code,validation_timed_out,browser_validation_present,browser_validation_exit_code,browser_validation_timed_out,browser_screenshot,requests,tool_calls,max_approx_input_tokens,max_context_window_pct,max_request_duration_ms,compactions,tool_failures,recovered_tool_failures,unrecovered_tool_failures,truncated_tool_results,repeated_tool_calls,tool_only_turns,max_tool_only_streak,expected_tool_groups,satisfied_tool_groups,expected_tool_calls,satisfied_tool_calls,extra_calls_after_satisfied,extra_turns_after_satisfied,context_growth_after_satisfied_chars,diagnostics,failure_points\n",
+        "run_id,trace_dir,suite,scenario,model,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_present,validation_exit_code,validation_timed_out,browser_validation_present,browser_validation_exit_code,browser_validation_timed_out,browser_screenshot,requests,tool_calls,max_approx_input_tokens,max_context_window_pct,max_request_duration_ms,total_duration_ms,source_files,source_bytes,compactions,tool_failures,recovered_tool_failures,unrecovered_tool_failures,truncated_tool_results,repeated_tool_calls,tool_only_turns,max_tool_only_streak,expected_tool_groups,satisfied_tool_groups,expected_tool_calls,satisfied_tool_calls,extra_calls_after_satisfied,extra_turns_after_satisfied,context_growth_after_satisfied_chars,diagnostics,failure_points\n",
     );
     for row in rows {
         let values = [
@@ -585,6 +621,7 @@ fn rows_to_csv(rows: &[BenchmarkRunRow]) -> String {
             row.model.clone(),
             row.score.to_string(),
             row.task_quality_score.to_string(),
+            row.efficiency_score.to_string(),
             row.harness_pressure_score.to_string(),
             row.success.to_string(),
             row.validation_present.to_string(),
@@ -603,6 +640,9 @@ fn rows_to_csv(rows: &[BenchmarkRunRow]) -> String {
             row.max_approx_input_tokens.to_string(),
             round1(row.max_context_window_pct).to_string(),
             row.max_request_duration_ms.to_string(),
+            row.total_duration_ms.to_string(),
+            row.source_files.to_string(),
+            row.source_bytes.to_string(),
             row.compactions.to_string(),
             row.tool_failures.to_string(),
             row.recovered_tool_failures.to_string(),
@@ -647,6 +687,10 @@ fn rows_to_html(suite: &str, rows: &[BenchmarkRunRow], aggregate: &Value) -> Str
         .get("average_harness_pressure_score")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
+    let avg_efficiency = aggregate
+        .get("average_efficiency_score")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
     let max_streak = aggregate
         .get("max_tool_only_streak")
         .and_then(Value::as_u64)
@@ -689,15 +733,15 @@ td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
 <section class="kpis">
 <div class="kpi"><strong>{avg:.1}</strong><span>Average score</span></div>
 <div class="kpi"><strong>{avg_quality:.1}</strong><span>Task quality</span></div>
+<div class="kpi"><strong>{avg_efficiency:.1}</strong><span>Efficiency</span></div>
 <div class="kpi"><strong>{avg_pressure:.1}</strong><span>Harness pressure</span></div>
-<div class="kpi"><strong>{max_streak}</strong><span>Max tool-only streak</span></div>
 </section>
 "#,
         suite = html_escape(suite),
         avg = avg,
         avg_quality = avg_quality,
-        avg_pressure = avg_pressure,
-        max_streak = max_streak
+        avg_efficiency = avg_efficiency,
+        avg_pressure = avg_pressure
     );
     html.push_str("<h2>Score by Scenario</h2><div class=\"panel\">");
     html.push_str(&score_svg(rows));
@@ -706,9 +750,10 @@ td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
     html.push_str("</div>");
     let _ = write!(
         html,
-        "<p class=\"muted\">Total truncations: {truncations}. Tool-only streaks above 8, extra calls after expected completion, truncations, repeated calls, unrecovered failures, and context pressure above 20% reduce score.</p>"
+        "<p class=\"muted\">Total truncations: {truncations}. Final score is production outcome plus efficiency. Harness pressure is diagnostic and does not reduce production score directly. Max tool-only streak: {max_streak}.</p>",
+        max_streak = max_streak
     );
-    html.push_str("<h2>Run Details</h2><div class=\"panel\"><table><thead><tr><th>Scenario</th><th>Score</th><th>Task quality</th><th>Harness pressure</th><th>Validation</th><th>Browser</th><th>Requests</th><th>Tools</th><th>Max context</th><th>Extra calls</th><th>Tool-only</th><th>Diagnostics</th><th>Failure points</th></tr></thead><tbody>");
+    html.push_str("<h2>Run Details</h2><div class=\"panel\"><table><thead><tr><th>Scenario</th><th>Score</th><th>Task quality</th><th>Efficiency</th><th>Harness pressure</th><th>Validation</th><th>Browser</th><th>Duration</th><th>Source</th><th>Requests</th><th>Tools</th><th>Max context</th><th>Extra calls</th><th>Tool-only</th><th>Diagnostics</th><th>Failure points</th></tr></thead><tbody>");
     for row in rows {
         let validation = if row.validation_present {
             row.validation_exit_code
@@ -726,13 +771,17 @@ td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
         };
         let _ = write!(
             html,
-            "<tr><td>{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}%</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td><td>{}</td></tr>",
+            "<tr><td>{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{} / {}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}%</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td><td>{}</td></tr>",
             html_escape(&row.scenario),
             row.score,
             row.task_quality_score,
+            row.efficiency_score,
             row.harness_pressure_score,
             html_escape(&validation),
             html_escape(&browser),
+            row.total_duration_ms,
+            row.source_files,
+            row.source_bytes,
             row.requests,
             row.tool_calls,
             row.max_context_window_pct,
@@ -867,6 +916,7 @@ fn comparison_row_from_harness(row: &BenchmarkRunRow) -> ComparisonRow {
         model: row.model.clone(),
         score: row.score,
         task_quality_score: row.task_quality_score,
+        efficiency_score: row.efficiency_score,
         harness_pressure_score: row.harness_pressure_score,
         success: row.success,
         validation_exit_code: row.validation_exit_code,
@@ -876,19 +926,24 @@ fn comparison_row_from_harness(row: &BenchmarkRunRow) -> ComparisonRow {
         tool_or_item_calls: row.tool_calls,
         input_tokens: row.max_approx_input_tokens,
         output_tokens: 0,
+        source_files: row.source_files,
+        source_bytes: row.source_bytes,
         failure_points: row.failure_points.clone(),
         source: row.trace_dir.clone(),
     }
 }
 
 fn comparison_row_from_codex_cli(row: &CodexCliBenchmarkRow) -> ComparisonRow {
+    let task_quality_score = codex_task_quality_score(row);
+    let efficiency_score = codex_efficiency_score(row);
     ComparisonRow {
         runner: "codex-cli".to_string(),
         suite: row.suite.clone(),
         scenario: row.scenario.clone(),
         model: row.model.clone(),
-        score: row.score,
-        task_quality_score: codex_task_quality_score(row),
+        score: codex_score_from_components(row, task_quality_score, efficiency_score),
+        task_quality_score,
+        efficiency_score,
         harness_pressure_score: codex_pressure_score(row),
         success: row.success,
         validation_exit_code: row.validation_exit_code,
@@ -898,9 +953,31 @@ fn comparison_row_from_codex_cli(row: &CodexCliBenchmarkRow) -> ComparisonRow {
         tool_or_item_calls: row.completed_items,
         input_tokens: row.input_tokens,
         output_tokens: row.output_tokens,
+        source_files: row.source_files,
+        source_bytes: row.source_bytes,
         failure_points: row.failure_points.clone(),
         source: row.run_dir.clone(),
     }
+}
+
+fn codex_score_from_components(
+    row: &CodexCliBenchmarkRow,
+    task_quality_score: f64,
+    efficiency_score: f64,
+) -> f64 {
+    let mut score = task_quality_score * 0.85 + efficiency_score * 0.15;
+    if row.browser_validation_timed_out
+        || (row.browser_validation_present && row.browser_validation_exit_code != Some(0))
+    {
+        score = score.min(45.0);
+    }
+    if row.validation_timed_out || row.validation_exit_code.is_some_and(|code| code != 0) {
+        score = score.min(55.0);
+    }
+    if !row.success {
+        score = score.min(60.0);
+    }
+    round1(score.clamp(0.0, 100.0))
 }
 
 fn codex_task_quality_score(row: &CodexCliBenchmarkRow) -> f64 {
@@ -921,7 +998,17 @@ fn codex_task_quality_score(row: &CodexCliBenchmarkRow) -> f64 {
     if row.validation_exit_code.is_some_and(|code| code != 0) {
         penalty += 25.0;
     }
+    if row.browser_validation_timed_out {
+        penalty += 35.0;
+    }
+    if row.browser_validation_present && row.browser_validation_exit_code != Some(0) {
+        penalty += 55.0;
+    }
     round1((100.0 - penalty).clamp(0.0, 100.0))
+}
+
+fn codex_efficiency_score(row: &CodexCliBenchmarkRow) -> f64 {
+    efficiency_score(row.duration_ms, row.source_bytes)
 }
 
 fn codex_pressure_score(row: &CodexCliBenchmarkRow) -> f64 {
@@ -939,6 +1026,7 @@ fn codex_pressure_score(row: &CodexCliBenchmarkRow) -> f64 {
 fn aggregate_comparison(suite: &str, rows: &[ComparisonRow]) -> Value {
     let mut runner_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_quality_scores = BTreeMap::<String, Vec<f64>>::new();
+    let mut runner_efficiency_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_pressure_scores = BTreeMap::<String, Vec<f64>>::new();
     for row in rows {
         runner_scores
@@ -949,6 +1037,10 @@ fn aggregate_comparison(suite: &str, rows: &[ComparisonRow]) -> Value {
             .entry(row.runner.clone())
             .or_default()
             .push(row.task_quality_score);
+        runner_efficiency_scores
+            .entry(row.runner.clone())
+            .or_default()
+            .push(row.efficiency_score);
         runner_pressure_scores
             .entry(row.runner.clone())
             .or_default()
@@ -962,6 +1054,7 @@ fn aggregate_comparison(suite: &str, rows: &[ComparisonRow]) -> Value {
         })
         .collect::<BTreeMap<_, _>>();
     let runner_task_quality_averages = average_map(runner_quality_scores);
+    let runner_efficiency_averages = average_map(runner_efficiency_scores);
     let runner_harness_pressure_averages = average_map(runner_pressure_scores);
     let winner = runner_averages
         .iter()
@@ -974,6 +1067,7 @@ fn aggregate_comparison(suite: &str, rows: &[ComparisonRow]) -> Value {
         "rows": rows.len(),
         "runner_averages": runner_averages,
         "runner_task_quality_averages": runner_task_quality_averages,
+        "runner_efficiency_averages": runner_efficiency_averages,
         "runner_harness_pressure_averages": runner_harness_pressure_averages,
         "winner": winner,
         "scenario_winners": scenario_winners,
@@ -1012,6 +1106,7 @@ fn comparison_scenario_winners(rows: &[ComparisonRow]) -> Vec<Value> {
                     "runner": row.runner,
                     "score": row.score,
                     "task_quality_score": row.task_quality_score,
+                    "efficiency_score": row.efficiency_score,
                     "harness_pressure_score": row.harness_pressure_score,
                     "success": row.success,
                 })).collect::<Vec<_>>(),
@@ -1022,7 +1117,7 @@ fn comparison_scenario_winners(rows: &[ComparisonRow]) -> Vec<Value> {
 
 fn comparison_rows_to_csv(rows: &[ComparisonRow]) -> String {
     let mut csv = String::from(
-        "runner,suite,scenario,model,score,task_quality_score,harness_pressure_score,success,validation_exit_code,validation_timed_out,duration_ms,requests_or_turns,tool_or_item_calls,input_tokens,output_tokens,failure_points,source\n",
+        "runner,suite,scenario,model,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_exit_code,validation_timed_out,duration_ms,requests_or_turns,tool_or_item_calls,input_tokens,output_tokens,source_files,source_bytes,failure_points,source\n",
     );
     for row in rows {
         let values = [
@@ -1032,6 +1127,7 @@ fn comparison_rows_to_csv(rows: &[ComparisonRow]) -> String {
             row.model.clone(),
             row.score.to_string(),
             row.task_quality_score.to_string(),
+            row.efficiency_score.to_string(),
             row.harness_pressure_score.to_string(),
             row.success.to_string(),
             row.validation_exit_code
@@ -1043,6 +1139,8 @@ fn comparison_rows_to_csv(rows: &[ComparisonRow]) -> String {
             row.tool_or_item_calls.to_string(),
             row.input_tokens.to_string(),
             row.output_tokens.to_string(),
+            row.source_files.to_string(),
+            row.source_bytes.to_string(),
             row.failure_points.clone(),
             row.source.clone(),
         ];
@@ -1093,7 +1191,7 @@ svg {{ width: 100%; height: auto; display: block; }}
     );
     html.push_str("<h2>Score Comparison</h2><div class=\"panel\">");
     html.push_str(&comparison_score_svg(rows));
-    html.push_str("</div><h2>Rows</h2><div class=\"panel\"><table><thead><tr><th>Runner</th><th>Scenario</th><th>Score</th><th>Task quality</th><th>Harness pressure</th><th>Validation</th><th>Success</th><th>Duration</th><th>Turns/Requests</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
+    html.push_str("</div><h2>Rows</h2><div class=\"panel\"><table><thead><tr><th>Runner</th><th>Scenario</th><th>Score</th><th>Task quality</th><th>Efficiency</th><th>Harness pressure</th><th>Validation</th><th>Success</th><th>Duration</th><th>Source</th><th>Turns/Requests</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
     for row in rows {
         let validation = row
             .validation_exit_code
@@ -1107,15 +1205,18 @@ svg {{ width: 100%; height: auto; display: block; }}
             });
         let _ = write!(
             html,
-            "<tr><td>{}</td><td>{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>",
+            "<tr><td>{}</td><td>{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{} / {}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>",
             html_escape(&row.runner),
             html_escape(&row.scenario),
             row.score,
             row.task_quality_score,
+            row.efficiency_score,
             row.harness_pressure_score,
             html_escape(&validation),
             row.success,
             row.duration_ms,
+            row.source_files,
+            row.source_bytes,
             row.requests_or_turns,
             row.tool_or_item_calls,
             html_escape(&row.failure_points)
@@ -1249,10 +1350,11 @@ mod tests {
             run_id: "run-1".to_string(),
             trace_dir: ".spark-runs/run-1".to_string(),
             suite: "real-world".to_string(),
-            scenario: "demo".to_string(),
+            scenario: "react-calculator-scaffold".to_string(),
             model: "spark".to_string(),
             score: 0.0,
             task_quality_score: 0.0,
+            efficiency_score: 0.0,
             harness_pressure_score: 0.0,
             success: true,
             validation_present: false,
@@ -1268,6 +1370,8 @@ mod tests {
             max_context_window_pct: 1.0,
             max_request_duration_ms: 1000,
             total_duration_ms: 1500,
+            source_files: 0,
+            source_bytes: 0,
             compactions: 0,
             tool_failures: 0,
             recovered_tool_failures: 0,
@@ -1292,8 +1396,18 @@ mod tests {
         noisy.extra_turns_after_satisfied = 4;
         noisy.truncated_tool_results = 1;
 
+        let mut clean = clean;
+        clean.task_quality_score = task_quality_score(&clean);
+        clean.efficiency_score = efficiency_score(clean.total_duration_ms as u128, 0);
+        clean.harness_pressure_score = harness_pressure_score(&clean);
+        let mut noisy = noisy;
+        noisy.task_quality_score = task_quality_score(&noisy);
+        noisy.efficiency_score = efficiency_score(noisy.total_duration_ms as u128, 0);
+        noisy.harness_pressure_score = harness_pressure_score(&noisy);
+
         assert_eq!(benchmark_score(&clean), 100.0);
-        assert!(benchmark_score(&noisy) < 70.0);
+        assert!(benchmark_score(&noisy) > 90.0);
+        assert!(noisy.harness_pressure_score < 70.0);
     }
 
     #[test]
@@ -1311,7 +1425,19 @@ mod tests {
         });
 
         let points = failure_points(
-            &summary, 2, 2, 4, 4, 0, false, None, false, false, None, false,
+            "react-calculator-scaffold",
+            &summary,
+            2,
+            2,
+            4,
+            4,
+            0,
+            false,
+            None,
+            false,
+            false,
+            None,
+            false,
         );
 
         assert!(points.contains(&"truncated_tool_result".to_string()));
@@ -1320,6 +1446,39 @@ mod tests {
         assert!(points.contains(&"long_tool_only_streak".to_string()));
         assert!(points.contains(&"high_context_pressure".to_string()));
         assert!(points.contains(&"compaction_needed".to_string()));
+    }
+
+    #[test]
+    fn survey_extra_calls_are_not_exact_completion_pressure() {
+        let summary = json!({
+            "errors": [],
+            "truncated_tool_results": 0,
+            "repeated_tool_calls": 0,
+            "tool_only_turns": {"max_consecutive": 4},
+            "max_context_window_pct": 1.0,
+            "compactions": 0,
+            "profile_scenario_call_expectations": {
+                "extra_calls_after_satisfied": 6
+            }
+        });
+
+        let points = failure_points(
+            "benchmark-design-survey",
+            &summary,
+            2,
+            2,
+            4,
+            4,
+            0,
+            false,
+            None,
+            false,
+            false,
+            None,
+            false,
+        );
+
+        assert!(!points.contains(&"extra_calls_after_expected".to_string()));
     }
 
     #[test]
@@ -1332,6 +1491,7 @@ mod tests {
                 model: "spark".to_string(),
                 score: 80.0,
                 task_quality_score: 90.0,
+                efficiency_score: 85.0,
                 harness_pressure_score: 70.0,
                 success: true,
                 validation_exit_code: None,
@@ -1341,6 +1501,8 @@ mod tests {
                 tool_or_item_calls: 3,
                 input_tokens: 100,
                 output_tokens: 0,
+                source_files: 0,
+                source_bytes: 0,
                 failure_points: String::new(),
                 source: "trace".to_string(),
             },
@@ -1351,6 +1513,7 @@ mod tests {
                 model: "spark".to_string(),
                 score: 70.0,
                 task_quality_score: 80.0,
+                efficiency_score: 75.0,
                 harness_pressure_score: 60.0,
                 success: true,
                 validation_exit_code: None,
@@ -1360,6 +1523,8 @@ mod tests {
                 tool_or_item_calls: 1,
                 input_tokens: 100,
                 output_tokens: 10,
+                source_files: 0,
+                source_bytes: 0,
                 failure_points: String::new(),
                 source: "run".to_string(),
             },
@@ -1385,6 +1550,7 @@ mod tests {
             model: "spark".to_string(),
             score: 0.0,
             task_quality_score: 0.0,
+            efficiency_score: 0.0,
             harness_pressure_score: 0.0,
             success: false,
             validation_present: true,
@@ -1400,6 +1566,8 @@ mod tests {
             max_context_window_pct: 1.0,
             max_request_duration_ms: 1000,
             total_duration_ms: 1500,
+            source_files: 0,
+            source_bytes: 0,
             compactions: 0,
             tool_failures: 0,
             recovered_tool_failures: 0,
@@ -1432,6 +1600,7 @@ mod tests {
             model: "spark".to_string(),
             score: 0.0,
             task_quality_score: 0.0,
+            efficiency_score: 0.0,
             harness_pressure_score: 0.0,
             success: false,
             validation_present: true,
@@ -1447,6 +1616,8 @@ mod tests {
             max_context_window_pct: 1.0,
             max_request_duration_ms: 1000,
             total_duration_ms: 1500,
+            source_files: 0,
+            source_bytes: 0,
             compactions: 0,
             tool_failures: 0,
             recovered_tool_failures: 0,
@@ -1466,6 +1637,6 @@ mod tests {
             failure_points: "browser_validation_failed".to_string(),
         };
 
-        assert_eq!(task_quality_score(&row), 45.0);
+        assert_eq!(task_quality_score(&row), 20.0);
     }
 }

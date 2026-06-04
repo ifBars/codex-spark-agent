@@ -23,7 +23,15 @@ pub(crate) struct ScenarioValidationResult {
     pub(crate) stdout: String,
     pub(crate) stderr: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_footprint: Option<SourceFootprint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) browser: Option<BrowserValidationResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SourceFootprint {
+    pub(crate) files: u64,
+    pub(crate) bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,8 +41,16 @@ pub(crate) struct BrowserValidationResult {
     pub(crate) timed_out: bool,
     pub(crate) duration_ms: u128,
     pub(crate) screenshot: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) smoke: Option<BrowserSmokeResult>,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct BrowserSmokeResult {
+    pub(crate) buttons: u64,
+    pub(crate) result: String,
 }
 
 pub(crate) async fn run_and_write_scenario_validation(
@@ -66,6 +82,7 @@ pub(crate) async fn run_and_write_scenario_validation(
             duration_ms: started.elapsed().as_millis(),
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            source_footprint: source_footprint(&cwd.join(spec.workdir)).ok(),
             browser: None,
         },
         Ok(Err(error)) => ScenarioValidationResult {
@@ -77,6 +94,7 @@ pub(crate) async fn run_and_write_scenario_validation(
             duration_ms: started.elapsed().as_millis(),
             stdout: String::new(),
             stderr: format!("failed to start validation command: {error}"),
+            source_footprint: source_footprint(&cwd.join(spec.workdir)).ok(),
             browser: None,
         },
         Err(_) => ScenarioValidationResult {
@@ -88,6 +106,7 @@ pub(crate) async fn run_and_write_scenario_validation(
             duration_ms: started.elapsed().as_millis(),
             stdout: String::new(),
             stderr: "validation timed out".to_string(),
+            source_footprint: source_footprint(&cwd.join(spec.workdir)).ok(),
             browser: None,
         },
     };
@@ -161,29 +180,33 @@ async fn run_browser_validation(
     let command = command_parts("node", &[&script_arg]);
 
     let result = match output {
-        Some(Ok(Ok(output))) => BrowserValidationResult {
-            command,
-            exit_code: output.status.code(),
-            timed_out: false,
-            duration_ms: started.elapsed().as_millis(),
-            screenshot: child_process_path(&screenshot),
-            stdout: format!(
-                "playwright install stdout:\n{}\nscript stdout:\n{}",
-                install_stdout,
-                String::from_utf8_lossy(&output.stdout)
-            ),
-            stderr: format!(
-                "playwright install stderr:\n{}\nscript stderr:\n{}",
-                install_stderr,
-                String::from_utf8_lossy(&output.stderr)
-            ),
-        },
+        Some(Ok(Ok(output))) => {
+            let script_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            BrowserValidationResult {
+                command,
+                exit_code: output.status.code(),
+                timed_out: false,
+                duration_ms: started.elapsed().as_millis(),
+                screenshot: child_process_path(&screenshot),
+                smoke: parse_browser_smoke_result(&script_stdout),
+                stdout: format!(
+                    "playwright install stdout:\n{}\nscript stdout:\n{}",
+                    install_stdout, script_stdout
+                ),
+                stderr: format!(
+                    "playwright install stderr:\n{}\nscript stderr:\n{}",
+                    install_stderr,
+                    String::from_utf8_lossy(&output.stderr)
+                ),
+            }
+        }
         Some(Ok(Err(error))) => BrowserValidationResult {
             command,
             exit_code: None,
             timed_out: false,
             duration_ms: started.elapsed().as_millis(),
             screenshot: child_process_path(&screenshot),
+            smoke: None,
             stdout: install_stdout,
             stderr: format!("failed to start browser validation command: {error}"),
         },
@@ -193,6 +216,7 @@ async fn run_browser_validation(
             timed_out: true,
             duration_ms: started.elapsed().as_millis(),
             screenshot: child_process_path(&screenshot),
+            smoke: None,
             stdout: install_stdout,
             stderr: "browser validation timed out".to_string(),
         },
@@ -202,6 +226,7 @@ async fn run_browser_validation(
             timed_out: false,
             duration_ms: started.elapsed().as_millis(),
             screenshot: child_process_path(&screenshot),
+            smoke: None,
             stdout: install_stdout,
             stderr: format!("failed to install playwright with bun:\n{install_stderr}"),
         },
@@ -321,6 +346,76 @@ try {{
 fn child_process_path(path: &Path) -> String {
     let path = path.display().to_string();
     path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
+}
+
+fn parse_browser_smoke_result(stdout: &str) -> Option<BrowserSmokeResult> {
+    stdout.lines().rev().find_map(|line| {
+        let value = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        (value.get("ok").and_then(serde_json::Value::as_bool) == Some(true)).then(|| {
+            BrowserSmokeResult {
+                buttons: value
+                    .get("buttons")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                result: value
+                    .get("result")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            }
+        })
+    })
+}
+
+fn source_footprint(workdir: &Path) -> Result<SourceFootprint> {
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+    visit_source_files(workdir, &mut |path| {
+        if source_file_counts(path) {
+            files += 1;
+            bytes += path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        }
+    })?;
+    Ok(SourceFootprint { files, bytes })
+}
+
+fn visit_source_files(dir: &Path, visit: &mut impl FnMut(&Path)) -> Result<()> {
+    if !dir.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir)
+        .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if path.is_dir() {
+            if matches!(name.as_ref(), "node_modules" | "target" | ".git" | ".vite") {
+                continue;
+            }
+            visit_source_files(&path, visit)?;
+        } else {
+            visit(&path);
+        }
+    }
+    Ok(())
+}
+
+fn source_file_counts(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if matches!(
+        name,
+        "brief.md" | "sample.log" | "bun.lock" | "Cargo.lock" | ".spark-browser-smoke.mjs"
+    ) {
+        return false;
+    }
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some("rs" | "toml" | "tsx" | "ts" | "css" | "html" | "json")
+    )
 }
 
 pub(crate) fn read_scenario_validation(run: &Path) -> Option<ScenarioValidationResult> {

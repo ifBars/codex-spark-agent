@@ -1,6 +1,7 @@
 mod agent;
 mod auth;
 mod benchmark_results;
+mod benchmark_workspace;
 mod chat;
 mod chat_markdown;
 mod chat_tui;

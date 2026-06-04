@@ -10,8 +10,9 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 
 use crate::{
+    benchmark_workspace,
     cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind},
-    profile_scenarios,
+    profile_scenarios, scenario_validation,
 };
 
 #[derive(Debug, Clone)]
@@ -56,6 +57,18 @@ pub(crate) struct CodexCliBenchmarkRow {
     pub(crate) present_artifacts: u64,
     pub(crate) validation_exit_code: Option<i32>,
     pub(crate) validation_timed_out: bool,
+    #[serde(default)]
+    pub(crate) browser_validation_present: bool,
+    #[serde(default)]
+    pub(crate) browser_validation_exit_code: Option<i32>,
+    #[serde(default)]
+    pub(crate) browser_validation_timed_out: bool,
+    #[serde(default)]
+    pub(crate) browser_screenshot: String,
+    #[serde(default)]
+    pub(crate) source_files: u64,
+    #[serde(default)]
+    pub(crate) source_bytes: u64,
     pub(crate) final_message_chars: u64,
     pub(crate) run_dir: String,
     pub(crate) failure_points: String,
@@ -83,8 +96,26 @@ pub(crate) async fn run_codex_cli_benchmark(
     let mut rows = Vec::new();
     for scenario in options.suite.scenarios() {
         for repeat_index in 1..=options.repeat {
-            profile_scenarios::prepare_profile_scenario(&options.cwd, *scenario)?;
-            let row = run_codex_cli_scenario(&options, *scenario, repeat_index, started_at).await?;
+            let scenario_cwd = benchmark_workspace::create_benchmark_workspace(
+                &options.cwd,
+                options.suite.name(),
+                *scenario,
+                repeat_index,
+            )?;
+            println!(
+                "codex_cli_workspace scenario={} path={}",
+                scenario.name(),
+                scenario_cwd.display()
+            );
+            profile_scenarios::prepare_profile_scenario(&scenario_cwd, *scenario)?;
+            let row = run_codex_cli_scenario(
+                &options,
+                &scenario_cwd,
+                *scenario,
+                repeat_index,
+                started_at,
+            )
+            .await?;
             println!(
                 "codex_cli scenario={} repeat={}/{} score={:.1} success={} duration_ms={} failure_points={}",
                 row.scenario,
@@ -125,6 +156,7 @@ pub(crate) async fn run_codex_cli_benchmark(
 
 async fn run_codex_cli_scenario(
     options: &CodexCliBenchmarkOptions,
+    scenario_cwd: &Path,
     scenario: ProfileScenarioKind,
     repeat_index: usize,
     batch_stamp: u128,
@@ -155,7 +187,7 @@ async fn run_codex_cli_scenario(
         .arg("exec")
         .arg("--json")
         .arg("--cd")
-        .arg(&options.cwd)
+        .arg(scenario_cwd)
         .arg("--sandbox")
         .arg("danger-full-access")
         .arg("--dangerously-bypass-approvals-and-sandbox")
@@ -218,9 +250,25 @@ async fn run_codex_cli_scenario(
     let expected_artifacts = expected_artifacts(scenario);
     let present_artifacts = expected_artifacts
         .iter()
-        .filter(|path| options.cwd.join(path).exists())
+        .filter(|path| scenario_cwd.join(path).exists())
         .count() as u64;
-    let validation = run_validation_command(&options.cwd, &run_dir, scenario).await?;
+    let validation =
+        scenario_validation::run_and_write_scenario_validation(scenario_cwd, &run_dir, scenario)
+            .await?;
+    let validation_exit_code = validation.as_ref().and_then(|result| result.exit_code);
+    let validation_timed_out = validation.as_ref().is_some_and(|result| result.timed_out);
+    let browser_validation = validation
+        .as_ref()
+        .and_then(|result| result.browser.as_ref());
+    let browser_validation_present = browser_validation.is_some();
+    let browser_validation_exit_code = browser_validation.and_then(|result| result.exit_code);
+    let browser_validation_timed_out = browser_validation.is_some_and(|result| result.timed_out);
+    let browser_screenshot = browser_validation
+        .map(|result| result.screenshot.clone())
+        .unwrap_or_default();
+    let source_footprint = validation
+        .as_ref()
+        .and_then(|result| result.source_footprint.as_ref());
     let failure_points = codex_failure_points(
         exit_code,
         timed_out,
@@ -229,8 +277,11 @@ async fn run_codex_cli_scenario(
         &final_message,
         expected_artifacts.len() as u64,
         present_artifacts,
-        validation.exit_code,
-        validation.timed_out,
+        validation_exit_code,
+        validation_timed_out,
+        browser_validation_present,
+        browser_validation_exit_code,
+        browser_validation_timed_out,
     );
 
     let mut row = CodexCliBenchmarkRow {
@@ -244,8 +295,10 @@ async fn run_codex_cli_scenario(
             && !timed_out
             && !final_message.trim().is_empty()
             && present_artifacts == expected_artifacts.len() as u64
-            && validation.exit_code.is_none_or(|code| code == 0)
-            && !validation.timed_out,
+            && validation_exit_code.is_none_or(|code| code == 0)
+            && !validation_timed_out
+            && browser_validation_exit_code.is_none_or(|code| code == 0)
+            && !browser_validation_timed_out,
         exit_code,
         timed_out,
         duration_ms,
@@ -266,8 +319,18 @@ async fn run_codex_cli_scenario(
         reasoning_output_tokens: metrics.reasoning_output_tokens,
         expected_artifacts: expected_artifacts.len() as u64,
         present_artifacts,
-        validation_exit_code: validation.exit_code,
-        validation_timed_out: validation.timed_out,
+        validation_exit_code,
+        validation_timed_out,
+        browser_validation_present,
+        browser_validation_exit_code,
+        browser_validation_timed_out,
+        browser_screenshot,
+        source_files: source_footprint
+            .map(|footprint| footprint.files)
+            .unwrap_or(0),
+        source_bytes: source_footprint
+            .map(|footprint| footprint.bytes)
+            .unwrap_or(0),
         final_message_chars: final_message.chars().count() as u64,
         run_dir: run_dir.display().to_string(),
         failure_points: failure_points.join(";"),
@@ -319,74 +382,10 @@ struct CodexEventMetrics {
     reasoning_output_tokens: u64,
 }
 
-struct ValidationResult {
-    exit_code: Option<i32>,
-    timed_out: bool,
-}
-
 #[derive(Debug, Default, Clone, Copy)]
 struct StderrMetrics {
     non_empty_lines: u64,
     actionable_lines: u64,
-}
-
-async fn run_validation_command(
-    cwd: &Path,
-    run_dir: &Path,
-    scenario: ProfileScenarioKind,
-) -> Result<ValidationResult> {
-    let Some(spec) = profile_scenarios::profile_scenario_validation_command(scenario) else {
-        return Ok(ValidationResult {
-            exit_code: None,
-            timed_out: false,
-        });
-    };
-
-    let output = tokio::time::timeout(
-        Duration::from_secs(180),
-        Command::new(spec.program)
-            .args(spec.args)
-            .current_dir(cwd.join(spec.workdir))
-            .output(),
-    )
-    .await;
-
-    match output {
-        Ok(Ok(output)) => {
-            std::fs::write(run_dir.join("validation-stdout.txt"), &output.stdout)
-                .map_err(|error| anyhow::anyhow!("failed to write validation stdout: {error}"))?;
-            std::fs::write(run_dir.join("validation-stderr.txt"), &output.stderr)
-                .map_err(|error| anyhow::anyhow!("failed to write validation stderr: {error}"))?;
-            Ok(ValidationResult {
-                exit_code: output.status.code(),
-                timed_out: false,
-            })
-        }
-        Ok(Err(error)) => {
-            std::fs::write(
-                run_dir.join("validation-stderr.txt"),
-                format!("failed to start validation command: {error}"),
-            )
-            .map_err(|write_error| {
-                anyhow::anyhow!("failed to write validation stderr: {write_error}")
-            })?;
-            Ok(ValidationResult {
-                exit_code: None,
-                timed_out: false,
-            })
-        }
-        Err(_) => {
-            std::fs::write(
-                run_dir.join("validation-stderr.txt"),
-                "validation timed out",
-            )
-            .map_err(|error| anyhow::anyhow!("failed to write validation timeout: {error}"))?;
-            Ok(ValidationResult {
-                exit_code: None,
-                timed_out: true,
-            })
-        }
-    }
 }
 
 fn parse_codex_json_events(stdout: &str) -> CodexEventMetrics {
@@ -507,6 +506,9 @@ fn codex_failure_points(
     present_artifacts: u64,
     validation_exit_code: Option<i32>,
     validation_timed_out: bool,
+    browser_validation_present: bool,
+    browser_validation_exit_code: Option<i32>,
+    browser_validation_timed_out: bool,
 ) -> Vec<String> {
     let mut points = Vec::new();
     if timed_out {
@@ -527,6 +529,12 @@ fn codex_failure_points(
     if validation_exit_code.is_some_and(|code| code != 0) {
         points.push("validation_failed".to_string());
     }
+    if browser_validation_timed_out {
+        points.push("browser_validation_timeout".to_string());
+    }
+    if browser_validation_present && browser_validation_exit_code != Some(0) {
+        points.push("browser_validation_failed".to_string());
+    }
     if metrics.non_json_stdout_lines > 0 {
         points.push("non_json_stdout_noise".to_string());
     }
@@ -537,31 +545,57 @@ fn codex_failure_points(
 }
 
 fn codex_score(row: &CodexCliBenchmarkRow) -> f64 {
-    let mut penalty = 0.0;
+    let mut quality_penalty = 0.0;
     if row.timed_out {
-        penalty += 45.0;
+        quality_penalty += 35.0;
     }
     if row.exit_code != Some(0) {
-        penalty += 35.0;
+        quality_penalty += 25.0;
     }
     if row.final_message_chars == 0 {
-        penalty += 15.0;
+        quality_penalty += 15.0;
     }
-    penalty += row.expected_artifacts.saturating_sub(row.present_artifacts) as f64 * 12.0;
+    quality_penalty += row.expected_artifacts.saturating_sub(row.present_artifacts) as f64 * 12.0;
     if row.validation_timed_out {
-        penalty += 25.0;
+        quality_penalty += 25.0;
     }
     if row.validation_exit_code.is_some_and(|code| code != 0) {
-        penalty += 25.0;
+        quality_penalty += 25.0;
     }
-    penalty += (row.non_json_stdout_lines.min(20) as f64) * 0.5;
-    penalty += (row.actionable_stderr_lines.min(20) as f64) * 0.25;
+    if row.browser_validation_timed_out {
+        quality_penalty += 35.0;
+    }
+    if row.browser_validation_present && row.browser_validation_exit_code != Some(0) {
+        quality_penalty += 55.0;
+    }
+    let quality = (100.0 - quality_penalty).clamp(0.0, 100.0);
+
+    let mut efficiency_penalty = 0.0;
     if row.duration_ms > 180_000 {
-        penalty += 10.0;
+        efficiency_penalty += 15.0;
     } else if row.duration_ms > 90_000 {
-        penalty += 5.0;
+        efficiency_penalty += 8.0;
+    } else if row.duration_ms > 60_000 {
+        efficiency_penalty += 3.0;
     }
-    round1((100.0 - penalty).clamp(0.0, 100.0))
+    if row.source_bytes > 0 {
+        efficiency_penalty += row.source_bytes.saturating_sub(12_000) as f64 / 1_000.0;
+    }
+    let efficiency = (100.0 - efficiency_penalty).clamp(0.0, 100.0);
+
+    let mut score = quality * 0.85 + efficiency * 0.15;
+    if row.browser_validation_timed_out
+        || (row.browser_validation_present && row.browser_validation_exit_code != Some(0))
+    {
+        score = score.min(45.0);
+    }
+    if row.validation_timed_out || row.validation_exit_code.is_some_and(|code| code != 0) {
+        score = score.min(55.0);
+    }
+    if !row.success {
+        score = score.min(60.0);
+    }
+    round1(score.clamp(0.0, 100.0))
 }
 
 fn aggregate_rows(suite: &str, rows: &[CodexCliBenchmarkRow]) -> Value {
@@ -661,12 +695,18 @@ mod tests {
             present_artifacts: 2,
             validation_exit_code: None,
             validation_timed_out: false,
+            browser_validation_present: false,
+            browser_validation_exit_code: None,
+            browser_validation_timed_out: false,
+            browser_screenshot: String::new(),
+            source_files: 0,
+            source_bytes: 0,
             final_message_chars: 20,
             run_dir: "run".to_string(),
             failure_points: "missing_expected_artifact".to_string(),
         };
 
-        assert_eq!(codex_score(&row), 73.5);
+        assert_eq!(codex_score(&row), 60.0);
     }
 
     #[test]
