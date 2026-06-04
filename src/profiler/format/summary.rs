@@ -27,6 +27,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     let remote_compactions = number_field(summary, "remote_compactions");
     let fallback_compactions = number_field(summary, "fallback_compactions");
     let local_pressure_compactions = compactions_with_local_pressure(summary);
+    let compaction_regrowth = format_compaction_regrowth_for_summary_row(summary);
     let scenario_tools = format_scenario_tools_for_summary_row(summary);
     let scenario_calls = format_scenario_calls_for_summary_row(summary);
     let scenario_skills = format_scenario_skills_for_summary_row(summary);
@@ -40,7 +41,7 @@ pub fn format_trace_summary_row(label: &str, summary: &Value) -> String {
     };
 
     format!(
-        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures}{recoveries} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{scenario_tools}{scenario_calls}{scenario_skills}{tool_only_turns} diagnostics={diagnostics}"
+        "{label} | model={model}{scenario} requests={requests} max_tokens={max_tokens} ({context_pct}) max_request_ms={max_request_ms} tools={tool_calls} failures={tool_failures}{recoveries} compactions={compactions} remote={remote_compactions} fallback={fallback_compactions} local_pressure={local_pressure_compactions}{compaction_regrowth}{scenario_tools}{scenario_calls}{scenario_skills}{tool_only_turns} diagnostics={diagnostics}"
     )
 }
 
@@ -304,6 +305,39 @@ pub(super) fn format_tool_only_turns(summary: &Value) -> Option<String> {
     Some(format!(
         "tool-only-turns: count={count} max_consecutive={max_consecutive} turns=[{turns}]"
     ))
+}
+
+pub(super) fn format_compaction_regrowth(summary: &Value) -> Option<String> {
+    let report = summary.get("compaction_regrowth")?;
+    let count = report.get("count").and_then(Value::as_u64).unwrap_or(0);
+    if count == 0 {
+        return None;
+    }
+    let same_turn = report
+        .get("max_same_turn_growth_chars")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let next_request = report
+        .get("max_next_request_growth_chars")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Some(format!(
+        "compaction-regrowth: count={count} max_same_turn_chars={same_turn} max_next_request_chars={next_request}"
+    ))
+}
+
+pub(super) fn format_compaction_regrowth_for_summary_row(summary: &Value) -> String {
+    let Some(report) = summary.get("compaction_regrowth") else {
+        return String::new();
+    };
+    let next_request = report
+        .get("max_next_request_growth_chars")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if next_request == 0 {
+        return String::new();
+    }
+    format!(" compaction_regrowth={next_request}")
 }
 
 pub(super) fn format_tool_only_turns_for_summary_row(summary: &Value) -> String {

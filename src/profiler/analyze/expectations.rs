@@ -72,6 +72,62 @@ pub(super) fn tool_only_turn_report(timeline: &BTreeMap<usize, Map<String, Value
     })
 }
 
+pub(super) fn compaction_regrowth_report(timeline: &BTreeMap<usize, Map<String, Value>>) -> Value {
+    let mut events = Vec::new();
+    let mut max_same_turn_growth = 0u64;
+    let mut max_next_request_growth = 0u64;
+
+    for (turn, entry) in timeline {
+        let Some(compactions) = entry.get("compactions").and_then(Value::as_array) else {
+            continue;
+        };
+        let request_input_chars = entry.get("request_input_chars").and_then(Value::as_u64);
+        let next_request_input_chars = timeline
+            .range((turn + 1)..)
+            .find_map(|(_, entry)| entry.get("request_input_chars").and_then(Value::as_u64));
+
+        for compaction in compactions {
+            let retained_chars = compaction_retained_chars(compaction);
+            let same_turn_growth =
+                growth_from_retained(retained_chars, request_input_chars).unwrap_or(0);
+            let next_request_growth =
+                growth_from_retained(retained_chars, next_request_input_chars).unwrap_or(0);
+            max_same_turn_growth = max_same_turn_growth.max(same_turn_growth);
+            max_next_request_growth = max_next_request_growth.max(next_request_growth);
+            events.push(json!({
+                "turn": turn,
+                "method": compaction.get("method").and_then(Value::as_str).unwrap_or("unknown"),
+                "trigger": compaction.get("trigger").cloned().unwrap_or(Value::Null),
+                "before_chars": compaction.get("before_chars").cloned().unwrap_or(Value::Null),
+                "retained_chars": retained_chars,
+                "request_input_chars": request_input_chars,
+                "next_request_input_chars": next_request_input_chars,
+                "same_turn_growth_chars": same_turn_growth,
+                "next_request_growth_chars": next_request_growth,
+            }));
+        }
+    }
+
+    json!({
+        "count": events.len(),
+        "max_same_turn_growth_chars": max_same_turn_growth,
+        "max_next_request_growth_chars": max_next_request_growth,
+        "events": events,
+    })
+}
+
+fn compaction_retained_chars(compaction: &Value) -> Option<u64> {
+    compaction
+        .pointer("/local_pressure/final_chars")
+        .or_else(|| compaction.get("after_chars"))
+        .or_else(|| compaction.pointer("/fallback/after_chars"))
+        .and_then(Value::as_u64)
+}
+
+fn growth_from_retained(retained_chars: Option<u64>, request_chars: Option<u64>) -> Option<u64> {
+    Some(request_chars?.saturating_sub(retained_chars?))
+}
+
 pub(super) fn scenario_tool_expectation_report(
     metadata: Option<&Value>,
     calls: &[ObservedToolCall],

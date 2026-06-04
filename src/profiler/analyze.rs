@@ -24,8 +24,9 @@ use actions::{
     required_actions_from_request_input,
 };
 use expectations::{
-    scenario_skill_expectation_report, scenario_tool_call_expectation_report,
-    scenario_tool_expectation_report, tool_failure_recovery_report, tool_only_turn_report,
+    compaction_regrowth_report, scenario_skill_expectation_report,
+    scenario_tool_call_expectation_report, scenario_tool_expectation_report,
+    tool_failure_recovery_report, tool_only_turn_report,
 };
 use trace_io::{
     function_calls_from_trace_response, response_text_from_trace_response, tool_result_from_trace,
@@ -235,6 +236,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let scenario_skill_expectation_report =
         scenario_skill_expectation_report(trace_metadata.as_ref(), &loaded_skill_contexts);
     let tool_only_turn_report = tool_only_turn_report(&timeline);
+    let compaction_regrowth_report = compaction_regrowth_report(&timeline);
     let tool_failure_recovery_report = tool_failure_recovery_report(&observed_tool_results);
     if let Some(object) = summary.as_object_mut() {
         object.insert(
@@ -271,6 +273,16 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             json!(loaded_skill_contexts.iter().collect::<Vec<_>>()),
         );
         object.insert("tool_only_turns".to_string(), tool_only_turn_report.clone());
+        if compaction_regrowth_report
+            .get("count")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count > 0)
+        {
+            object.insert(
+                "compaction_regrowth".to_string(),
+                compaction_regrowth_report.clone(),
+            );
+        }
         if let Some(report) = &scenario_tool_expectation_report {
             object.insert(
                 "profile_scenario_tool_expectations".to_string(),
@@ -379,6 +391,19 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                     "kind": "profile_scenario_expected_skills_missing",
                     "message": "The trace did not include all loaded skill contexts expected for this profiling scenario.",
                     "missing_skills": report.get("missing_skills").cloned().unwrap_or_else(|| json!([])),
+                }));
+            }
+            if compaction_regrowth_report
+                .get("max_next_request_growth_chars")
+                .and_then(Value::as_u64)
+                .is_some_and(|chars| chars >= 100_000)
+            {
+                diagnostics.push(json!({
+                    "level": "info",
+                    "kind": "post_compaction_context_regrowth",
+                    "message": "Request input grew substantially after a compaction boundary. Compare the compaction_regrowth report with subsequent tool calls before tuning thresholds.",
+                    "max_same_turn_growth_chars": compaction_regrowth_report.get("max_same_turn_growth_chars").cloned().unwrap_or_else(|| json!(0)),
+                    "max_next_request_growth_chars": compaction_regrowth_report.get("max_next_request_growth_chars").cloned().unwrap_or_else(|| json!(0)),
                 }));
             }
             if tool_only_turn_report

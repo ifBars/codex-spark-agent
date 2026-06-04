@@ -23,6 +23,11 @@ fn formats_trace_timeline_for_human_scan() {
         "retained_required_actions_executed": [{"tool": "fs.list", "path": "src", "recursive": false}],
         "retained_required_actions_missing": [],
         "tool_calls_before_first_required_action": 0,
+        "compaction_regrowth": {
+            "count": 1,
+            "max_same_turn_growth_chars": 1000,
+            "max_next_request_growth_chars": 120000
+        },
         "timeline": [{
             "turn": 1,
             "request_input_chars": 120000,
@@ -59,6 +64,9 @@ fn formats_trace_timeline_for_human_scan() {
     assert!(output.contains("trace model=gpt-5.3-codex-spark scenario=compaction-pressure"));
     assert!(output.contains("diagnostics: tool_failures"));
     assert!(output.contains("required-actions: total=1 executed=1 missing=0 detours_before_first=0 actions=[tool=fs.list path=src recursive=false]"));
+    assert!(output.contains(
+        "compaction-regrowth: count=1 max_same_turn_chars=1000 max_next_request_chars=120000"
+    ));
     assert!(output.contains("turn 1: input=120000 chars (~30000 tok, 23.4%)"));
     assert!(output.contains("calls=[fs.read]"));
     assert!(output.contains("results=[fs.read:ok 9ms 512 chars cached+timeout parents=nested]"));
@@ -110,6 +118,9 @@ fn formats_trace_summary_row_for_run_comparison() {
         "remote_compactions": 1,
         "fallback_compactions": 1,
         "compaction_reports": [{"local_pressure": {"made_progress": true}}],
+        "compaction_regrowth": {
+            "max_next_request_growth_chars": 120000
+        },
         "diagnostics": [{"kind": "tool_failures"}, {"kind": "weak_compaction_shrink"}]
     });
 
@@ -120,6 +131,7 @@ fn formats_trace_summary_row_for_run_comparison() {
     assert!(row.contains("max_tokens=42000 (32.8%)"));
     assert!(row.contains("tools=7 failures=1"));
     assert!(row.contains("compactions=2 remote=1 fallback=1 local_pressure=1"));
+    assert!(row.contains("compaction_regrowth=120000"));
     assert!(row.contains("diagnostics=tool_failures,weak_compaction_shrink"));
 }
 
@@ -167,6 +179,9 @@ fn formats_trace_aggregate_row_for_run_comparison() {
             "remote_compactions": 1,
             "fallback_compactions": 0,
             "compaction_reports": [{"local_pressure": {"made_progress": true}}],
+            "compaction_regrowth": {
+                "max_next_request_growth_chars": 120000
+            },
             "diagnostics": [{"kind": "remote_compaction_local_pressure"}]
         }),
         json!({
@@ -196,6 +211,9 @@ fn formats_trace_aggregate_row_for_run_comparison() {
             "remote_compactions": 1,
             "fallback_compactions": 0,
             "compaction_reports": [{"local_pressure": {"made_progress": false}}],
+            "compaction_regrowth": {
+                "max_next_request_growth_chars": 240000
+            },
             "diagnostics": [
                 {"kind": "request_failure"},
                 {"kind": "remote_compaction_local_pressure"}
@@ -212,6 +230,7 @@ fn formats_trace_aggregate_row_for_run_comparison() {
     assert!(row.contains("scenario_overrun_calls=7 scenario_overrun_turns=4"));
     assert!(row.contains("max_overrun_turns=3 scenario_overrun_context=46000"));
     assert!(row.contains("compactions=2 remote=2 fallback=0 local_pressure=2"));
+    assert!(row.contains("max_compaction_regrowth=240000"));
     assert!(row.contains("diagnostics=remote_compaction_local_pressure:2,request_failure:1"));
 }
 
@@ -228,6 +247,9 @@ fn formats_trace_aggregate_json_for_batch_analysis() {
             "compactions": 1,
             "remote_compactions": 1,
             "fallback_compactions": 0,
+            "compaction_regrowth": {
+                "max_next_request_growth_chars": 64000
+            },
             "tool_failure_recovery": {
                 "failed_tool_results": 1,
                 "recovered_failures": 1
@@ -294,6 +316,7 @@ fn formats_trace_aggregate_json_for_batch_analysis() {
     assert_eq!(aggregate["recovered_tool_failures"], 1);
     assert_eq!(aggregate["failed_tool_results"], 1);
     assert_eq!(aggregate["local_pressure_compactions"], 1);
+    assert_eq!(aggregate["max_compaction_regrowth_chars"], 64_000);
     assert_eq!(aggregate["tool_only_turns"], 3);
     assert_eq!(aggregate["max_tool_only_turn_streak"], 2);
     assert_eq!(aggregate["scenario_tools"]["satisfied"], 5);

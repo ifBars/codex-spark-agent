@@ -84,6 +84,8 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
         .iter()
         .map(compactions_with_local_pressure)
         .sum::<usize>();
+    let max_compaction_regrowth =
+        max_compaction_regrowth_field(summaries, "max_next_request_growth_chars");
     let total_tool_only_turns = sum_tool_only_turn_field(summaries, "count");
     let max_tool_only_streak = summaries
         .iter()
@@ -107,7 +109,7 @@ pub fn format_trace_aggregate_row(label: &str, summaries: &[Value]) -> String {
     };
 
     format!(
-        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures}{aggregate_recoveries} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} local_pressure={total_local_pressure_compactions}{aggregate_scenario_tools}{aggregate_scenario_calls}{aggregate_scenario_skills}{aggregate_scenario_overrun}{aggregate_tool_only_turns} diagnostics={diagnostics}"
+        "{label} aggregate | runs={count} success={successes} failure={failures} max_tokens={max_tokens} ({max_context_pct:.1}%) max_request_ms={max_request_ms} tools={total_tools} failures={total_tool_failures}{aggregate_recoveries} compactions={total_compactions} remote={total_remote_compactions} fallback={total_fallback_compactions} local_pressure={total_local_pressure_compactions} max_compaction_regrowth={max_compaction_regrowth}{aggregate_scenario_tools}{aggregate_scenario_calls}{aggregate_scenario_skills}{aggregate_scenario_overrun}{aggregate_tool_only_turns} diagnostics={diagnostics}"
     )
 }
 
@@ -165,6 +167,7 @@ pub fn trace_aggregate_json(label: &str, summaries: &[Value]) -> Value {
         "remote_compactions": sum_summary_field(summaries, "remote_compactions"),
         "fallback_compactions": sum_summary_field(summaries, "fallback_compactions"),
         "local_pressure_compactions": summaries.iter().map(compactions_with_local_pressure).sum::<usize>(),
+        "max_compaction_regrowth_chars": max_compaction_regrowth_field(summaries, "max_next_request_growth_chars"),
         "tool_only_turns": sum_tool_only_turn_field(summaries, "count"),
         "max_tool_only_turn_streak": summaries
             .iter()
@@ -216,6 +219,18 @@ fn sum_recovery_field(summaries: &[Value], key: &str) -> u64 {
                 .and_then(Value::as_u64)
         })
         .sum()
+}
+
+fn max_compaction_regrowth_field(summaries: &[Value], key: &str) -> u64 {
+    summaries
+        .iter()
+        .filter_map(|summary| {
+            summary
+                .pointer(&format!("/compaction_regrowth/{key}"))
+                .and_then(Value::as_u64)
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn sum_tool_only_turn_field(summaries: &[Value], key: &str) -> u64 {

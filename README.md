@@ -265,7 +265,7 @@ Use `--profile` for a compact summary after a prompt:
 - consecutive duplicate calls,
 - tool-only turn streaks where Spark keeps calling tools without user-facing text,
 - read-only cache hits,
-- remote/local compaction counts,
+- remote/local compaction counts and post-compaction context regrowth,
 - derived diagnostics for request failures, repeated tool loops, mutation-created parent dirs, weak or expanding compaction, and near-limit context pressure.
 
 Use `--trace` to save run metadata, raw request, response, tool-result, compaction, and profile JSON files under `.spark-runs/`. Use `spark traces` to list recent trace directories, or `spark traces --summary` to compare recent runs by request size, latency, tools, compactions, and diagnostics. `spark traces --json` emits matching analyzed traces as one JSON object, and `spark traces --jsonl` emits one record per matching trace for scripts. `--aggregate` adds an aggregate object in JSON mode or an aggregate record in JSONL mode. `spark traces --diagnostic <kind>` filters analyzed traces by diagnostic kind; repeat the flag to require multiple diagnostics. Use `--min-tool-only-streak`, `--min-overrun-turns`, and `--min-overrun-context-chars` to find traces that crossed specific Spark overrun thresholds. Use `--sort overrun-context`, `--sort overrun-turns`, `--sort tool-only-streak`, `--sort context`, or `--sort request-ms` to rank matching analyzed traces by worst profiling signal instead of recency. Use `spark analyze-trace` without a path to summarize the latest trace.
@@ -284,7 +284,7 @@ If a run fails after starting, the harness saves a `*-error.json` trace entry an
 
 `analyze-trace` recomputes its summary from raw trace files, so older embedded `*-profile-summary.json` files do not mask newer diagnostics.
 
-`analyze-trace` also emits a compact `timeline` array with per-turn request size, approximate token pressure, response latency, response text size, tool-call signatures, tool-result status, timeout/truncation/error-kind markers, compactions, and terminal errors. It also reports `tool_only_turns` when Spark keeps calling tools across turns without producing user-facing text. Use `spark analyze-trace --timeline` for a human-readable version that correlates Spark failures with context growth, slow requests, repeated tools, tool-only streaks, and compaction boundaries before opening the raw JSON files.
+`analyze-trace` also emits a compact `timeline` array with per-turn request size, approximate token pressure, response latency, response text size, tool-call signatures, tool-result status, timeout/truncation/error-kind markers, compactions, and terminal errors. It reports `compaction_regrowth` when request input grows again after a compaction boundary, and adds a `post_compaction_context_regrowth` diagnostic when that growth is large enough to affect long-context profiling. It also reports `tool_only_turns` when Spark keeps calling tools across turns without producing user-facing text. Use `spark analyze-trace --timeline` for a human-readable version that correlates Spark failures with context growth, slow requests, repeated tools, tool-only streaks, and compaction boundaries before opening the raw JSON files.
 
 When a native tool observation fails, `analyze-trace` reports whether Spark later recovered with a successful observation from the same tool. Summary rows include `recoveries=<recovered>/<failed>`, and timeline output prints a `tool-recovery` header. This helps distinguish clean runs, recovered path drift, and unrecovered tool failures.
 

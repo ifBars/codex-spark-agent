@@ -63,6 +63,64 @@ fn analyze_trace_reconstructs_tool_calls_from_stream_events() {
 }
 
 #[test]
+fn analyze_trace_reports_post_compaction_regrowth() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let large_followup = "x".repeat(120_000);
+    std::fs::write(
+        dir.path().join("001-request-input.json"),
+        serde_json::to_vec_pretty(&json!({
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "compact soon"}]}]
+        }))
+        .expect("serialize request"),
+    )
+    .expect("write first request");
+    std::fs::write(
+        dir.path().join("002-compaction.json"),
+        serde_json::to_vec_pretty(&json!({
+            "method": "responses_compact",
+            "trigger": "size_threshold",
+            "before_chars": 220_000,
+            "after_chars": 10_000
+        }))
+        .expect("serialize compaction"),
+    )
+    .expect("write compaction");
+    std::fs::write(
+        dir.path().join("002-request-input.json"),
+        serde_json::to_vec_pretty(&json!({
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "after compact"}]}]
+        }))
+        .expect("serialize request"),
+    )
+    .expect("write second request");
+    std::fs::write(
+        dir.path().join("003-request-input.json"),
+        serde_json::to_vec_pretty(&json!({
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": large_followup}]}]
+        }))
+        .expect("serialize request"),
+    )
+    .expect("write third request");
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(summary["compaction_regrowth"]["count"], 1);
+    assert!(
+        summary["compaction_regrowth"]["max_next_request_growth_chars"]
+            .as_u64()
+            .expect("regrowth")
+            >= 40_000
+    );
+    assert!(
+        summary["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["kind"] == "post_compaction_context_regrowth")
+    );
+}
+
+#[test]
 fn analyze_trace_matches_retained_required_actions_to_tool_calls() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_request_with_required_action(

@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use super::aggregate::trace_scenario_name;
 use super::summary::{
-    format_required_actions_summary, format_scenario_call_expectations,
+    format_compaction_regrowth, format_required_actions_summary, format_scenario_call_expectations,
     format_scenario_skill_expectations, format_scenario_tool_expectations,
     format_tool_failure_recovery, format_tool_only_turns,
 };
@@ -62,6 +62,9 @@ pub fn format_trace_timeline(summary: &Value) -> String {
     }
     if let Some(tool_only_turns) = format_tool_only_turns(summary) {
         lines.push(tool_only_turns);
+    }
+    if let Some(compaction_regrowth) = format_compaction_regrowth(summary) {
+        lines.push(compaction_regrowth);
     }
     if let Some(tool_recovery) = format_tool_failure_recovery(summary) {
         lines.push(tool_recovery);
