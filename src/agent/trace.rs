@@ -5,6 +5,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::profiler::{SPARK_CONTEXT_WINDOW_TOKENS, approx_token_count_from_chars};
+use crate::tools::AgentMode;
 
 pub(super) struct TraceWriter {
     pub(in crate::agent) dir: PathBuf,
@@ -23,6 +24,7 @@ pub(super) struct TraceMetadata {
     pub(super) session_name: Option<String>,
     pub(super) new_session: bool,
     pub(super) context: Option<Value>,
+    pub(super) mode: AgentMode,
 }
 
 impl TraceWriter {
@@ -45,6 +47,7 @@ impl TraceWriter {
                 "interactive": metadata.interactive,
                 "session": metadata.session_name,
                 "new_session": metadata.new_session,
+                "mode": metadata.mode.name(),
                 "context": metadata.context,
                 "compact_after_chars": metadata.compact_after_chars,
                 "compact_after_approx_tokens": approx_token_count_from_chars(metadata.compact_after_chars),

@@ -131,6 +131,25 @@ pub(crate) fn profile_scenario_prompts(
              Finish with two concise Rust harness risks or cleanup opportunities, and mention whether the loaded skill guidance affected your review."
                 .to_string(),
         ]),
+        ProfileScenarioKind::SteamNetworkLibSurvey => Ok(vec![
+            "Profile scenario: steamnetworklib-survey.\n\
+             Answer this like a natural repo-understanding chat, grounded in repository sources:\n\
+             What is SteamNetworkLib, what does it do, and how does it work?\n\
+             Use targeted native tools to inspect the repo. Start from the root shape and key docs, then inspect implementation files only where needed.\n\
+             Finish with a concise explanation of the library's purpose, main subsystems, and request/data flow.\n\
+             Also mention one thing the harness made easier or harder while gathering evidence."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::S1ApiSurvey => Ok(vec![
+            "Profile scenario: s1api-survey.\n\
+             Answer this like a natural repo-understanding chat, grounded in repository sources:\n\
+             What is S1API, what does it do, and how does it work?\n\
+             Use targeted native tools to inspect the repo. Start from the root shape and key docs such as index.md, then inspect the entrypoint and representative API areas only where needed.\n\
+             Avoid trying to read the entire generated api/_site tree; use bounded reads and narrow searches.\n\
+             Finish with a concise explanation of the API's purpose, main subsystems, and mod/runtime flow.\n\
+             Also mention one thing the harness made easier or harder while gathering evidence."
+                .to_string(),
+        ]),
         ProfileScenarioKind::NaturalCompaction => natural_compaction_scenario_prompts(target_tokens),
         ProfileScenarioKind::CompactionPressure => {
             let target_chars = target_tokens.saturating_mul(APPROX_CHARS_PER_TOKEN);
@@ -221,6 +240,10 @@ pub(crate) fn profile_scenario_expected_tool_groups(
             vec![vec!["fs.read"], vec!["fs.stat"], vec!["fs.write"]]
         }
         ProfileScenarioKind::SkillUse => vec![vec!["fs.read"], vec!["fs.search"]],
+        ProfileScenarioKind::SteamNetworkLibSurvey => {
+            vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
+        }
+        ProfileScenarioKind::S1ApiSurvey => vec![vec!["fs.list"], vec!["fs.read"]],
     }
 }
 
@@ -293,6 +316,37 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.search",
                 "path": "src",
+            }),
+        ],
+        ProfileScenarioKind::SteamNetworkLibSurvey => vec![
+            json!({
+                "tool": "fs.list",
+                "path": ".",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "README.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "SteamNetworkClient.cs",
+            }),
+            json!({
+                "tool": "fs.search",
+            }),
+        ],
+        ProfileScenarioKind::S1ApiSurvey => vec![
+            json!({
+                "tool": "fs.list",
+                "path": ".",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "index.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "S1API.cs",
             }),
         ],
     }

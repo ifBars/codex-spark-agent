@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::{DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS, DEFAULT_MODEL, DEFAULT_SCENARIO_TARGET_TOKENS};
+use crate::{
+    DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS, DEFAULT_MODEL, DEFAULT_SCENARIO_TARGET_TOKENS, tools,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "spark")]
@@ -37,6 +39,9 @@ pub(crate) enum Command {
         /// Model slug to use.
         #[arg(long, default_value = DEFAULT_MODEL)]
         model: String,
+        /// Tool access mode. ask is read-only; work allows edits and command execution.
+        #[arg(long, value_enum, default_value_t = RunMode::Work)]
+        mode: RunMode,
         /// Maximum agent/tool turns. Omit to let Spark run until it completes.
         #[arg(long)]
         max_turns: Option<usize>,
@@ -46,7 +51,7 @@ pub(crate) enum Command {
         /// Print a compact profiling summary after each completed prompt.
         #[arg(long)]
         profile: bool,
-        /// Named session to resume/save under ~/.spark-codex/sessions.
+        /// Named session to resume/save in the SQLite session store. Interactive chat uses a workspace session when omitted.
         #[arg(long)]
         session: Option<String>,
         /// Load a compiled skill into the conversation before the prompt.
@@ -175,6 +180,23 @@ pub(crate) enum Command {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum RunMode {
+    /// Read-only filesystem inspection tools only.
+    Ask,
+    /// Full workspace tools, including edits and command execution.
+    Work,
+}
+
+impl From<RunMode> for tools::AgentMode {
+    fn from(value: RunMode) -> Self {
+        match value {
+            RunMode::Ask => Self::Ask,
+            RunMode::Work => Self::Work,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum ProfileScenarioKind {
     /// Small repo survey that usually exercises read/list/search without edits.
@@ -191,6 +213,11 @@ pub(crate) enum ProfileScenarioKind {
     ToolRecovery,
     /// Repo-local skill mention task that exercises automatic skill compile/load.
     SkillUse,
+    /// Open-ended SteamNetworkLib repo explanation that stresses redundant read/search behavior.
+    SteamNetworkLibSurvey,
+    /// Open-ended S1API repo explanation that stresses broad API surface surveying.
+    #[value(name = "s1api-survey", alias = "s1-api-survey")]
+    S1ApiSurvey,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -221,6 +248,8 @@ impl ProfileScenarioKind {
             Self::FileOps => "file-ops",
             Self::ToolRecovery => "tool-recovery",
             Self::SkillUse => "skill-use",
+            Self::SteamNetworkLibSurvey => "steamnetworklib-survey",
+            Self::S1ApiSurvey => "s1api-survey",
         }
     }
 }

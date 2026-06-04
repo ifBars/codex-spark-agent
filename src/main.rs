@@ -1,11 +1,14 @@
 mod agent;
 mod auth;
 mod chat;
+mod chat_markdown;
+mod chat_tui;
 mod cli;
 mod client;
 mod config;
 mod profile_scenarios;
 mod profiler;
+mod session_store;
 mod sessions;
 mod skill_commands;
 mod skills;
@@ -63,6 +66,7 @@ async fn main() -> Result<()> {
             prompt_file,
             cwd,
             model,
+            mode,
             max_turns,
             trace,
             profile,
@@ -99,7 +103,11 @@ async fn main() -> Result<()> {
                 max_input_tokens,
                 DEFAULT_MAX_INPUT_CHARS,
             )?;
-            let session_name = session.or_else(|| interactive.then(|| "default".to_string()));
+            let explicit_session = session.is_some();
+            let session_name =
+                session.or_else(|| interactive.then(sessions::timestamp_session_name));
+            let start_new_session = new_session || (interactive && !explicit_session);
+            sessions::prepare_default_session_store(session_name.as_deref())?;
             let auth = config::load_auth()?;
             let mut runner = agent::AgentRunner::new(
                 auth,
@@ -113,19 +121,16 @@ async fn main() -> Result<()> {
                 max_input_chars,
                 interactive,
                 session_name.clone(),
-                new_session,
+                start_new_session,
                 None,
+                mode.into(),
             )?;
-            let session_path = session_name
-                .as_deref()
-                .map(config::session_path)
-                .transpose()?;
-            if let Some(path) = &session_path {
-                if new_session {
-                    runner.save_session(path)?;
-                    println!("Started new session: {}", path.display());
-                } else if runner.load_session(path)? {
-                    println!("Resumed session: {}", path.display());
+            if let Some(name) = &session_name {
+                if start_new_session {
+                    runner.save_session_named(name)?;
+                    println!("Started new session: {name}");
+                } else if runner.load_session_named(name)? {
+                    println!("Resumed session: {name}");
                 }
             }
             for skill_name in requested_skills {
@@ -133,7 +138,7 @@ async fn main() -> Result<()> {
                     .await?;
             }
             if interactive {
-                chat::run_interactive_chat(&mut runner, session_path, cwd).await?;
+                chat::run_interactive_chat(&mut runner, session_name, cwd).await?;
             } else {
                 let prompt = prompt.unwrap_or_default();
                 if prompt.trim().is_empty() {
@@ -141,9 +146,9 @@ async fn main() -> Result<()> {
                 }
                 skill_commands::load_skill_mentions(&mut runner, &cwd, &prompt).await?;
                 runner.run(&prompt).await?;
-                if let Some(path) = &session_path {
-                    runner.save_session(path)?;
-                    println!("Saved session: {}", path.display());
+                if let Some(name) = &session_name {
+                    runner.save_session_named(name)?;
+                    println!("Saved session: {name}");
                 }
             }
         }
@@ -151,7 +156,8 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&tools::builtin_tools())?);
         }
         Command::Sessions => {
-            for session in config::list_sessions()? {
+            sessions::prepare_default_session_store(None)?;
+            for session in session_store::SessionStore::open_default()?.list_names()? {
                 println!("{session}");
             }
         }
@@ -173,6 +179,7 @@ async fn main() -> Result<()> {
                     None,
                     false,
                     None,
+                    tools::AgentMode::Work,
                 )?;
                 for source in skills::discover_sources(&cwd)? {
                     let skill =
@@ -319,6 +326,7 @@ async fn main() -> Result<()> {
                             "expected_skills": profile_scenarios::profile_scenario_expected_skills(scenario),
                         }
                     })),
+                    tools::AgentMode::Work,
                 )?;
                 for (index, prompt) in prompts.iter().enumerate() {
                     println!(

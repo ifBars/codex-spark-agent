@@ -3,8 +3,10 @@ use serde_json::{Value, json};
 
 use crate::agent::compaction::{compaction_trigger_for_turn, format_compaction_notice};
 use crate::agent::{AgentRunner, TOOL_ONLY_STREAK_COMPACTION_TRIGGER};
-use crate::client::{function_calls, output_items_for_next_input, response_text};
-use crate::tools::builtin_tools;
+use crate::client::{
+    function_calls, output_items_for_next_input, output_text_delta, response_text,
+};
+use crate::tools::{builtin_tools, tools_for_mode};
 
 impl AgentRunner {
     pub(super) fn push_user_message(&mut self, prompt: &str) {
@@ -20,10 +22,11 @@ impl AgentRunner {
     }
 
     pub(super) async fn run_until_idle(&mut self) -> Result<()> {
-        let tools = builtin_tools();
+        let tools = tools_for_mode(builtin_tools(), self.mode);
 
         let mut turn = 0usize;
         let mut last_tool_only_compaction_streak = 0usize;
+        let mut last_tool_only_notice_streak = 0usize;
         loop {
             turn += 1;
             if let Some(max_turns) = self.max_turns
@@ -43,6 +46,12 @@ impl AgentRunner {
                 &self.input,
             )?;
 
+            if compaction_trigger.is_some() {
+                self.emit_compaction_start(
+                    compaction_trigger,
+                    serde_json::to_string(&self.input)?.len(),
+                );
+            }
             match self
                 .compact_once(&tools, compaction_trigger.is_some(), compaction_trigger)
                 .await
@@ -57,7 +66,7 @@ impl AgentRunner {
                     if let Some(trace) = &mut self.trace {
                         trace.write(self.request_seq + 1, "compaction", &report)?;
                     }
-                    eprintln!("{}", format_compaction_notice(&report));
+                    self.emit_compaction_finish(format_compaction_notice(&report));
                 }
                 Ok(None) => {}
                 Err(error) => {
@@ -67,6 +76,20 @@ impl AgentRunner {
                         &error.to_string(),
                     )?;
                     return Err(error);
+                }
+            }
+
+            if self.maybe_push_tool_only_notice(tool_only_streak, &mut last_tool_only_notice_streak)
+            {
+                if let Some(trace) = &mut self.trace {
+                    trace.write(
+                        self.request_seq + 1,
+                        "harness-notice",
+                        &json!({
+                            "kind": "tool_only_streak_completion_nudge",
+                            "tool_only_streak": tool_only_streak,
+                        }),
+                    )?;
                 }
             }
 
@@ -82,6 +105,7 @@ impl AgentRunner {
 
             self.request_seq += 1;
             self.profiler.record_request(input_chars);
+            self.emit_request_start(self.request_seq, input_chars);
             if let Some(trace) = &mut self.trace {
                 trace.write(
                     self.request_seq,
@@ -91,7 +115,18 @@ impl AgentRunner {
             }
 
             let request_started = std::time::Instant::now();
-            let (response, raw) = match self.client.responses_create(&self.input, &tools).await {
+            let client = self.client.clone();
+            let request_input = self.input.clone();
+            let mut streamed_text = String::new();
+            let (response, raw) = match client
+                .responses_create_with_event_handler(&request_input, &tools, |event| {
+                    if let Some(delta) = output_text_delta(event) {
+                        streamed_text.push_str(delta);
+                        self.emit_assistant_delta(delta);
+                    }
+                })
+                .await
+            {
                 Ok(result) => result,
                 Err(error) => {
                     self.record_terminal_error(self.request_seq, "response", &error.to_string())?;
@@ -111,8 +146,12 @@ impl AgentRunner {
 
             let text = response_text(&response);
             self.profiler.record_response_text(&text);
-            if !text.trim().is_empty() {
-                println!("{text}");
+            if streamed_text.is_empty() && !text.trim().is_empty() {
+                self.emit_assistant_message(&text);
+            } else if let Some(missing_suffix) = text.strip_prefix(&streamed_text)
+                && !missing_suffix.is_empty()
+            {
+                self.emit_assistant_delta(missing_suffix);
             }
 
             self.input.extend(output_items_for_next_input(&raw));
@@ -122,16 +161,18 @@ impl AgentRunner {
                 .record_turn_activity(self.request_seq, !calls.is_empty(), text.len());
             if !text.is_empty() {
                 last_tool_only_compaction_streak = 0;
+                last_tool_only_notice_streak = 0;
             }
             if calls.is_empty() {
                 self.emit_profile_summary()?;
                 return Ok(());
             }
 
+            self.emit_tool_batch_start(calls.len());
             for (call_id, tool_name, args) in calls {
                 self.profiler
                     .record_tool_call(self.request_seq, &tool_name, &args);
-                println!("\n> {tool_name} {}", serde_json::to_string(&args)?);
+                self.emit_tool_call(&tool_name, &serde_json::to_string(&args)?);
                 let tool_started = std::time::Instant::now();
                 let result = self.invoke_with_cache(&tool_name, args.clone()).await;
                 let duration_ms = tool_started.elapsed().as_millis() as u64;
@@ -144,6 +185,13 @@ impl AgentRunner {
                     &result.data,
                     output.len(),
                     duration_ms,
+                    result.error.as_deref(),
+                );
+                self.emit_tool_result(
+                    &tool_name,
+                    result.ok,
+                    duration_ms,
+                    output.len(),
                     result.error.as_deref(),
                 );
                 if let Some(trace) = &mut self.trace {
@@ -162,13 +210,39 @@ impl AgentRunner {
         }
     }
 
+    fn maybe_push_tool_only_notice(
+        &mut self,
+        tool_only_streak: usize,
+        last_notice_streak: &mut usize,
+    ) -> bool {
+        if self.compact_after_tool_only_turns == 0
+            || tool_only_streak < self.compact_after_tool_only_turns
+            || tool_only_streak.saturating_sub(*last_notice_streak)
+                < self.compact_after_tool_only_turns
+        {
+            return false;
+        }
+
+        *last_notice_streak = tool_only_streak;
+        self.input.push(json!({
+            "role": "user",
+            "content": [{
+                "type": "input_text",
+                "text": format!(
+                    "[spark harness notice]\nYou have made {tool_only_streak} consecutive tool-only turns. If you have enough evidence to answer the user's question, stop calling tools now and provide the final assistant response. Avoid repeating exact read-only calls; cached observations mean the same data was already returned. Use another tool only for a concrete missing fact."
+                )
+            }]
+        }));
+        true
+    }
+
     pub(super) fn emit_profile_summary(&mut self) -> Result<()> {
         let summary = self.profile_summary();
         if let Some(trace) = &mut self.trace {
             trace.write(self.request_seq, "profile-summary", &summary)?;
         }
         if self.profile {
-            println!("{}", serde_json::to_string_pretty(&summary)?);
+            self.emit_profile_message(serde_json::to_string_pretty(&summary)?);
         }
         Ok(())
     }
@@ -187,6 +261,7 @@ impl AgentRunner {
                 &json!({"stage": stage, "error": error}),
             )?;
         }
+        self.emit_warning(format!("{stage}: {error}"));
         self.emit_profile_summary()
     }
 }

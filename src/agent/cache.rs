@@ -1,8 +1,8 @@
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::agent::AgentRunner;
 use crate::profiler::tool_signature;
-use crate::tools::{ToolResult, invoke};
+use crate::tools::{ToolResult, invoke, is_readonly_tool};
 
 #[derive(Debug, Clone)]
 pub(super) struct CachedToolObservation {
@@ -20,19 +20,10 @@ impl AgentRunner {
             cached.hits += 1;
             self.profiler
                 .record_readonly_tool_cache_hit(self.request_seq, tool_name, &args);
-            let mut result = cached.result.clone();
-            if let Some(data) = result.data.as_object_mut() {
-                data.insert("cached_observation".to_string(), Value::Bool(true));
-                data.insert(
-                    "first_observed_turn".to_string(),
-                    Value::Number(cached.first_turn.into()),
-                );
-                data.insert("cache_hits".to_string(), Value::Number(cached.hits.into()));
-            }
-            return result;
+            return cached_readonly_result(tool_name, &args, cached);
         }
 
-        let result = invoke(&self.cwd, tool_name, args).await;
+        let result = invoke(&self.cwd, self.mode, tool_name, args).await;
         if is_cacheable_readonly_tool(tool_name) && should_cache_readonly_result(&result) {
             self.readonly_tool_cache.insert(
                 signature,
@@ -50,7 +41,7 @@ impl AgentRunner {
 }
 
 pub(in crate::agent) fn is_cacheable_readonly_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "fs.read" | "fs.list" | "fs.stat" | "fs.search")
+    is_readonly_tool(tool_name)
 }
 
 pub(in crate::agent) fn should_cache_readonly_result(result: &ToolResult) -> bool {
@@ -62,4 +53,25 @@ pub(in crate::agent) fn invalidates_readonly_tool_cache(tool_name: &str) -> bool
         tool_name,
         "fs.write" | "fs.replace" | "fs.edit" | "fs.rename" | "cmd.exec"
     )
+}
+
+pub(in crate::agent) fn cached_readonly_result(
+    tool_name: &str,
+    args: &Value,
+    cached: &CachedToolObservation,
+) -> ToolResult {
+    ToolResult {
+        ok: cached.result.ok,
+        data: json!({
+            "cached_observation": true,
+            "content_reused": true,
+            "first_observed_turn": cached.first_turn,
+            "cache_hits": cached.hits,
+            "tool": tool_name,
+            "args": args,
+            "hint": "This exact read-only tool call was already observed. Use the previous observation or compacted summary instead of repeating the same call. Request a different path, offset, limit, or query only if more evidence is still needed.",
+            "original_error": cached.result.error,
+        }),
+        error: cached.result.error.clone(),
+    }
 }

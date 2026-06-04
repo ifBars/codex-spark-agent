@@ -67,10 +67,11 @@ impl SparkClient {
         }
     }
 
-    pub async fn responses_create(
+    pub async fn responses_create_with_event_handler(
         &self,
         input: &[Value],
         tools: &[ToolDescriptor],
+        on_event: impl FnMut(&Value),
     ) -> Result<(Response, Value)> {
         let body = json!({
             "model": self.model,
@@ -83,7 +84,8 @@ impl SparkClient {
             "stream": true,
         });
 
-        self.send_streaming_body(body, "Spark request").await
+        self.send_streaming_body(body, "Spark request", on_event)
+            .await
     }
 
     pub async fn compile_skill_summary(&self, name: &str, raw_skill: &str) -> Result<String> {
@@ -118,7 +120,7 @@ SKILL.md:
         });
 
         let (response, _) = self
-            .send_streaming_body(body, "Spark skill compile request")
+            .send_streaming_body(body, "Spark skill compile request", |_| {})
             .await?;
         let text = response_text(&response);
         if text.trim().is_empty() {
@@ -127,7 +129,12 @@ SKILL.md:
         Ok(text)
     }
 
-    async fn send_streaming_body(&self, body: Value, context: &str) -> Result<(Response, Value)> {
+    async fn send_streaming_body(
+        &self,
+        body: Value,
+        context: &str,
+        mut on_event: impl FnMut(&Value),
+    ) -> Result<(Response, Value)> {
         let mut request = self
             .http
             .post(CODEX_RESPONSES_URL)
@@ -173,6 +180,7 @@ SKILL.md:
                 }
                 buffer.drain(..=newline_idx);
                 if let Some(value) = parse_sse_json_line(&line) {
+                    on_event(&value);
                     if value.get("type").and_then(Value::as_str) == Some("response.completed") {
                         completed = value.get("response").cloned();
                     }
@@ -183,6 +191,7 @@ SKILL.md:
         if !buffer.trim().is_empty()
             && let Some(value) = parse_sse_json_line(buffer.trim_end_matches('\r'))
         {
+            on_event(&value);
             if value.get("type").and_then(Value::as_str) == Some("response.completed") {
                 completed = value.get("response").cloned();
             }
@@ -276,6 +285,13 @@ fn compact_output_items(raw: &Value) -> Result<Vec<Value>> {
         return Ok(items.clone());
     }
     anyhow::bail!("compact response did not include output items: {raw}");
+}
+
+pub fn output_text_delta(event: &Value) -> Option<&str> {
+    if event.get("type").and_then(Value::as_str) != Some("response.output_text.delta") {
+        return None;
+    }
+    event.get("delta").and_then(Value::as_str)
 }
 
 fn reconstruct_output_from_events(events: &[Value]) -> Vec<Value> {
@@ -488,6 +504,7 @@ fn spark_system_prompt() -> &'static str {
     r#"You are GPT-5.3-Codex-Spark running inside a compact coding agent harness.
 
 Use the available native tools when they help. Answer directly when they do not.
+When a user names a project, library, or repo ambiguously, first take a small look at the current workspace before assuming they mean a public product or SDK.
 When finished, provide the final answer as a normal assistant message."#
 }
 
@@ -495,4 +512,17 @@ fn skill_compiler_prompt() -> &'static str {
     r#"You compile Codex agent skills for GPT-5.3-Codex-Spark.
 
 Produce compact operational guidance, not a prose summary. Preserve source-grounded requirements and validation steps. Do not add generic advice."#
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spark_system_prompt;
+
+    #[test]
+    fn spark_system_prompt_prefers_workspace_peek_for_ambiguous_repo_names() {
+        let prompt = spark_system_prompt();
+
+        assert!(prompt.contains("first take a small look at the current workspace"));
+        assert!(prompt.contains("before assuming they mean a public product or SDK"));
+    }
 }

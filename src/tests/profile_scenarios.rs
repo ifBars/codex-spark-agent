@@ -246,6 +246,63 @@ fn skill_use_scenario_declares_expected_tools_and_skill() {
 }
 
 #[test]
+fn steamnetworklib_survey_scenario_matches_observed_question_shape() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::SteamNetworkLibSurvey, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+
+    assert!(prompt.contains("Profile scenario: steamnetworklib-survey"));
+    assert!(prompt.contains("What is SteamNetworkLib"));
+    assert!(prompt.contains("what does it do"));
+    assert!(prompt.contains("how does it work"));
+    assert!(prompt.contains("targeted native tools"));
+}
+
+#[test]
+fn steamnetworklib_survey_declares_enough_evidence_calls() {
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::SteamNetworkLibSurvey);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::SteamNetworkLibSurvey);
+
+    assert_eq!(
+        groups,
+        vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
+    );
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0]["tool"], "fs.list");
+    assert_eq!(calls[0]["path"], ".");
+    assert_eq!(calls[1]["path"], "README.md");
+    assert_eq!(calls[2]["path"], "SteamNetworkClient.cs");
+    assert_eq!(calls[3]["tool"], "fs.search");
+}
+
+#[test]
+fn s1api_survey_scenario_matches_observed_question_shape() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::S1ApiSurvey, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+
+    assert!(prompt.contains("Profile scenario: s1api-survey"));
+    assert!(prompt.contains("What is S1API"));
+    assert!(prompt.contains("what does it do"));
+    assert!(prompt.contains("how does it work"));
+    assert!(prompt.contains("index.md"));
+    assert!(prompt.contains("generated api/_site"));
+}
+
+#[test]
+fn s1api_survey_declares_enough_evidence_calls() {
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::S1ApiSurvey);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::S1ApiSurvey);
+
+    assert_eq!(groups, vec![vec!["fs.list"], vec!["fs.read"]]);
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0]["tool"], "fs.list");
+    assert_eq!(calls[0]["path"], ".");
+    assert_eq!(calls[1]["path"], "index.md");
+    assert_eq!(calls[2]["path"], "S1API.cs");
+}
+
+#[test]
 fn natural_compaction_scenario_uses_multiple_chat_turns() {
     let prompts =
         profile_scenario_prompts(ProfileScenarioKind::NaturalCompaction, 45_000).expect("scenario");

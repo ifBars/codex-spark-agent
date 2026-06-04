@@ -18,10 +18,10 @@ This is a Rust CLI harness for GPT-5.3-Codex-Spark. Keep changes modular, tracea
 
 ## File Size
 
-- Target Rust source files at or below 20 KB.
+- Target Rust source files at or below 40 KB.
 - Do not make an already oversized file larger unless the same change also reduces or splits nearby code.
 - When touching an oversized file, first look for a natural extraction boundary such as formatting, trace analysis, command parsing, tool implementations, auth, or session handling.
-- New files should stay under 20 KB unless there is a clear short-term migration reason. If a migration temporarily creates a larger file, document the next split and keep moving toward the 20 KB target.
+- New files should stay under 40 KB unless there is a clear short-term migration reason. If a migration temporarily creates a larger file, document the next split and keep moving toward the 40 KB target.
 
 ## Current Refactor Debt
 

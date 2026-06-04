@@ -1,6 +1,10 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Read};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
+use regex::RegexBuilder;
 use serde_json::{Value, json};
 
 use super::ToolResult;
@@ -8,6 +12,16 @@ use super::paths::{
     display_rel, missing_parent_dirs, required_str, required_u64, resolve_under,
     resolve_under_for_write, should_skip_discovery_dir,
 };
+
+const FS_READ_DEFAULT_LIMIT: u64 = 120;
+const FS_READ_MAX_LIMIT: u64 = 400;
+const FS_READ_MAX_CONTENT_CHARS: usize = 12_000;
+const FS_LIST_DEFAULT_LIMIT: usize = 80;
+const FS_LIST_MAX_LIMIT: usize = 200;
+const FS_LIST_MAX_ENTRIES_CHARS: usize = 12_000;
+const FS_SEARCH_DEFAULT_LIMIT: usize = 50;
+const FS_SEARCH_MAX_LIMIT: usize = 100;
+const FS_SEARCH_MAX_SNIPPET_CHARS: usize = 600;
 
 pub(super) fn fs_read(cwd: &Path, args: Value) -> Result<ToolResult> {
     let path = required_str(&args, "path")?;
@@ -20,8 +34,8 @@ pub(super) fn fs_read(cwd: &Path, args: Value) -> Result<ToolResult> {
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
-        .unwrap_or(500)
-        .clamp(1, 2000);
+        .unwrap_or(FS_READ_DEFAULT_LIMIT)
+        .clamp(1, FS_READ_MAX_LIMIT);
     let line_numbers = args
         .get("line_numbers")
         .and_then(Value::as_bool)
@@ -30,25 +44,17 @@ pub(super) fn fs_read(cwd: &Path, args: Value) -> Result<ToolResult> {
         .with_context(|| format!("failed to read {}", full.display()))?;
     let total_lines = content.lines().count();
     let start_index = (offset - 1) as usize;
-    let selected = content
-        .lines()
-        .skip(start_index)
-        .take(limit as usize)
-        .collect::<Vec<_>>();
-    let returned_lines = selected.len();
-    let has_more = start_index.saturating_add(returned_lines) < total_lines;
-    let lines = selected
-        .into_iter()
-        .enumerate()
-        .map(|(idx, line)| {
-            if line_numbers {
-                format!("{}: {}", offset + idx as u64, line)
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let (lines, returned_lines, content_truncated) = bounded_read_window(
+        content
+            .lines()
+            .skip(start_index)
+            .take(limit as usize)
+            .enumerate(),
+        offset,
+        line_numbers,
+        FS_READ_MAX_CONTENT_CHARS,
+    );
+    let has_more = start_index.saturating_add(returned_lines) < total_lines || content_truncated;
     Ok(ToolResult {
         ok: true,
         data: json!({
@@ -60,9 +66,46 @@ pub(super) fn fs_read(cwd: &Path, args: Value) -> Result<ToolResult> {
             "total_lines": total_lines,
             "has_more": has_more,
             "next_offset": has_more.then_some(offset + returned_lines as u64),
+            "content_truncated": content_truncated,
+            "max_content_chars": FS_READ_MAX_CONTENT_CHARS,
         }),
         error: None,
     })
+}
+
+fn bounded_read_window<'a>(
+    lines: impl Iterator<Item = (usize, &'a str)>,
+    offset: u64,
+    line_numbers: bool,
+    max_content_chars: usize,
+) -> (String, usize, bool) {
+    let mut selected = Vec::new();
+    let mut content_chars = 0usize;
+    let mut returned_lines = 0usize;
+    let mut content_truncated = false;
+
+    for (idx, line) in lines {
+        let formatted = if line_numbers {
+            format!("{}: {}", offset + idx as u64, line)
+        } else {
+            line.to_string()
+        };
+        let separator_chars = usize::from(!selected.is_empty());
+        let next_chars = content_chars + separator_chars + formatted.len();
+        if next_chars > max_content_chars {
+            content_truncated = true;
+            if selected.is_empty() {
+                selected.push(compact_middle(&formatted, max_content_chars));
+                returned_lines += 1;
+            }
+            break;
+        }
+        content_chars = next_chars;
+        selected.push(formatted);
+        returned_lines += 1;
+    }
+
+    (selected.join("\n"), returned_lines, content_truncated)
 }
 
 pub(super) fn fs_list(cwd: &Path, args: Value) -> Result<ToolResult> {
@@ -75,8 +118,9 @@ pub(super) fn fs_list(cwd: &Path, args: Value) -> Result<ToolResult> {
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
-        .unwrap_or(200)
-        .clamp(1, 2000) as usize;
+        .map(|value| value as usize)
+        .unwrap_or(FS_LIST_DEFAULT_LIMIT)
+        .clamp(1, FS_LIST_MAX_LIMIT);
     let root = resolve_under(cwd, path)?;
     let mut stack = vec![(root.clone(), 0_usize)];
     let mut entries = Vec::new();
@@ -111,11 +155,32 @@ pub(super) fn fs_list(cwd: &Path, args: Value) -> Result<ToolResult> {
         }
     }
     entries.sort_by_key(|entry| entry["path"].as_str().unwrap_or_default().to_string());
+    let chars_truncated = truncate_entries_to_budget(&mut entries, FS_LIST_MAX_ENTRIES_CHARS)?;
+    truncated = truncated || chars_truncated;
     Ok(ToolResult {
         ok: true,
-        data: json!({"path": display_rel(cwd, &root), "entries": entries, "truncated": truncated}),
+        data: json!({
+            "path": display_rel(cwd, &root),
+            "entries": entries,
+            "truncated": truncated,
+            "limit": limit,
+            "returned_entries": entries.len(),
+            "max_entries_chars": FS_LIST_MAX_ENTRIES_CHARS,
+            "entries_truncated_by_chars": chars_truncated,
+        }),
         error: None,
     })
+}
+
+fn truncate_entries_to_budget(entries: &mut Vec<Value>, max_chars: usize) -> Result<bool> {
+    let mut truncated = false;
+    while serde_json::to_string(entries)?.len() > max_chars {
+        if entries.pop().is_none() {
+            break;
+        }
+        truncated = true;
+    }
+    Ok(truncated)
 }
 
 pub(super) fn fs_stat(cwd: &Path, args: Value) -> Result<ToolResult> {
@@ -178,42 +243,183 @@ pub(super) fn fs_write(cwd: &Path, args: Value) -> Result<ToolResult> {
 
 pub(super) fn fs_search(cwd: &Path, args: Value) -> Result<ToolResult> {
     let query = required_str(&args, "query")?;
-    if query.is_empty() {
-        anyhow::bail!("query is required");
+    let options = SearchOptions::from_args(cwd, &args, query)?;
+    match fs_search_with_ripgrep(cwd, &options) {
+        Ok(Some(result)) => Ok(result),
+        Ok(None) => fs_search_in_process(cwd, &options),
+        Err(error) => Err(error),
     }
-    let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
-    let case_sensitive = args
-        .get("case_sensitive")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let max_depth = args
-        .get("max_depth")
-        .and_then(Value::as_u64)
-        .unwrap_or(6)
-        .min(12) as usize;
-    let limit = args
-        .get("limit")
-        .and_then(Value::as_u64)
-        .unwrap_or(100)
-        .clamp(1, 500) as usize;
-    let context_lines = args
-        .get("context_lines")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        .min(5) as usize;
-    let root = resolve_under(cwd, path)?;
-    let needle = if case_sensitive {
-        query.to_string()
-    } else {
-        query.to_lowercase()
-    };
+}
 
+struct SearchOptions<'a> {
+    query: &'a str,
+    root: PathBuf,
+    regex: bool,
+    case_sensitive: bool,
+    max_depth: usize,
+    limit: usize,
+    context_lines: usize,
+}
+
+impl<'a> SearchOptions<'a> {
+    fn from_args(cwd: &Path, args: &'a Value, query: &'a str) -> Result<Self> {
+        let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
+        let root = resolve_under(cwd, path)?;
+        Ok(Self {
+            query,
+            root,
+            regex: args.get("regex").and_then(Value::as_bool).unwrap_or(false),
+            case_sensitive: args
+                .get("case_sensitive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            max_depth: args
+                .get("max_depth")
+                .and_then(Value::as_u64)
+                .unwrap_or(6)
+                .min(12) as usize,
+            limit: args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|value| value as usize)
+                .unwrap_or(FS_SEARCH_DEFAULT_LIMIT)
+                .clamp(1, FS_SEARCH_MAX_LIMIT),
+            context_lines: args
+                .get("context_lines")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                .min(3) as usize,
+        })
+    }
+}
+
+fn fs_search_with_ripgrep(cwd: &Path, options: &SearchOptions<'_>) -> Result<Option<ToolResult>> {
+    let mut command = Command::new("rg");
+    command
+        .current_dir(cwd)
+        .arg("--json")
+        .arg("--line-number")
+        .arg("--with-filename")
+        .arg("--color")
+        .arg("never")
+        .arg("--no-messages")
+        .arg("--hidden")
+        .arg("--max-filesize")
+        .arg("2M")
+        .arg("--max-depth")
+        .arg(options.max_depth.to_string());
+    if !options.regex {
+        command.arg("--fixed-strings");
+    }
+    if !options.case_sensitive {
+        command.arg("--ignore-case");
+    }
+    add_ripgrep_skip_globs(&mut command, &options.root);
+    command.arg("--").arg(options.query).arg(&options.root);
+
+    let mut child = match command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("failed to start ripgrep"),
+    };
+    let stdout = child
+        .stdout
+        .take()
+        .context("failed to capture ripgrep stdout")?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .context("failed to capture ripgrep stderr")?;
+
+    let mut matches = Vec::new();
+    let mut unique_match_files = HashMap::<String, ()>::new();
+    let mut file_cache = HashMap::<PathBuf, Vec<String>>::new();
+    let mut files_scanned = None;
+    let mut snippets_truncated = 0usize;
+    let mut truncated = false;
+
+    for line in BufReader::new(stdout).lines() {
+        let line = line.context("failed to read ripgrep output")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: Value =
+            serde_json::from_str(&line).with_context(|| format!("invalid ripgrep json: {line}"))?;
+        match event.get("type").and_then(Value::as_str) {
+            Some("match") => {
+                let data = &event["data"];
+                let Some(path_text) = data["path"]["text"].as_str() else {
+                    continue;
+                };
+                let Some(line_number) = data["line_number"].as_u64() else {
+                    continue;
+                };
+                let full_path = path_from_ripgrep(cwd, path_text);
+                let (snippet, snippet_truncated) = search_snippet(
+                    &mut file_cache,
+                    &full_path,
+                    line_number as usize,
+                    options.context_lines,
+                )?;
+                if snippet_truncated {
+                    snippets_truncated += 1;
+                }
+                unique_match_files.insert(display_rel(cwd, &full_path), ());
+                matches.push(json!({
+                    "path": display_rel(cwd, &full_path),
+                    "line": line_number,
+                    "snippet": snippet,
+                    "snippet_truncated": snippet_truncated,
+                }));
+                if matches.len() >= options.limit {
+                    truncated = true;
+                    let _ = child.kill();
+                    break;
+                }
+            }
+            Some("summary") => {
+                files_scanned = event["data"]["stats"]["searches"]
+                    .as_u64()
+                    .map(|value| value as usize);
+            }
+            _ => {}
+        }
+    }
+
+    let mut stderr_text = String::new();
+    let _ = stderr.read_to_string(&mut stderr_text);
+    let status = child.wait().context("failed to wait for ripgrep")?;
+    if !truncated && !status.success() && status.code() != Some(1) {
+        anyhow::bail!(
+            "ripgrep search failed: {}",
+            stderr_text.trim().if_empty("unknown ripgrep error")
+        );
+    }
+
+    Ok(Some(search_result(
+        cwd,
+        options,
+        matches,
+        files_scanned.unwrap_or(unique_match_files.len()),
+        truncated,
+        snippets_truncated,
+        "ripgrep",
+    )))
+}
+
+fn fs_search_in_process(cwd: &Path, options: &SearchOptions<'_>) -> Result<ToolResult> {
+    let matcher = SearchMatcher::new(options)?;
     let mut matches = Vec::new();
     let mut files_scanned = 0usize;
     let mut truncated = false;
-    let mut stack = vec![(root.clone(), 0usize)];
+    let mut snippets_truncated = 0usize;
+    let mut stack = vec![(options.root.clone(), 0usize)];
     while let Some((path, depth)) = stack.pop() {
-        if matches.len() >= limit {
+        if matches.len() >= options.limit {
             truncated = true;
             break;
         }
@@ -222,7 +428,7 @@ pub(super) fn fs_search(cwd: &Path, args: Value) -> Result<ToolResult> {
             Err(_) => continue,
         };
         if metadata.is_dir() {
-            if depth > max_depth || should_skip_discovery_dir(&root, &path) {
+            if depth > options.max_depth || should_skip_discovery_dir(&options.root, &path) {
                 continue;
             }
             let mut children = std::fs::read_dir(&path)
@@ -244,45 +450,221 @@ pub(super) fn fs_search(cwd: &Path, args: Value) -> Result<ToolResult> {
         files_scanned += 1;
         let lines = content.lines().collect::<Vec<_>>();
         for (idx, line) in lines.iter().enumerate() {
-            let haystack = if case_sensitive {
-                line.to_string()
-            } else {
-                line.to_lowercase()
-            };
-            if !haystack.contains(&needle) {
+            if !matcher.is_match(line) {
                 continue;
             }
-            let start = idx.saturating_sub(context_lines);
-            let end = (idx + context_lines + 1).min(lines.len());
-            let snippet = lines[start..end]
+            let start = idx.saturating_sub(options.context_lines);
+            let end = (idx + options.context_lines + 1).min(lines.len());
+            let raw_snippet = lines[start..end]
                 .iter()
                 .enumerate()
                 .map(|(offset, text)| format!("{}: {}", start + offset + 1, text))
                 .collect::<Vec<_>>()
                 .join("\n");
+            let snippet_truncated = raw_snippet.len() > FS_SEARCH_MAX_SNIPPET_CHARS;
+            if snippet_truncated {
+                snippets_truncated += 1;
+            }
             matches.push(json!({
                 "path": display_rel(cwd, &path),
                 "line": idx + 1,
-                "snippet": snippet,
+                "snippet": compact_middle(&raw_snippet, FS_SEARCH_MAX_SNIPPET_CHARS),
+                "snippet_truncated": snippet_truncated,
             }));
-            if matches.len() >= limit {
+            if matches.len() >= options.limit {
                 truncated = true;
                 break;
             }
         }
     }
 
-    Ok(ToolResult {
+    Ok(search_result(
+        cwd,
+        options,
+        matches,
+        files_scanned,
+        truncated,
+        snippets_truncated,
+        "fallback",
+    ))
+}
+
+enum SearchMatcher {
+    Literal {
+        needle: String,
+        case_sensitive: bool,
+    },
+    Regex(regex::Regex),
+}
+
+impl SearchMatcher {
+    fn new(options: &SearchOptions<'_>) -> Result<Self> {
+        if options.regex {
+            let regex = RegexBuilder::new(options.query)
+                .case_insensitive(!options.case_sensitive)
+                .build()
+                .with_context(|| format!("invalid regex query: {}", options.query))?;
+            return Ok(Self::Regex(regex));
+        }
+        let needle = if options.case_sensitive {
+            options.query.to_string()
+        } else {
+            options.query.to_lowercase()
+        };
+        Ok(Self::Literal {
+            needle,
+            case_sensitive: options.case_sensitive,
+        })
+    }
+
+    fn is_match(&self, line: &str) -> bool {
+        match self {
+            Self::Literal {
+                needle,
+                case_sensitive,
+            } => {
+                if *case_sensitive {
+                    line.contains(needle)
+                } else {
+                    line.to_lowercase().contains(needle)
+                }
+            }
+            Self::Regex(regex) => regex.is_match(line),
+        }
+    }
+}
+
+fn add_ripgrep_skip_globs(command: &mut Command, root: &Path) {
+    if is_generated_discovery_dir(root) {
+        return;
+    }
+    for directory in [
+        ".git",
+        ".hg",
+        ".svn",
+        "target",
+        "node_modules",
+        ".spark",
+        ".spark-runs",
+        ".spark-profile",
+        ".spark-codex",
+    ] {
+        command.arg("--glob").arg(format!("!**/{directory}/**"));
+    }
+}
+
+fn is_generated_discovery_dir(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(
+            ".git"
+                | ".hg"
+                | ".svn"
+                | "target"
+                | "node_modules"
+                | ".spark"
+                | ".spark-runs"
+                | ".spark-profile"
+                | ".spark-codex"
+        )
+    )
+}
+
+fn path_from_ripgrep(cwd: &Path, path_text: &str) -> PathBuf {
+    let path = PathBuf::from(path_text);
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
+}
+
+fn search_snippet(
+    file_cache: &mut HashMap<PathBuf, Vec<String>>,
+    path: &Path,
+    line_number: usize,
+    context_lines: usize,
+) -> Result<(String, bool)> {
+    if !file_cache.contains_key(path) {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read matched file {}", path.display()))?;
+        file_cache.insert(
+            path.to_path_buf(),
+            content.lines().map(str::to_string).collect(),
+        );
+    }
+    let lines = file_cache.get(path).context("matched file cache missing")?;
+    let idx = line_number.saturating_sub(1).min(lines.len());
+    let start = idx.saturating_sub(context_lines);
+    let end = (idx + context_lines + 1).min(lines.len());
+    let raw_snippet = lines[start..end]
+        .iter()
+        .enumerate()
+        .map(|(offset, text)| format!("{}: {}", start + offset + 1, text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let snippet_truncated = raw_snippet.len() > FS_SEARCH_MAX_SNIPPET_CHARS;
+    Ok((
+        compact_middle(&raw_snippet, FS_SEARCH_MAX_SNIPPET_CHARS),
+        snippet_truncated,
+    ))
+}
+
+fn search_result(
+    cwd: &Path,
+    options: &SearchOptions<'_>,
+    matches: Vec<Value>,
+    files_scanned: usize,
+    truncated: bool,
+    snippets_truncated: usize,
+    engine: &str,
+) -> ToolResult {
+    ToolResult {
         ok: true,
         data: json!({
-            "query": query,
-            "path": display_rel(cwd, &root),
+            "query": options.query,
+            "path": display_rel(cwd, &options.root),
             "matches": matches,
             "files_scanned": files_scanned,
             "truncated": truncated,
+            "limit": options.limit,
+            "regex": options.regex,
+            "engine": engine,
+            "max_snippet_chars": FS_SEARCH_MAX_SNIPPET_CHARS,
+            "snippets_truncated": snippets_truncated,
         }),
         error: None,
-    })
+    }
+}
+
+trait EmptyStrFallback {
+    fn if_empty<'a>(&'a self, fallback: &'a str) -> &'a str;
+}
+
+impl EmptyStrFallback for str {
+    fn if_empty<'a>(&'a self, fallback: &'a str) -> &'a str {
+        if self.is_empty() { fallback } else { self }
+    }
+}
+
+fn compact_middle(raw: &str, max_chars: usize) -> String {
+    if raw.len() <= max_chars {
+        return raw.to_string();
+    }
+    let marker = "\n...[truncated]...\n";
+    let budget = max_chars.saturating_sub(marker.len());
+    let head_len = budget.saturating_mul(3) / 4;
+    let tail_len = budget.saturating_sub(head_len);
+    let head = raw.chars().take(head_len).collect::<String>();
+    let tail = raw
+        .chars()
+        .rev()
+        .take(tail_len)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    format!("{head}{marker}{tail}")
 }
 
 pub(super) fn fs_replace(cwd: &Path, args: Value) -> Result<ToolResult> {

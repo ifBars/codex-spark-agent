@@ -3,8 +3,12 @@ mod descriptors;
 mod errors;
 mod fs;
 mod paths;
+mod policy;
 
 pub use descriptors::{ToolDescriptor, builtin_tools};
+pub use policy::AgentMode;
+pub(crate) use policy::is_readonly_tool;
+pub(crate) use policy::tools_for_mode;
 
 use std::path::Path;
 
@@ -23,8 +27,8 @@ pub struct ToolResult {
     pub error: Option<String>,
 }
 
-pub async fn invoke(cwd: &Path, tool_name: &str, args: Value) -> ToolResult {
-    match invoke_inner(cwd, tool_name, args.clone()).await {
+pub async fn invoke(cwd: &Path, mode: AgentMode, tool_name: &str, args: Value) -> ToolResult {
+    match invoke_inner(cwd, mode, tool_name, args.clone()).await {
         Ok(result) => result,
         Err(error) => ToolResult {
             ok: false,
@@ -34,7 +38,16 @@ pub async fn invoke(cwd: &Path, tool_name: &str, args: Value) -> ToolResult {
     }
 }
 
-async fn invoke_inner(cwd: &Path, tool_name: &str, args: Value) -> Result<ToolResult> {
+async fn invoke_inner(
+    cwd: &Path,
+    mode: AgentMode,
+    tool_name: &str,
+    args: Value,
+) -> Result<ToolResult> {
+    if !mode.allows_tool(tool_name) {
+        anyhow::bail!("tool `{tool_name}` is blocked in {} mode", mode.name());
+    }
+
     match tool_name {
         "fs.read" => fs_read(cwd, args),
         "fs.list" => fs_list(cwd, args),

@@ -1,10 +1,11 @@
-use crate::chat::command_args;
+use crate::chat::{command_args, parse_mode};
 mod profile_scenarios;
 
 use crate::DEFAULT_COMPACT_AFTER_CHARS;
 use crate::cli::TraceSort;
+use crate::client::output_text_delta;
 use crate::profile_scenarios::validate_scenario_repeat;
-use crate::sessions::{is_active_session, session_name_for_display};
+use crate::sessions::{is_active_session, timestamp_session_name};
 use crate::skill_commands::{contains_skill_mention, mentioned_skill_names};
 use crate::trace_commands::{
     TraceListRecord, latest_trace_dir, list_trace_dirs, resolve_char_threshold, sort_trace_records,
@@ -28,6 +29,28 @@ fn slash_commands_match_exactly_or_with_whitespace() {
     assert_eq!(command_args("/profiles", "/profile"), None);
     assert_eq!(command_args("/skills", "/skill"), None);
     assert_eq!(command_args("/sessions", "/session"), None);
+}
+
+#[test]
+fn parse_mode_accepts_ask_work_and_agent_alias() {
+    assert_eq!(parse_mode("ask"), Some(crate::tools::AgentMode::Ask));
+    assert_eq!(parse_mode("work"), Some(crate::tools::AgentMode::Work));
+    assert_eq!(parse_mode("agent"), Some(crate::tools::AgentMode::Work));
+    assert_eq!(parse_mode(""), None);
+}
+
+#[test]
+fn output_text_delta_reads_streaming_response_events() {
+    let event = serde_json::json!({
+        "type": "response.output_text.delta",
+        "delta": "hello"
+    });
+
+    assert_eq!(output_text_delta(&event), Some("hello"));
+    assert_eq!(
+        output_text_delta(&serde_json::json!({"type": "response.output_text.done"})),
+        None
+    );
 }
 
 #[test]
@@ -373,21 +396,21 @@ fn trace_export_record_wraps_summary_with_paths() {
 
 #[test]
 fn active_session_matching_handles_same_path() {
-    let path = PathBuf::from("session-a.json");
-    let active = Some(path.clone());
+    let active = Some("session-a".to_string());
 
-    assert!(is_active_session(&active, &path));
-    assert!(!is_active_session(
-        &active,
-        &PathBuf::from("session-b.json")
-    ));
-    assert!(!is_active_session(&None, &path));
+    assert!(is_active_session(&active, "session-a"));
+    assert!(!is_active_session(&active, "session-b"));
+    assert!(!is_active_session(&None, "session-a"));
 }
 
 #[test]
-fn session_display_name_uses_file_stem() {
-    assert_eq!(
-        session_name_for_display(&PathBuf::from("demo.session.json")),
-        "demo.session"
+fn timestamp_session_name_is_filename_safe_and_not_workspace_scoped() {
+    let name = timestamp_session_name();
+
+    assert!(name.starts_with("chat-"));
+    assert!(!name.starts_with("workspace-"));
+    assert!(
+        name.chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
     );
 }

@@ -17,12 +17,16 @@ use retention::{
 impl AgentRunner {
     pub async fn compact_now(&mut self) -> Result<Option<Value>> {
         let tools = builtin_tools();
+        if !self.input.is_empty() {
+            self.emit_compaction_start(Some("manual"), serde_json::to_string(&self.input)?.len());
+        }
         let report = self.compact_once(&tools, true, Some("manual")).await?;
         if let Some(report) = &report {
             self.profiler.record_compaction(report);
             if let Some(trace) = &mut self.trace {
                 trace.write(self.request_seq + 1, "compaction", report)?;
             }
+            self.emit_compaction_finish(format_compaction_notice(report));
             self.emit_profile_summary()?;
         }
         Ok(report)

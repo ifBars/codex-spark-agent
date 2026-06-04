@@ -28,3 +28,4 @@
 *.swo
 .DS_Store
 Thumbs.db
+.codegraph

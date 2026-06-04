@@ -2,7 +2,7 @@
 
 `codex-spark-agent` is an experimental Rust CLI harness for testing `gpt-5.3-codex-spark` as a small coding agent.
 
-It is intentionally simpler than the official Codex CLI: one binary, ChatGPT/Codex OAuth, streaming Responses calls, a small native tool set, session files, skill loading, trace capture, and profiling signals for model behavior.
+It is intentionally simpler than the official Codex CLI: one binary, ChatGPT/Codex OAuth, streaming Responses calls, a small native tool set, SQLite-backed sessions, skill loading, trace capture, and profiling signals for model behavior.
 
 > This project is unofficial and experimental. It talks to the ChatGPT Codex backend shape observed by Codex-like clients. That surface can change.
 
@@ -169,7 +169,9 @@ Inside `spark chat`:
 - `/skill refresh` force-rebuilds compiled skill caches.
 - `/exit` quits.
 
-Interactive chat defaults to `~/.spark-codex/sessions/default.json`. One-shot prompts only persist when `--session <name>` is supplied. Interactive sessions autosave after completed prompts and after agent-loop errors, so failed long-context runs can still be inspected, compacted, or resumed. Session files include a lightweight `schema_version`; older versionless session files still load.
+Interactive chat starts a fresh timestamped session unless `--session <name>` is supplied. Named sessions are stored in `~/.spark-codex/sessions.sqlite3`. One-shot prompts only persist when `--session <name>` is supplied. Interactive sessions autosave after completed prompts and after agent-loop errors, so failed long-context runs can still be inspected, compacted, or resumed. Session snapshots include a lightweight `schema_version`; older versionless JSON session files still load during migration.
+
+On startup, Spark migrates legacy `~/.spark-codex/sessions/*.json` snapshots into the SQLite store and moves successfully parsed files into `~/.spark-codex/sessions/migrated/`. Those migrated JSON backups are retained briefly and then cleaned up automatically so old files do not keep slowing startup or consuming storage. Spark also prunes stale SQLite sessions after a conservative retention window while protecting the active session and keeping a floor of recent sessions, then vacuums the database when rows are removed. Malformed legacy JSON files are left in place and reported as warnings instead of blocking valid sessions.
 
 ## Skills
 
@@ -210,7 +212,7 @@ If the source skill changes, Spark recompiles the compact skill cache on first l
 
 Tool schemas are intentionally small. The harness accepts JSON-string or object arguments, reports bad arguments as tool observations, and preserves function-call outputs in the next request.
 
-`fs.list` and `fs.search` skip generated/runtime directories such as `target/`, `.git/`, `node_modules/`, `.spark/`, `.spark-runs/`, and `.spark-profile/` during recursive discovery. Direct paths remain readable, so profiling artifacts can still be inspected explicitly. `fs.stat` returns compact path metadata, including `exists:false` for missing workspace paths, without reading file contents. `fs.read` returns line-window metadata (`returned_lines`, `total_lines`, `has_more`, and `next_offset`) so Spark can choose the next chunk without guessing.
+`fs.search` uses ripgrep when available, keeps `query` literal by default, and supports regular expressions with `regex:true`. `fs.list` and `fs.search` skip generated/runtime directories such as `target/`, `.git/`, `node_modules/`, `.spark/`, `.spark-runs/`, and `.spark-profile/` during recursive discovery. Direct paths remain readable, so profiling artifacts can still be inspected explicitly. `fs.stat` returns compact path metadata, including `exists:false` for missing workspace paths, without reading file contents. `fs.read` returns line-window metadata (`returned_lines`, `total_lines`, `has_more`, and `next_offset`) so Spark can choose the next chunk without guessing.
 
 `fs.write` creates parent directories when needed and reports whether the file was newly created, plus previous and new byte counts. `fs.rename` moves one file or directory inside the workspace, creates destination parents, and refuses to overwrite an existing destination. Both tools report `created_parent_dirs`, which helps Spark notice when a mutation created an unexpected path segment. That makes common file mutations visible in traces and profile timelines without falling back to shell commands.
 

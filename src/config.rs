@@ -19,35 +19,8 @@ pub fn sessions_dir() -> Result<PathBuf> {
     Ok(app_dir()?.join("sessions"))
 }
 
-pub fn session_path(name: &str) -> Result<PathBuf> {
-    if !is_valid_session_name(name) {
-        anyhow::bail!(
-            "invalid session name `{name}`; use letters, numbers, dots, dashes, and underscores"
-        );
-    }
-    Ok(sessions_dir()?.join(format!("{name}.json")))
-}
-
-pub fn list_sessions() -> Result<Vec<String>> {
-    let dir = sessions_dir()?;
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut sessions = std::fs::read_dir(&dir)
-        .with_context(|| format!("failed to list {}", dir.display()))?
-        .filter_map(|entry| {
-            let path = entry.ok()?.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                return None;
-            }
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .map(str::to_string)
-        })
-        .collect::<Vec<_>>();
-    sessions.sort();
-    Ok(sessions)
+pub fn sessions_db_path() -> Result<PathBuf> {
+    Ok(app_dir()?.join("sessions.sqlite3"))
 }
 
 pub fn save_auth(tokens: &AuthTokens) -> Result<()> {
@@ -79,7 +52,7 @@ pub fn load_auth() -> Result<AuthTokens> {
     serde_json::from_str(&body).with_context(|| format!("failed to parse {}", path.display()))
 }
 
-fn is_valid_session_name(name: &str) -> bool {
+pub(crate) fn is_valid_session_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()

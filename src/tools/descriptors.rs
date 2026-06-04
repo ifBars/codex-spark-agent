@@ -12,13 +12,13 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
     vec![
         ToolDescriptor {
             name: "fs.read".to_string(),
-            description: "Read a UTF-8 text file under the workspace. Supports offset and limit line windows.".to_string(),
+            description: "Read a bounded UTF-8 line window under the workspace. Use offset/limit to page through larger files instead of reading them all at once.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
                     "offset": {"type": "integer", "minimum": 1},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 2000},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 400},
                     "line_numbers": {"type": "boolean"}
                 },
                 "required": ["path"],
@@ -34,7 +34,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                     "path": {"type": "string"},
                     "recursive": {"type": "boolean"},
                     "max_depth": {"type": "integer", "minimum": 0, "maximum": 8},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 2000}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200}
                 },
                 "additionalProperties": false
             }),
@@ -66,16 +66,17 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
         },
         ToolDescriptor {
             name: "fs.search".to_string(),
-            description: "Search UTF-8 files under the workspace for a literal query and return matching line snippets.".to_string(),
+            description: "Search UTF-8 files under the workspace with ripgrep when available and return bounded matching line snippets. Query is literal by default; set regex=true for regular expressions. Narrow path/query first, then page with more specific searches when needed.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
                     "path": {"type": "string"},
+                    "regex": {"type": "boolean"},
                     "case_sensitive": {"type": "boolean"},
                     "max_depth": {"type": "integer", "minimum": 0, "maximum": 12},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 500},
-                    "context_lines": {"type": "integer", "minimum": 0, "maximum": 5}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "context_lines": {"type": "integer", "minimum": 0, "maximum": 3}
                 },
                 "required": ["query"],
                 "additionalProperties": false

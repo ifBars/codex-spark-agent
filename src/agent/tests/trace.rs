@@ -38,6 +38,7 @@ fn trace_metadata_includes_approx_token_thresholds() {
             interactive: true,
             session_name: Some("demo-session".to_string()),
             new_session: true,
+            mode: crate::tools::AgentMode::Ask,
             context: Some(json!({
                 "profile_scenario": {
                     "name": "compaction-pressure",
@@ -60,6 +61,7 @@ fn trace_metadata_includes_approx_token_thresholds() {
     assert_eq!(metadata["interactive"], true);
     assert_eq!(metadata["session"], "demo-session");
     assert_eq!(metadata["new_session"], true);
+    assert_eq!(metadata["mode"], "ask");
     assert_eq!(
         metadata["context"]["profile_scenario"]["name"],
         "compaction-pressure"

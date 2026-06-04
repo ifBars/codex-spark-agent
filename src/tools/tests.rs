@@ -17,11 +17,21 @@ fn builtin_tools_do_not_include_synthetic_completion_tool() {
     assert!(names.iter().any(|name| name == "cmd.exec"));
 }
 
+#[test]
+fn ask_mode_advertises_only_readonly_tools() {
+    let names = tools_for_mode(builtin_tools(), AgentMode::Ask)
+        .into_iter()
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
+
+    assert_eq!(names, vec!["fs.read", "fs.list", "fs.stat", "fs.search"]);
+}
+
 #[tokio::test]
 async fn invoke_returns_structured_error_for_missing_required_args() {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    let result = invoke(dir.path(), "fs.read", json!({"limit": 10})).await;
+    let result = invoke(dir.path(), AgentMode::Work, "fs.read", json!({"limit": 10})).await;
 
     assert!(!result.ok);
     assert_eq!(result.data["error_kind"], "invalid_arguments");
@@ -46,7 +56,13 @@ async fn invoke_returns_structured_error_for_missing_required_args() {
 async fn invoke_returns_structured_error_for_unknown_tool() {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    let result = invoke(dir.path(), "fs.missing", json!({"path": "README.md"})).await;
+    let result = invoke(
+        dir.path(),
+        AgentMode::Work,
+        "fs.missing",
+        json!({"path": "README.md"}),
+    )
+    .await;
 
     assert!(!result.ok);
     assert_eq!(result.data["error_kind"], "unknown_tool");
@@ -58,6 +74,23 @@ async fn invoke_returns_structured_error_for_unknown_tool() {
             .expect("hint")
             .contains("advertised native tool names")
     );
+}
+
+#[tokio::test]
+async fn invoke_blocks_mutating_tools_in_ask_mode() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let result = invoke(
+        dir.path(),
+        AgentMode::Ask,
+        "fs.write",
+        json!({"path": "sample.txt", "content": "blocked"}),
+    )
+    .await;
+
+    assert!(!result.ok);
+    assert!(result.error.as_deref().expect("error").contains("ask mode"));
+    assert!(!dir.path().join("sample.txt").exists());
 }
 
 #[test]
@@ -84,6 +117,38 @@ fn fs_search_returns_matching_line_snippets() {
 }
 
 #[test]
+fn fs_search_keeps_literal_default_and_supports_regex_mode() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("sample.txt"),
+        "alpha 123\nalpha digits\nomega\n",
+    )
+    .expect("write sample");
+
+    let literal_result =
+        fs_search(dir.path(), json!({"query": r"\d+", "path": "."})).expect("literal search");
+    assert_eq!(
+        literal_result.data["matches"]
+            .as_array()
+            .expect("literal matches")
+            .len(),
+        0
+    );
+    assert_eq!(literal_result.data["regex"], false);
+
+    let regex_result = fs_search(
+        dir.path(),
+        json!({"query": r"\d+", "path": ".", "regex": true}),
+    )
+    .expect("regex search");
+    let matches = regex_result.data["matches"].as_array().expect("matches");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["path"], "sample.txt");
+    assert_eq!(matches[0]["line"], 1);
+    assert_eq!(regex_result.data["regex"], true);
+}
+
+#[test]
 fn fs_read_reports_window_metadata() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("sample.txt"), "one\ntwo\nthree\n").expect("write sample");
@@ -98,6 +163,54 @@ fn fs_read_reports_window_metadata() {
     assert_eq!(result.data["total_lines"], 3);
     assert_eq!(result.data["has_more"], true);
     assert_eq!(result.data["next_offset"], 3);
+}
+
+#[test]
+fn fs_read_defaults_to_small_windows_and_clamps_large_limits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let content = (1..=600)
+        .map(|line| format!("line {line}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dir.path().join("sample.txt"), content).expect("write sample");
+
+    let default_result = fs_read(dir.path(), json!({"path": "sample.txt"})).expect("read");
+    assert_eq!(default_result.data["limit"], 120);
+    assert_eq!(default_result.data["returned_lines"], 120);
+    assert_eq!(default_result.data["has_more"], true);
+    assert_eq!(default_result.data["next_offset"], 121);
+
+    let clamped_result =
+        fs_read(dir.path(), json!({"path": "sample.txt", "limit": 2000})).expect("read");
+    assert_eq!(clamped_result.data["limit"], 400);
+    assert_eq!(clamped_result.data["returned_lines"], 400);
+    assert_eq!(clamped_result.data["next_offset"], 401);
+}
+
+#[test]
+fn fs_read_caps_content_chars_even_when_lines_are_long() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let content = (1..=20)
+        .map(|line| format!("line {line} {}", "x".repeat(1000)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dir.path().join("sample.txt"), content).expect("write sample");
+
+    let result = fs_read(
+        dir.path(),
+        json!({"path": "sample.txt", "limit": 20, "line_numbers": false}),
+    )
+    .expect("read");
+
+    assert_eq!(result.data["content_truncated"], true);
+    assert!(
+        result.data["returned_lines"]
+            .as_u64()
+            .expect("returned lines")
+            < 20
+    );
+    assert_eq!(result.data["has_more"], true);
+    assert!(result.data["content"].as_str().expect("content").len() <= 12_000);
 }
 
 #[test]
@@ -155,6 +268,34 @@ fn fs_list_skips_generated_dirs_during_recursive_discovery() {
 }
 
 #[test]
+fn fs_list_clamps_limits_and_caps_result_chars() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    for index in 0..300 {
+        let path = dir.path().join(format!(
+            "src/module_{index:03}/very_long_named_file_{index:03}.rs"
+        ));
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+        std::fs::write(path, "fn demo() {}\n").expect("write file");
+    }
+
+    let result = fs_list(
+        dir.path(),
+        json!({"path": ".", "recursive": true, "max_depth": 4, "limit": 500}),
+    )
+    .expect("list");
+
+    assert_eq!(result.data["limit"], 200);
+    assert_eq!(result.data["truncated"], true);
+    assert_eq!(result.data["entries_truncated_by_chars"], true);
+    assert!(
+        serde_json::to_string(result.data["entries"].as_array().expect("entries"))
+            .expect("serialize entries")
+            .len()
+            <= 12_000
+    );
+}
+
+#[test]
 fn fs_search_skips_generated_dirs_during_recursive_discovery() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("target")).expect("create target");
@@ -174,6 +315,30 @@ fn fs_search_skips_generated_dirs_during_recursive_discovery() {
         .collect::<Vec<_>>();
 
     assert_eq!(paths, vec!["src/main.rs"]);
+}
+
+#[test]
+fn fs_search_clamps_limits_and_truncates_large_snippets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let content = (1..=150)
+        .map(|line| format!("needle {line} {}", "x".repeat(1000)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(dir.path().join("sample.txt"), content).expect("write sample");
+
+    let result = fs_search(
+        dir.path(),
+        json!({"query": "needle", "path": ".", "limit": 500, "context_lines": 5}),
+    )
+    .expect("search");
+
+    let matches = result.data["matches"].as_array().expect("matches");
+    assert_eq!(result.data["limit"], 100);
+    assert_eq!(matches.len(), 100);
+    assert_eq!(result.data["truncated"], true);
+    assert_eq!(result.data["snippets_truncated"], 100);
+    assert!(matches[0]["snippet"].as_str().expect("snippet").len() <= 600);
+    assert_eq!(matches[0]["snippet_truncated"], true);
 }
 
 #[test]

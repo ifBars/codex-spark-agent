@@ -18,10 +18,10 @@ pub(crate) async fn handle_skill_command(
                 } else {
                     ""
                 };
-                println!(
+                runner.emit_system_message(format!(
                     "{}{} [{}] - {}",
                     skill.name, loaded, skill.cache_status, skill.description
-                );
+                ));
             }
         }
         Some("refresh") => {
@@ -30,7 +30,7 @@ pub(crate) async fn handle_skill_command(
                 compile_skill_cached(runner, cwd, &source.name, true).await?;
                 refreshed += 1;
             }
-            println!("refreshed {refreshed} skill(s)");
+            runner.emit_system_message(format!("refreshed {refreshed} skill(s)"));
         }
         Some("load") => {
             let name = parts
@@ -53,9 +53,9 @@ pub(crate) async fn load_skill_into_runner(
 ) -> Result<()> {
     let skill = compile_skill_cached(runner, cwd, name, refresh).await?;
     if runner.load_skill_context(&skill.name, &skill.summary) {
-        println!("loaded skill: {}", skill.name);
+        runner.emit_system_message(format!("loaded skill: {}", skill.name));
     } else {
-        println!("skill already loaded: {}", skill.name);
+        runner.emit_system_message(format!("skill already loaded: {}", skill.name));
     }
     Ok(())
 }

@@ -330,8 +330,6 @@ impl AgentProfiler {
             self.signals.remove(0);
         }
     }
-
-
 }
 
 mod analyze;
@@ -347,8 +345,9 @@ pub use format::{
 pub use util::{approx_token_count_from_chars, context_window_pct, tool_signature};
 
 use analyze::summarize_compaction_report;
-use util::{created_parent_dirs, tool_result_is_truncated, tool_result_timed_out, tool_truncation_fields};
-
+use util::{
+    created_parent_dirs, tool_result_is_truncated, tool_result_timed_out, tool_truncation_fields,
+};
 
 #[cfg(test)]
 use analyze::*;
