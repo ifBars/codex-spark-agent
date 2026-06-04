@@ -109,10 +109,58 @@ pub(super) fn compaction_trigger_for_turn(
     if compact_after_tool_only_turns != 0
         && tool_only_streak >= compact_after_tool_only_turns
         && last_tool_only_compaction_streak == 0
+        && should_compact_for_tool_only_streak(compact_after_chars, input_chars)
     {
         return Ok(Some(TOOL_ONLY_STREAK_COMPACTION_TRIGGER));
     }
     Ok(None)
+}
+
+fn should_compact_for_tool_only_streak(compact_after_chars: usize, input_chars: usize) -> bool {
+    if compact_after_chars == 0 {
+        return true;
+    }
+    input_chars >= tool_only_compaction_min_chars(compact_after_chars)
+}
+
+fn tool_only_compaction_min_chars(compact_after_chars: usize) -> usize {
+    (compact_after_chars / 2)
+        .max(64_000)
+        .min(compact_after_chars)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{compaction_trigger_for_turn, tool_only_compaction_min_chars};
+    use crate::agent::TOOL_ONLY_STREAK_COMPACTION_TRIGGER;
+
+    #[test]
+    fn tool_only_compaction_waits_for_meaningful_input_pressure() {
+        let small_input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "x".repeat(120)}]
+        })];
+        let large_input = vec![json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "x".repeat(90_000)}]
+        })];
+
+        let trigger = compaction_trigger_for_turn(160_000, 12, 12, 0, &small_input)
+            .expect("trigger decision");
+        assert_eq!(trigger, None);
+
+        let trigger = compaction_trigger_for_turn(160_000, 12, 12, 0, &large_input)
+            .expect("trigger decision");
+        assert_eq!(trigger, Some(TOOL_ONLY_STREAK_COMPACTION_TRIGGER));
+    }
+
+    #[test]
+    fn tool_only_compaction_floor_scales_with_threshold() {
+        assert_eq!(tool_only_compaction_min_chars(160_000), 80_000);
+        assert_eq!(tool_only_compaction_min_chars(20_000), 20_000);
+    }
 }
 
 pub(in crate::agent) fn compact_remote_history_to_threshold(

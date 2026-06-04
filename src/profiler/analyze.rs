@@ -73,9 +73,16 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let mut observed_tool_calls = Vec::<ObservedToolCall>::new();
     let mut observed_tool_results = Vec::<ObservedToolResult>::new();
     let mut loaded_skill_contexts = BTreeSet::<String>::new();
-    let mut files = std::fs::read_dir(dir)?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_file()
+            && path.extension().and_then(|extension| extension.to_str()) == Some("json")
+        {
+            files.push(path);
+        }
+    }
     files.sort_by(|left, right| trace_file_sort_key(left).cmp(&trace_file_sort_key(right)));
 
     for path in files {

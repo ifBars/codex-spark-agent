@@ -415,10 +415,18 @@ fn compaction_trigger_prefers_size_then_tool_only_streak() {
     assert_eq!(trigger, Some("size_threshold"));
 
     let trigger = compaction_trigger_for_turn(10_000, 12, 12, 0, &input).expect("trigger decision");
+    assert_eq!(trigger, None);
+
+    let large_input = vec![json!({
+        "role": "user",
+        "content": [{"type": "input_text", "text": "x".repeat(90_000)}]
+    })];
+    let trigger =
+        compaction_trigger_for_turn(100_000, 12, 12, 0, &large_input).expect("trigger decision");
     assert_eq!(trigger, Some(TOOL_ONLY_STREAK_COMPACTION_TRIGGER));
 
     let trigger =
-        compaction_trigger_for_turn(10_000, 12, 12, 12, &input).expect("trigger decision");
+        compaction_trigger_for_turn(100_000, 12, 12, 12, &large_input).expect("trigger decision");
     assert_eq!(trigger, None);
 
     let trigger = compaction_trigger_for_turn(10_000, 0, 100, 0, &input).expect("trigger decision");

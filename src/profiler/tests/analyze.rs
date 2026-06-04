@@ -63,6 +63,28 @@ fn analyze_trace_reconstructs_tool_calls_from_stream_events() {
 }
 
 #[test]
+fn analyze_trace_skips_artifact_directories() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let artifacts = dir.path().join("browser-artifacts");
+    std::fs::create_dir(&artifacts).expect("create artifacts dir");
+    std::fs::write(artifacts.join("screenshot.png"), b"not json").expect("write artifact");
+    std::fs::write(dir.path().join("browser-smoke.mjs"), "not json").expect("write script");
+    std::fs::write(dir.path().join("screenshot.png"), b"not json").expect("write screenshot");
+    std::fs::write(
+        dir.path().join("001-request-input.json"),
+        serde_json::to_vec_pretty(&json!({
+            "input": [{"role": "user", "content": [{"type": "input_text", "text": "read"}]}]
+        }))
+        .expect("serialize request"),
+    )
+    .expect("write request");
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(summary["requests"], 1);
+}
+
+#[test]
 fn analyze_trace_reports_post_compaction_regrowth() {
     let dir = tempfile::tempdir().expect("tempdir");
     let large_followup = "x".repeat(120_000);

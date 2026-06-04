@@ -198,21 +198,7 @@ SKILL.md:
             events.push(value);
         }
 
-        let mut raw = completed
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Spark stream ended without response.completed"))?;
-        if raw
-            .get("output")
-            .and_then(Value::as_array)
-            .is_none_or(|output| output.is_empty())
-        {
-            let output = reconstruct_output_from_events(&events);
-            if !output.is_empty()
-                && let Some(object) = raw.as_object_mut()
-            {
-                object.insert("output".to_string(), Value::Array(output));
-            }
-        }
+        let raw = response_from_stream(completed, &events)?;
         let parsed = serde_json::from_value::<Response>(raw.clone())
             .with_context(|| format!("failed to parse Spark response: {raw}"))?;
         Ok((parsed, json!({"response": raw, "events": events})))
@@ -311,6 +297,48 @@ fn reconstruct_output_from_events(events: &[Value]) -> Vec<Value> {
     }
     indexed.sort_by_key(|(index, _)| *index);
     indexed.into_iter().map(|(_, item)| item).collect()
+}
+
+fn response_from_stream(completed: Option<Value>, events: &[Value]) -> Result<Value> {
+    let output = reconstruct_output_from_events(events);
+    if let Some(mut raw) = completed {
+        if raw
+            .get("output")
+            .and_then(Value::as_array)
+            .is_none_or(|items| items.is_empty())
+            && !output.is_empty()
+            && let Some(object) = raw.as_object_mut()
+        {
+            object.insert("output".to_string(), Value::Array(output));
+        }
+        return Ok(raw);
+    }
+
+    if output.is_empty() {
+        anyhow::bail!("Spark stream ended without response.completed");
+    }
+
+    let mut raw = events
+        .iter()
+        .rev()
+        .filter_map(|event| event.get("response").cloned())
+        .next()
+        .unwrap_or_else(|| json!({"object": "response"}));
+    if let Some(object) = raw.as_object_mut() {
+        object.insert("output".to_string(), Value::Array(output));
+        object.insert("status".to_string(), Value::String("completed".to_string()));
+        object.insert("incomplete_details".to_string(), Value::Null);
+        object.insert("spark_harness_reconstructed".to_string(), Value::Bool(true));
+        return Ok(raw);
+    }
+
+    Ok(json!({
+        "object": "response",
+        "status": "completed",
+        "output": output,
+        "incomplete_details": null,
+        "spark_harness_reconstructed": true,
+    }))
 }
 
 fn parse_sse_json_line(line: &str) -> Option<Value> {
@@ -505,6 +533,9 @@ fn spark_system_prompt() -> &'static str {
 
 Use the available native tools when they help. Answer directly when they do not.
 When a user names a project, library, or repo ambiguously, first take a small look at the current workspace before assuming they mean a public product or SDK.
+Batch independent tool calls in the same turn when possible, especially reads, searches, and writes for a known set of files.
+After required evidence is gathered and validation passes, stop calling tools and provide the final answer.
+When validation fails, inspect the first concrete failure, make a targeted code or config change, and do not rerun the same failing command again unless something relevant changed.
 When finished, provide the final answer as a normal assistant message."#
 }
 
@@ -516,7 +547,9 @@ Produce compact operational guidance, not a prose summary. Preserve source-groun
 
 #[cfg(test)]
 mod tests {
-    use super::spark_system_prompt;
+    use serde_json::json;
+
+    use super::{Response, response_from_stream, response_text, spark_system_prompt};
 
     #[test]
     fn spark_system_prompt_prefers_workspace_peek_for_ambiguous_repo_names() {
@@ -524,5 +557,62 @@ mod tests {
 
         assert!(prompt.contains("first take a small look at the current workspace"));
         assert!(prompt.contains("before assuming they mean a public product or SDK"));
+        assert!(prompt.contains("Batch independent tool calls in the same turn"));
+        assert!(prompt.contains("After required evidence is gathered and validation passes"));
+    }
+
+    #[test]
+    fn reconstructs_response_when_stream_lacks_completed_event() {
+        let events = vec![
+            json!({
+                "type": "response.created",
+                "response": {
+                    "id": "resp_test",
+                    "object": "response",
+                    "status": "in_progress",
+                    "output": []
+                }
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        {"type": "output_text", "text": "done"}
+                    ]
+                }
+            }),
+        ];
+
+        let raw = response_from_stream(None, &events).expect("stream should be reconstructed");
+        let parsed =
+            serde_json::from_value::<Response>(raw.clone()).expect("response should parse");
+
+        assert_eq!(response_text(&parsed), "done");
+        assert_eq!(
+            raw.get("spark_harness_reconstructed")
+                .and_then(|value| value.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn missing_completed_still_errors_without_output_items() {
+        let error = response_from_stream(
+            None,
+            &[json!({
+                "type": "response.created",
+                "response": {"id": "resp_test", "output": []}
+            })],
+        )
+        .expect_err("empty stream should stay an error");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Spark stream ended without response.completed")
+        );
     }
 }

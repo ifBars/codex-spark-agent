@@ -1,13 +1,17 @@
 mod agent;
 mod auth;
+mod benchmark_results;
 mod chat;
 mod chat_markdown;
 mod chat_tui;
 mod cli;
 mod client;
+mod codex_cli_benchmark;
 mod config;
+mod profile_runner;
 mod profile_scenarios;
 mod profiler;
+mod scenario_validation;
 mod session_store;
 mod sessions;
 mod skill_commands;
@@ -23,7 +27,6 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Parser;
-use serde_json::json;
 
 use cli::{Cli, Command};
 
@@ -277,105 +280,190 @@ async fn main() -> Result<()> {
                 max_input_tokens,
                 DEFAULT_MAX_INPUT_CHARS,
             )?;
-            profile_scenarios::validate_scenario_repeat(repeat)?;
-            let prompts = profile_scenarios::profile_scenario_prompts(scenario, target_tokens)?;
-            let total_prompt_chars = prompts.iter().map(String::len).sum::<usize>();
-            println!(
-                "scenario={:?} repeat={} prompts={} prompt_chars={} approx_tokens={} compact_after_chars={} compact_after_tool_only_turns={} max_input_chars={}",
-                scenario,
-                repeat,
-                prompts.len(),
-                total_prompt_chars,
-                total_prompt_chars / APPROX_CHARS_PER_TOKEN,
-                compact_after_chars,
-                compact_after_tool_only_turns,
-                max_input_chars
-            );
-            let auth = config::load_auth()?;
-            let mut summaries = Vec::new();
-            let mut run_result = Ok(());
-            for repeat_index in 1..=repeat {
-                profile_scenarios::prepare_profile_scenario(&cwd, scenario)?;
-                if repeat > 1 {
-                    println!("scenario_repeat={repeat_index}/{repeat}");
-                }
-                let mut runner = agent::AgentRunner::new(
-                    auth.clone(),
-                    cwd.clone(),
-                    model.clone(),
+            profile_runner::run_profile_scenarios(
+                &[scenario],
+                profile_runner::ProfileRunOptions {
+                    cwd,
+                    model,
                     max_turns,
-                    !no_trace,
-                    !no_profile,
+                    target_tokens,
+                    repeat,
+                    no_trace,
+                    no_profile,
                     compact_after_chars,
                     compact_after_tool_only_turns,
                     max_input_chars,
-                    false,
-                    None,
-                    false,
-                    Some(json!({
-                        "profile_scenario": {
-                            "name": scenario.name(),
-                            "target_tokens": target_tokens,
-                            "prompt_count": prompts.len(),
-                            "prompt_chars": total_prompt_chars,
-                            "approx_prompt_tokens": total_prompt_chars / APPROX_CHARS_PER_TOKEN,
-                            "repeat_index": repeat_index,
-                            "repeat_count": repeat,
-                            "expected_tool_groups": profile_scenarios::profile_scenario_expected_tool_groups(scenario),
-                            "expected_tool_calls": profile_scenarios::profile_scenario_expected_tool_calls(scenario),
-                            "expected_skills": profile_scenarios::profile_scenario_expected_skills(scenario),
-                        }
-                    })),
-                    tools::AgentMode::Work,
-                )?;
-                for (index, prompt) in prompts.iter().enumerate() {
-                    println!(
-                        "scenario_turn={}/{} prompt_chars={} approx_tokens={}",
-                        index + 1,
-                        prompts.len(),
-                        prompt.len(),
-                        prompt.len() / APPROX_CHARS_PER_TOKEN
-                    );
-                    skill_commands::load_skill_mentions(&mut runner, &cwd, prompt).await?;
-                    if let Err(error) = runner.run(prompt).await {
-                        run_result = Err(error);
-                        break;
-                    }
-                }
-                if !no_trace {
-                    match trace_commands::latest_trace_dir(&trace_commands::trace_runs_root(&cwd))
-                        .and_then(|latest| {
-                            let summary = profiler::analyze_trace(&latest)?;
-                            Ok((latest, summary))
-                        }) {
-                        Ok((latest, summary)) => {
-                            println!(
-                                "{}",
-                                profiler::format_trace_summary_row(
-                                    &trace_commands::display_trace_dir(&cwd, &latest)
-                                        .display()
-                                        .to_string(),
-                                    &summary,
-                                )
-                            );
-                            summaries.push(summary);
-                        }
-                        Err(error) => {
-                            eprintln!("warning: failed to summarize scenario trace: {error:#}");
-                        }
-                    }
-                }
-                if run_result.is_err() {
-                    break;
-                }
-            }
-            if !no_trace && repeat > 1 && !summaries.is_empty() {
-                println!(
-                    "{}",
-                    profiler::format_trace_aggregate_row(scenario.name(), &summaries)
-                );
-            }
-            run_result?;
+                    benchmark_suite: None,
+                },
+            )
+            .await?;
+        }
+        Command::ProfileBenchmark {
+            suite,
+            cwd,
+            model,
+            max_turns,
+            target_tokens,
+            repeat,
+            no_trace,
+            no_profile,
+            compact_after_chars,
+            compact_after_tokens,
+            compact_after_tool_only_turns,
+            max_input_chars,
+            max_input_tokens,
+        } => {
+            let cwd = std::fs::canonicalize(&cwd)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
+            let compact_after_chars = trace_commands::resolve_char_threshold(
+                "compact-after",
+                compact_after_chars,
+                compact_after_tokens,
+                DEFAULT_COMPACT_AFTER_CHARS,
+            )?;
+            let max_input_chars = trace_commands::resolve_char_threshold(
+                "max-input",
+                max_input_chars,
+                max_input_tokens,
+                DEFAULT_MAX_INPUT_CHARS,
+            )?;
+            profile_runner::run_profile_scenarios(
+                suite.scenarios(),
+                profile_runner::ProfileRunOptions {
+                    cwd,
+                    model,
+                    max_turns,
+                    target_tokens,
+                    repeat,
+                    no_trace,
+                    no_profile,
+                    compact_after_chars,
+                    compact_after_tool_only_turns,
+                    max_input_chars,
+                    benchmark_suite: Some(suite.name().to_string()),
+                },
+            )
+            .await?;
+        }
+        Command::ProfileBenchmarkReport {
+            suite,
+            cwd,
+            limit,
+            all_runs,
+            output_dir,
+        } => {
+            let cwd = std::fs::canonicalize(&cwd)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
+            let output_dir = if output_dir.is_absolute() {
+                output_dir
+            } else {
+                cwd.join(output_dir)
+            };
+            let report = benchmark_results::write_benchmark_report(
+                benchmark_results::BenchmarkReportOptions {
+                    cwd,
+                    suite,
+                    limit,
+                    all_runs,
+                    output_dir,
+                },
+            )?;
+            println!(
+                "benchmark_report suite={} rows={} avg_score={} json={} csv={} html={}",
+                suite.name(),
+                report.rows,
+                report
+                    .aggregate
+                    .get("average_score")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
+                report.json_path.display(),
+                report.csv_path.display(),
+                report.html_path.display()
+            );
+        }
+        Command::CodexCliBenchmark {
+            suite,
+            cwd,
+            codex_bin,
+            model,
+            repeat,
+            timeout_seconds,
+            ignore_user_config,
+            isolated_codex_home,
+            output_dir,
+        } => {
+            let cwd = std::fs::canonicalize(&cwd)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
+            let output_dir = if output_dir.is_absolute() {
+                output_dir
+            } else {
+                cwd.join(output_dir)
+            };
+            let report = codex_cli_benchmark::run_codex_cli_benchmark(
+                codex_cli_benchmark::CodexCliBenchmarkOptions {
+                    cwd,
+                    suite,
+                    model,
+                    repeat,
+                    timeout_seconds,
+                    ignore_user_config,
+                    isolated_codex_home,
+                    codex_bin,
+                    output_dir,
+                },
+            )
+            .await?;
+            println!(
+                "codex_cli_benchmark suite={} rows={} avg_score={} json={}",
+                suite.name(),
+                report.rows,
+                report
+                    .aggregate
+                    .get("average_score")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
+                report.json_path.display()
+            );
+        }
+        Command::BenchmarkCompare {
+            suite,
+            cwd,
+            limit,
+            all_runs,
+            codex_cli_report,
+            output_dir,
+        } => {
+            let cwd = std::fs::canonicalize(&cwd)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
+            let output_dir = if output_dir.is_absolute() {
+                output_dir
+            } else {
+                cwd.join(output_dir)
+            };
+            let report = benchmark_results::write_benchmark_comparison(
+                benchmark_results::BenchmarkComparisonOptions {
+                    cwd,
+                    suite,
+                    limit,
+                    all_runs,
+                    codex_cli_report,
+                    output_dir,
+                },
+            )?;
+            println!(
+                "benchmark_comparison suite={} rows={} winner={} json={} csv={} html={}",
+                suite.name(),
+                report.rows,
+                report
+                    .aggregate
+                    .pointer("/winner/runner")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("undetermined"),
+                report.json_path.display(),
+                report.csv_path.display(),
+                report.html_path.display()
+            );
         }
     }
 

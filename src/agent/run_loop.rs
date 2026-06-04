@@ -215,10 +215,10 @@ impl AgentRunner {
         tool_only_streak: usize,
         last_notice_streak: &mut usize,
     ) -> bool {
-        if self.compact_after_tool_only_turns == 0
-            || tool_only_streak < self.compact_after_tool_only_turns
-            || tool_only_streak.saturating_sub(*last_notice_streak)
-                < self.compact_after_tool_only_turns
+        let notice_interval = tool_only_notice_interval(self.compact_after_tool_only_turns);
+        if notice_interval == 0
+            || tool_only_streak < notice_interval
+            || tool_only_streak.saturating_sub(*last_notice_streak) < notice_interval
         {
             return false;
         }
@@ -263,5 +263,28 @@ impl AgentRunner {
         }
         self.emit_warning(format!("{stage}: {error}"));
         self.emit_profile_summary()
+    }
+}
+
+fn tool_only_notice_interval(compact_after_tool_only_turns: usize) -> usize {
+    if compact_after_tool_only_turns == 0 {
+        0
+    } else {
+        (compact_after_tool_only_turns / 2)
+            .max(4)
+            .min(compact_after_tool_only_turns)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tool_only_notice_interval;
+
+    #[test]
+    fn tool_only_notice_arrives_before_compaction_threshold() {
+        assert_eq!(tool_only_notice_interval(12), 6);
+        assert_eq!(tool_only_notice_interval(8), 4);
+        assert_eq!(tool_only_notice_interval(3), 3);
+        assert_eq!(tool_only_notice_interval(0), 0);
     }
 }

@@ -1,6 +1,6 @@
-use crate::cli::ProfileScenarioKind;
+use crate::cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind};
 use crate::profile_scenarios::{
-    prepare_profile_scenario, profile_scenario_expected_skills,
+    codex_cli_benchmark_prompt, prepare_profile_scenario, profile_scenario_expected_skills,
     profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
     profile_scenario_prompts,
 };
@@ -300,6 +300,210 @@ fn s1api_survey_declares_enough_evidence_calls() {
     assert_eq!(calls[0]["path"], ".");
     assert_eq!(calls[1]["path"], "index.md");
     assert_eq!(calls[2]["path"], "S1API.cs");
+}
+
+#[test]
+fn repo_architecture_survey_exercises_harness_understanding() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::RepoArchitectureSurvey, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::RepoArchitectureSurvey);
+
+    assert!(prompt.contains("Profile scenario: repo-architecture-survey"));
+    assert!(prompt.contains("architecture map"));
+    assert!(prompt.contains("ProfileScenarioKind"));
+    assert!(prompt.contains("AgentRunner"));
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0]["tool"], "fs.list");
+    assert_eq!(calls[0]["path"], ".");
+    assert_eq!(calls[0]["recursive"], false);
+    assert_eq!(calls[1]["path"], "AGENTS.md");
+    assert_eq!(calls[2]["path"], "README.md");
+    assert_eq!(calls[3]["path"], "src");
+}
+
+#[test]
+fn benchmark_design_survey_targets_existing_scenario_taxonomy() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::BenchmarkDesignSurvey, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::BenchmarkDesignSurvey);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::BenchmarkDesignSurvey);
+
+    assert!(prompt.contains("Profile scenario: benchmark-design-survey"));
+    assert!(prompt.contains("propose benchmark coverage gaps"));
+    assert!(prompt.contains("three concrete new task prompts"));
+    assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.search"]]);
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0]["path"], "src/profile_scenarios.rs");
+    assert_eq!(calls[1]["path"], "src/profiler/analyze/expectations.rs");
+    assert_eq!(calls[2]["path"], "README.md");
+    assert_eq!(calls[3]["path"], "src");
+}
+
+#[test]
+fn react_calculator_scaffold_prepares_gitignored_project_brief() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::ReactCalculatorScaffold)
+        .expect("prepare scenario");
+
+    let brief = std::fs::read_to_string(
+        dir.path()
+            .join(".spark-scenarios")
+            .join("react-calculator")
+            .join("brief.md"),
+    )
+    .expect("read brief");
+
+    assert!(brief.contains("React + TypeScript calculator"));
+    assert!(brief.contains("Use bun"));
+}
+
+#[test]
+fn react_calculator_scaffold_declares_project_file_expectations() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::ReactCalculatorScaffold, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let groups =
+        profile_scenario_expected_tool_groups(ProfileScenarioKind::ReactCalculatorScaffold);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::ReactCalculatorScaffold);
+
+    assert!(prompt.contains("Profile scenario: react-calculator-scaffold"));
+    assert!(prompt.contains("Use bun for JavaScript package management"));
+    assert!(prompt.contains("Do not create files outside this ignored fixture folder"));
+    assert!(prompt.contains("Playwright browser smoke check"));
+    assert_eq!(
+        groups,
+        vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
+    );
+    assert_eq!(calls.len(), 8);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/react-calculator/brief.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/react-calculator/package.json"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/react-calculator/index.html"
+    );
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/react-calculator/src/main.tsx"
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/react-calculator/src/App.tsx"
+    );
+    assert_eq!(
+        calls[5]["path"],
+        ".spark-scenarios/react-calculator/src/App.test.tsx"
+    );
+    assert_eq!(
+        calls[6]["path"],
+        ".spark-scenarios/react-calculator/src/styles.css"
+    );
+    assert_eq!(calls[7]["tool"], "cmd.exec");
+}
+
+#[test]
+fn codex_cli_prompt_uses_cli_neutral_actions_for_scaffolding() {
+    let prompt = codex_cli_benchmark_prompt(ProfileScenarioKind::ReactCalculatorScaffold);
+
+    assert!(prompt.contains("Codex CLI benchmark scenario: react-calculator-scaffold"));
+    assert!(prompt.contains("Use bun for JavaScript package management"));
+    assert!(prompt.contains("Create .spark-scenarios/react-calculator/index.html"));
+    assert!(prompt.contains("Create .spark-scenarios/react-calculator/src/App.tsx"));
+    assert!(!prompt.contains("fs.write"));
+    assert!(!prompt.contains("cmd.exec"));
+}
+
+#[test]
+fn rust_log_analyzer_scaffold_prepares_brief_and_sample_log() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::RustLogAnalyzerScaffold)
+        .expect("prepare scenario");
+
+    let root = dir
+        .path()
+        .join(".spark-scenarios")
+        .join("rust-log-analyzer");
+    let brief = std::fs::read_to_string(root.join("brief.md")).expect("read brief");
+    let sample = std::fs::read_to_string(root.join("sample.log")).expect("read sample");
+
+    assert!(brief.contains("Rust CLI project"));
+    assert!(brief.contains("do not set CARGO_TARGET_DIR"));
+    assert!(sample.contains("ERROR code=E42"));
+}
+
+#[test]
+fn rust_log_analyzer_scaffold_declares_project_file_expectations() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::RustLogAnalyzerScaffold, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let groups =
+        profile_scenario_expected_tool_groups(ProfileScenarioKind::RustLogAnalyzerScaffold);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::RustLogAnalyzerScaffold);
+
+    assert!(prompt.contains("Profile scenario: rust-log-analyzer-scaffold"));
+    assert!(prompt.contains("Do not set CARGO_TARGET_DIR"));
+    assert!(prompt.contains("cargo test"));
+    assert_eq!(
+        groups,
+        vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
+    );
+    assert_eq!(calls.len(), 6);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/rust-log-analyzer/brief.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/rust-log-analyzer/sample.log"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/rust-log-analyzer/Cargo.toml"
+    );
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/rust-log-analyzer/src/lib.rs"
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/rust-log-analyzer/src/main.rs"
+    );
+    assert_eq!(calls[5]["tool"], "cmd.exec");
+}
+
+#[test]
+fn benchmark_suites_group_existing_and_real_world_scenarios() {
+    assert_eq!(
+        ProfileBenchmarkSuiteKind::Scaffolding.scenarios(),
+        &[
+            ProfileScenarioKind::ReactCalculatorScaffold,
+            ProfileScenarioKind::RustLogAnalyzerScaffold
+        ]
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::Survey
+            .scenarios()
+            .contains(&ProfileScenarioKind::BenchmarkDesignSurvey)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::ReactCalculatorScaffold)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::Core
+            .scenarios()
+            .contains(&ProfileScenarioKind::ToolRecovery)
+    );
 }
 
 #[test]

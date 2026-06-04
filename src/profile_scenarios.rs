@@ -8,11 +8,20 @@ use crate::{
     cli::ProfileScenarioKind,
 };
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProfileScenarioValidationCommand {
+    pub(crate) workdir: &'static str,
+    pub(crate) program: &'static str,
+    pub(crate) args: &'static [&'static str],
+}
+
 pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind) -> Result<()> {
     let Some(name) = (match scenario {
         ProfileScenarioKind::FileEdit => Some("file-edit"),
         ProfileScenarioKind::FileOps => Some("file-ops"),
         ProfileScenarioKind::ToolRecovery => Some("tool-recovery"),
+        ProfileScenarioKind::ReactCalculatorScaffold => Some("react-calculator"),
+        ProfileScenarioKind::RustLogAnalyzerScaffold => Some("rust-log-analyzer"),
         _ => None,
     }) else {
         return Ok(());
@@ -55,6 +64,25 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 "# Recovery Fixture\n\nSpark recovery path verified.\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture source/note.md: {error}"))?;
+        }
+        ProfileScenarioKind::ReactCalculatorScaffold => {
+            std::fs::write(
+                dir.join("brief.md"),
+                "# React Calculator Brief\n\nBuild a small React + TypeScript calculator app in this folder. It should support digits, decimal input, clear, backspace, the four basic operators, equals, keyboard input, and a visible calculation history. Use bun for JavaScript package management and keep all generated app files inside this ignored fixture folder. The validation commands are `bun test` plus a Playwright browser smoke check that runs the app through Vite, screenshots it, and clicks 1 + 2 =. Include a browser-runnable Vite entrypoint such as index.html and package setup. Either keep tests compatible with Bun's default test runtime or add the package/config setup required for DOM-based React tests before using React Testing Library.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
+        }
+        ProfileScenarioKind::RustLogAnalyzerScaffold => {
+            std::fs::write(
+                dir.join("brief.md"),
+                "# Rust Log Analyzer Brief\n\nCreate a small Rust CLI project in this folder that reads a log file path, counts INFO/WARN/ERROR lines, reports the top error code when present, and has focused unit tests for the parser. Keep Cargo output in this project's default target/ directory; do not set CARGO_TARGET_DIR.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
+            std::fs::write(
+                dir.join("sample.log"),
+                "2026-06-03T10:00:00Z INFO boot complete\n2026-06-03T10:01:00Z WARN queue lag=42\n2026-06-03T10:02:00Z ERROR code=E42 payment failed\n2026-06-03T10:03:00Z ERROR code=E42 retry failed\n2026-06-03T10:04:00Z ERROR code=E7 cache miss\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture sample.log: {error}"))?;
         }
         _ => {}
     }
@@ -150,6 +178,62 @@ pub(crate) fn profile_scenario_prompts(
              Also mention one thing the harness made easier or harder while gathering evidence."
                 .to_string(),
         ]),
+        ProfileScenarioKind::RepoArchitectureSurvey => Ok(vec![
+            "Profile scenario: repo-architecture-survey.\n\
+             Answer like a coding agent being asked to understand this Spark harness repo before changing it.\n\
+             Use targeted native tools and bounded reads.\n\
+             Required evidence path:\n\
+             1. Use fs.list on . with recursive=false.\n\
+             2. Use fs.read on AGENTS.md.\n\
+             3. Use fs.read on README.md.\n\
+             4. Use fs.search under src for ProfileScenarioKind.\n\
+             5. Use fs.search under src for AgentRunner.\n\
+             Finish with a concise architecture map, the scenario/profiler flow, and two likely failure surfaces to profile next."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::BenchmarkDesignSurvey => Ok(vec![
+            "Profile scenario: benchmark-design-survey.\n\
+             Survey the existing profiling scenarios and propose benchmark coverage gaps grounded in this repo.\n\
+             Use targeted native tools and bounded reads; do not run benchmarks.\n\
+             Required evidence path:\n\
+             1. Use fs.read on src/profile_scenarios.rs.\n\
+             2. Use fs.read on src/profiler/analyze/expectations.rs.\n\
+             3. Use fs.search under README.md for profile-scenario.\n\
+             4. Use fs.search under src for expected_tool_calls.\n\
+             Finish with a prioritized benchmark plan containing three concrete new task prompts, expected evidence signals, and which existing scenarios they should be compared against."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::ReactCalculatorScaffold => Ok(vec![
+            "Profile scenario: react-calculator-scaffold.\n\
+             Build a brand new React + TypeScript calculator app only under .spark-scenarios/react-calculator.\n\
+             Use bun for JavaScript package management. Do not create files outside this ignored fixture folder.\n\
+             The finished app will be checked by bun test and a Playwright browser smoke check, so it must be runnable through Vite in a real browser.\n\
+             Required actions:\n\
+             1. Use fs.read on .spark-scenarios/react-calculator/brief.md.\n\
+             2. Use fs.write to create .spark-scenarios/react-calculator/package.json.\n\
+             3. Use fs.write to create .spark-scenarios/react-calculator/index.html.\n\
+             4. Use fs.write to create .spark-scenarios/react-calculator/src/main.tsx.\n\
+             5. Use fs.write to create .spark-scenarios/react-calculator/src/App.tsx.\n\
+             6. Use fs.write to create .spark-scenarios/react-calculator/src/App.test.tsx.\n\
+             7. Use fs.write to create .spark-scenarios/react-calculator/src/styles.css.\n\
+             8. Use cmd.exec from .spark-scenarios/react-calculator to run bun test when possible; if tests need a DOM, configure it before using DOM-based test helpers.\n\
+             Finish with the app files created, validation result, and any harness behavior that made project scaffolding easier or harder."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::RustLogAnalyzerScaffold => Ok(vec![
+            "Profile scenario: rust-log-analyzer-scaffold.\n\
+             Build a brand new Rust CLI project only under .spark-scenarios/rust-log-analyzer.\n\
+             Do not set CARGO_TARGET_DIR; use Cargo's default target/ directory for this nested project.\n\
+             Required actions:\n\
+             1. Use fs.read on .spark-scenarios/rust-log-analyzer/brief.md.\n\
+             2. Use fs.read on .spark-scenarios/rust-log-analyzer/sample.log.\n\
+             3. Use fs.write to create .spark-scenarios/rust-log-analyzer/Cargo.toml.\n\
+             4. Use fs.write to create .spark-scenarios/rust-log-analyzer/src/lib.rs.\n\
+             5. Use fs.write to create .spark-scenarios/rust-log-analyzer/src/main.rs.\n\
+             6. Use cmd.exec from .spark-scenarios/rust-log-analyzer to run cargo test.\n\
+             Finish with the CLI behavior, test result, and any harness behavior that made project scaffolding easier or harder."
+                .to_string(),
+        ]),
         ProfileScenarioKind::NaturalCompaction => natural_compaction_scenario_prompts(target_tokens),
         ProfileScenarioKind::CompactionPressure => {
             let target_chars = target_tokens.saturating_mul(APPROX_CHARS_PER_TOKEN);
@@ -212,6 +296,107 @@ pub(crate) fn natural_compaction_scenario_prompts(target_tokens: usize) -> Resul
     Ok(prompts)
 }
 
+pub(crate) fn codex_cli_benchmark_prompt(scenario: ProfileScenarioKind) -> String {
+    match scenario {
+        ProfileScenarioKind::RepoSurvey => {
+            "Codex CLI benchmark scenario: repo-survey.\n\
+             Inspect this repository like a coding agent. Use bounded file reads and targeted searches rather than broad output.\n\
+             1. List the repository root.\n\
+             2. Read Cargo.toml and README.md.\n\
+             3. Search src for tool and compaction surfaces.\n\
+             4. Finish with a concise harness-risk summary and one next profiling recommendation."
+                .to_string()
+        }
+        ProfileScenarioKind::RepoArchitectureSurvey => {
+            "Codex CLI benchmark scenario: repo-architecture-survey.\n\
+             Understand this Spark harness repo before changing it.\n\
+             Required evidence path:\n\
+             1. Inspect the repository root.\n\
+             2. Read AGENTS.md.\n\
+             3. Read README.md.\n\
+             4. Search src for ProfileScenarioKind.\n\
+             5. Search src for AgentRunner.\n\
+             Finish with a concise architecture map, the scenario/profiler flow, and two likely failure surfaces to profile next."
+                .to_string()
+        }
+        ProfileScenarioKind::BenchmarkDesignSurvey => {
+            "Codex CLI benchmark scenario: benchmark-design-survey.\n\
+             Survey the existing profiling scenarios and propose benchmark coverage gaps grounded in this repo.\n\
+             Do not run benchmarks.\n\
+             Required evidence path:\n\
+             1. Read src/profile_scenarios.rs.\n\
+             2. Read src/profiler/analyze/expectations.rs.\n\
+             3. Search README.md for profile-scenario.\n\
+             4. Search src for expected_tool_calls.\n\
+             Finish with a prioritized benchmark plan containing three concrete new task prompts, expected evidence signals, and which existing scenarios they should be compared against."
+                .to_string()
+        }
+        ProfileScenarioKind::ReactCalculatorScaffold => {
+            "Codex CLI benchmark scenario: react-calculator-scaffold.\n\
+             Build a brand new React + TypeScript calculator app only under .spark-scenarios/react-calculator.\n\
+             Use bun for JavaScript package management. Do not create files outside this ignored fixture folder.\n\
+             The finished app will be checked by bun test and a Playwright browser smoke check, so it must be runnable through Vite in a real browser.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/react-calculator/brief.md.\n\
+             2. Create .spark-scenarios/react-calculator/package.json.\n\
+             3. Create .spark-scenarios/react-calculator/index.html.\n\
+             4. Create .spark-scenarios/react-calculator/src/main.tsx.\n\
+             5. Create .spark-scenarios/react-calculator/src/App.tsx.\n\
+             6. Create .spark-scenarios/react-calculator/src/App.test.tsx.\n\
+             7. Create .spark-scenarios/react-calculator/src/styles.css.\n\
+             8. Run bun test if possible; if tests need a DOM, configure it before using DOM-based test helpers.\n\
+             Finish with the app files created, validation result, and any CLI behavior that made project scaffolding easier or harder."
+                .to_string()
+        }
+        ProfileScenarioKind::RustLogAnalyzerScaffold => {
+            "Codex CLI benchmark scenario: rust-log-analyzer-scaffold.\n\
+             Build a brand new Rust CLI project only under .spark-scenarios/rust-log-analyzer.\n\
+             Do not set CARGO_TARGET_DIR; use Cargo's default target/ directory for this nested project.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/rust-log-analyzer/brief.md.\n\
+             2. Read .spark-scenarios/rust-log-analyzer/sample.log.\n\
+             3. Create .spark-scenarios/rust-log-analyzer/Cargo.toml.\n\
+             4. Create .spark-scenarios/rust-log-analyzer/src/lib.rs.\n\
+             5. Create .spark-scenarios/rust-log-analyzer/src/main.rs.\n\
+             6. Run cargo test for the nested project.\n\
+             Finish with the CLI behavior, test result, and any CLI behavior that made project scaffolding easier or harder."
+                .to_string()
+        }
+        ProfileScenarioKind::ToolRecovery => {
+            "Codex CLI benchmark scenario: tool-recovery.\n\
+             Work only under .spark-scenarios/tool-recovery.\n\
+             Required actions:\n\
+             1. First attempt to read .spark-scenarios/tool-recovery/source/missing-note.md. This path is intentionally missing; do not skip this failing probe.\n\
+             2. Recover by checking .spark-scenarios/tool-recovery/source/note.md.\n\
+             3. Verify it contains: Spark recovery path verified.\n\
+             Finish with what failed, how you recovered, and whether verification passed."
+                .to_string()
+        }
+        other => profile_scenario_prompts(other, 45_000)
+            .ok()
+            .and_then(|prompts| prompts.into_iter().next())
+            .unwrap_or_else(|| format!("Codex CLI benchmark scenario: {}", other.name())),
+    }
+}
+
+pub(crate) fn profile_scenario_validation_command(
+    scenario: ProfileScenarioKind,
+) -> Option<ProfileScenarioValidationCommand> {
+    match scenario {
+        ProfileScenarioKind::ReactCalculatorScaffold => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/react-calculator",
+            program: "bun",
+            args: &["test"],
+        }),
+        ProfileScenarioKind::RustLogAnalyzerScaffold => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/rust-log-analyzer",
+            program: "cargo",
+            args: &["test"],
+        }),
+        _ => None,
+    }
+}
+
 pub(crate) fn profile_scenario_expected_tool_groups(
     scenario: ProfileScenarioKind,
 ) -> Vec<Vec<&'static str>> {
@@ -244,6 +429,16 @@ pub(crate) fn profile_scenario_expected_tool_groups(
             vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
         }
         ProfileScenarioKind::S1ApiSurvey => vec![vec!["fs.list"], vec!["fs.read"]],
+        ProfileScenarioKind::RepoArchitectureSurvey => {
+            vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
+        }
+        ProfileScenarioKind::BenchmarkDesignSurvey => vec![vec!["fs.read"], vec!["fs.search"]],
+        ProfileScenarioKind::ReactCalculatorScaffold => {
+            vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
+        }
+        ProfileScenarioKind::RustLogAnalyzerScaffold => {
+            vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
+        }
     }
 }
 
@@ -347,6 +542,101 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.read",
                 "path": "S1API.cs",
+            }),
+        ],
+        ProfileScenarioKind::RepoArchitectureSurvey => vec![
+            json!({
+                "tool": "fs.list",
+                "path": ".",
+                "recursive": false,
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "AGENTS.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "README.md",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "src",
+            }),
+        ],
+        ProfileScenarioKind::BenchmarkDesignSurvey => vec![
+            json!({
+                "tool": "fs.read",
+                "path": "src/profile_scenarios.rs",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/profiler/analyze/expectations.rs",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "README.md",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "src",
+            }),
+        ],
+        ProfileScenarioKind::ReactCalculatorScaffold => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/react-calculator/brief.md",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/react-calculator/package.json",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/react-calculator/index.html",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/react-calculator/src/main.tsx",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/react-calculator/src/App.tsx",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/react-calculator/src/App.test.tsx",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/react-calculator/src/styles.css",
+            }),
+            json!({
+                "tool": "cmd.exec",
+            }),
+        ],
+        ProfileScenarioKind::RustLogAnalyzerScaffold => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/rust-log-analyzer/brief.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/rust-log-analyzer/sample.log",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/rust-log-analyzer/Cargo.toml",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/rust-log-analyzer/src/lib.rs",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/rust-log-analyzer/src/main.rs",
+            }),
+            json!({
+                "tool": "cmd.exec",
             }),
         ],
     }

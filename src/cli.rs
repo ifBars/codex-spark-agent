@@ -178,6 +178,117 @@ pub(crate) enum Command {
         #[arg(long)]
         max_input_tokens: Option<usize>,
     },
+    /// Run a benchmark suite made from repeatable profiling scenarios.
+    ProfileBenchmark {
+        /// Benchmark suite to run.
+        #[arg(value_enum)]
+        suite: ProfileBenchmarkSuiteKind,
+        /// Workspace root for filesystem and command tools.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Model slug to use.
+        #[arg(long, default_value = DEFAULT_MODEL)]
+        model: String,
+        /// Maximum agent/tool turns per scenario prompt. Omit to let Spark run until it completes.
+        #[arg(long)]
+        max_turns: Option<usize>,
+        /// Target prompt size for long-context scenarios, in approximate tokens.
+        #[arg(long, default_value_t = DEFAULT_SCENARIO_TARGET_TOKENS)]
+        target_tokens: usize,
+        /// Run each scenario in the suite this many times.
+        #[arg(long, default_value_t = 1)]
+        repeat: usize,
+        /// Disable trace files for this benchmark run.
+        #[arg(long)]
+        no_trace: bool,
+        /// Disable printed profile JSON for this benchmark run.
+        #[arg(long)]
+        no_profile: bool,
+        /// Compact older context once request JSON exceeds this many characters.
+        #[arg(long)]
+        compact_after_chars: Option<usize>,
+        /// Compact older context once estimated input exceeds this many tokens.
+        #[arg(long)]
+        compact_after_tokens: Option<usize>,
+        /// Force compaction after this many consecutive tool-only turns. Use 0 to disable.
+        #[arg(long, default_value_t = DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS)]
+        compact_after_tool_only_turns: usize,
+        /// Refuse to send request JSON above this many characters.
+        #[arg(long)]
+        max_input_chars: Option<usize>,
+        /// Refuse to send a request once estimated input exceeds this many tokens.
+        #[arg(long)]
+        max_input_tokens: Option<usize>,
+    },
+    /// Generate benchmark result files and charts from saved profile-benchmark traces.
+    ProfileBenchmarkReport {
+        /// Benchmark suite to report.
+        #[arg(long, value_enum, default_value_t = ProfileBenchmarkSuiteKind::RealWorld)]
+        suite: ProfileBenchmarkSuiteKind,
+        /// Workspace root containing .spark-runs/.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Maximum recent trace directories to scan.
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        /// Include every matching run instead of only the newest run per scenario.
+        #[arg(long)]
+        all_runs: bool,
+        /// Directory where JSON, CSV, and HTML report files are written.
+        #[arg(long, default_value = ".spark-profile/benchmarks")]
+        output_dir: PathBuf,
+    },
+    /// Run a benchmark suite through Codex CLI for comparison with this harness.
+    CodexCliBenchmark {
+        /// Benchmark suite to run.
+        #[arg(value_enum)]
+        suite: ProfileBenchmarkSuiteKind,
+        /// Workspace root for Codex CLI.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Codex CLI executable.
+        #[arg(long, default_value = "codex")]
+        codex_bin: PathBuf,
+        /// Model slug to pass to Codex CLI.
+        #[arg(long, default_value = DEFAULT_MODEL)]
+        model: String,
+        /// Run each scenario in the suite this many times.
+        #[arg(long, default_value_t = 1)]
+        repeat: usize,
+        /// Kill a Codex CLI scenario attempt after this many seconds.
+        #[arg(long, default_value_t = 900)]
+        timeout_seconds: u64,
+        /// Pass --ignore-user-config to Codex CLI for a more controlled run.
+        #[arg(long)]
+        ignore_user_config: bool,
+        /// Run Codex CLI with a generated CODEX_HOME containing only copied auth.
+        #[arg(long)]
+        isolated_codex_home: bool,
+        /// Directory where Codex CLI benchmark outputs are written.
+        #[arg(long, default_value = ".spark-profile/codex-cli")]
+        output_dir: PathBuf,
+    },
+    /// Compare saved harness benchmark traces with a Codex CLI benchmark report.
+    BenchmarkCompare {
+        /// Benchmark suite to compare.
+        #[arg(long, value_enum, default_value_t = ProfileBenchmarkSuiteKind::RealWorld)]
+        suite: ProfileBenchmarkSuiteKind,
+        /// Workspace root containing .spark-runs/.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Maximum recent harness trace directories to scan.
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        /// Include every matching harness run instead of only the newest run per scenario.
+        #[arg(long)]
+        all_runs: bool,
+        /// Codex CLI benchmark JSON report to compare against.
+        #[arg(long)]
+        codex_cli_report: PathBuf,
+        /// Directory where comparison JSON, CSV, and HTML files are written.
+        #[arg(long, default_value = ".spark-profile/benchmarks")]
+        output_dir: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -197,7 +308,7 @@ impl From<RunMode> for tools::AgentMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum ProfileScenarioKind {
     /// Small repo survey that usually exercises read/list/search without edits.
     RepoSurvey,
@@ -218,6 +329,26 @@ pub(crate) enum ProfileScenarioKind {
     /// Open-ended S1API repo explanation that stresses broad API surface surveying.
     #[value(name = "s1api-survey", alias = "s1-api-survey")]
     S1ApiSurvey,
+    /// Open-ended architecture survey of this Spark harness repo.
+    RepoArchitectureSurvey,
+    /// Benchmark-design survey that asks Spark to inspect and extend the scenario taxonomy.
+    BenchmarkDesignSurvey,
+    /// Repo-local React + TypeScript calculator app scaffold in an ignored fixture folder.
+    ReactCalculatorScaffold,
+    /// Repo-local Rust log analyzer CLI scaffold in an ignored fixture folder.
+    RustLogAnalyzerScaffold,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum ProfileBenchmarkSuiteKind {
+    /// Existing smoke and native-tool scenarios.
+    Core,
+    /// Survey/exploration scenarios that stress repo understanding.
+    Survey,
+    /// New-project scaffolding scenarios in ignored fixture folders.
+    Scaffolding,
+    /// Mixed real-world suite for broad Spark profiling.
+    RealWorld,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -250,6 +381,52 @@ impl ProfileScenarioKind {
             Self::SkillUse => "skill-use",
             Self::SteamNetworkLibSurvey => "steamnetworklib-survey",
             Self::S1ApiSurvey => "s1api-survey",
+            Self::RepoArchitectureSurvey => "repo-architecture-survey",
+            Self::BenchmarkDesignSurvey => "benchmark-design-survey",
+            Self::ReactCalculatorScaffold => "react-calculator-scaffold",
+            Self::RustLogAnalyzerScaffold => "rust-log-analyzer-scaffold",
+        }
+    }
+}
+
+impl ProfileBenchmarkSuiteKind {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Core => "core",
+            Self::Survey => "survey",
+            Self::Scaffolding => "scaffolding",
+            Self::RealWorld => "real-world",
+        }
+    }
+
+    pub(crate) fn scenarios(self) -> &'static [ProfileScenarioKind] {
+        match self {
+            Self::Core => &[
+                ProfileScenarioKind::RepoSurvey,
+                ProfileScenarioKind::FileEdit,
+                ProfileScenarioKind::FileOps,
+                ProfileScenarioKind::ToolRecovery,
+                ProfileScenarioKind::SkillUse,
+            ],
+            Self::Survey => &[
+                ProfileScenarioKind::RepoSurvey,
+                ProfileScenarioKind::RepoArchitectureSurvey,
+                ProfileScenarioKind::BenchmarkDesignSurvey,
+                ProfileScenarioKind::SteamNetworkLibSurvey,
+                ProfileScenarioKind::S1ApiSurvey,
+            ],
+            Self::Scaffolding => &[
+                ProfileScenarioKind::ReactCalculatorScaffold,
+                ProfileScenarioKind::RustLogAnalyzerScaffold,
+            ],
+            Self::RealWorld => &[
+                ProfileScenarioKind::RepoSurvey,
+                ProfileScenarioKind::RepoArchitectureSurvey,
+                ProfileScenarioKind::BenchmarkDesignSurvey,
+                ProfileScenarioKind::ReactCalculatorScaffold,
+                ProfileScenarioKind::RustLogAnalyzerScaffold,
+                ProfileScenarioKind::ToolRecovery,
+            ],
         }
     }
 }
