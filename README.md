@@ -1,27 +1,35 @@
 # Codex Spark Agent
 
-`codex-spark-agent` is an experimental Rust CLI harness for testing `gpt-5.3-codex-spark` as a small coding agent.
+`codex-spark-agent` is an experimental Rust CLI harness built specifically for `gpt-5.3-codex-spark`.
+
+I started this because Spark is interesting, but inside Codex it often struggles with the basic mechanics of doing real work: failed tool calls, bad patches, tool loops, oversized context, and edits that do not quite land. This repo is my attempt to make those problems measurable and give Spark a smaller, more direct harness where tool use is cheap, traceable, and easier to recover from.
+
+This is not the magic key that turns Spark into a frontier coding model. It still has the same model limits. The goal is more practical: make Spark more useful on real local repos by giving it efficient native tools, tighter context handling, and enough profiling to see where it is failing.
 
 It is intentionally simpler than the official Codex CLI: one binary, ChatGPT/Codex OAuth, streaming Responses calls, a small native tool set, SQLite-backed sessions, skill loading, trace capture, and profiling signals for model behavior.
 
 > This project is unofficial and experimental. It talks to the ChatGPT Codex backend shape observed by Codex-like clients. That surface can change.
 
-## Why
+## Why this exists
 
-`gpt-5.3-codex-spark` behaves best when the harness works with its native Responses/function-call behavior instead of forcing a heavy synthetic action protocol.
+Spark can be fast and surprisingly capable in the right lane, but the harness matters a lot. A model that already struggles with exact tool arguments and patch application gets worse when every action is wrapped in a heavy protocol or when noisy tool output keeps getting shoved back into context.
 
-This repo is built to profile and iterate on that harness shape:
+This project takes the opposite approach. Keep the tools small. Keep the loop observable. Let Spark call native file and command tools directly. Compact history before it turns into a failure mode. Save traces so bad runs can be inspected instead of hand-waved.
+
+The current harness is built around:
 
 - direct streamed calls to the Codex Responses backend,
 - native function tools for file and command actions,
 - Codex-like remote compaction support,
 - trace files for debugging model/tool loops,
-- small profiling summaries for repeated calls, compaction, and cache hits,
+- profiling summaries for repeated calls, compaction, cache hits, and failed observations,
 - repo-local skills that compile into compact Spark-facing context automatically.
 
 ## Status
 
 This is early research software. It is useful for local profiling and controlled coding tasks, but it is not a hardened sandboxed agent runtime.
+
+Use it if you want to experiment with Spark as a real coding agent, especially if you care about the failure modes: which tools it calls, how often it repeats itself, whether it recovers after a bad observation, and what happens when context pressure builds up.
 
 Current defaults assume you are running it on your own machine and in a repository you trust.
 
