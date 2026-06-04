@@ -1,8 +1,8 @@
 use crate::cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind};
 use crate::profile_scenarios::{
-    codex_cli_benchmark_prompt, prepare_profile_scenario, profile_scenario_expected_skills,
-    profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
-    profile_scenario_prompts,
+    benchmark_profile_prompts, codex_cli_benchmark_prompt, prepare_profile_scenario,
+    profile_scenario_expected_skills, profile_scenario_expected_tool_calls,
+    profile_scenario_expected_tool_groups, profile_scenario_prompts,
 };
 use crate::{APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS};
 
@@ -184,36 +184,23 @@ fn tool_recovery_scenario_prepares_scratch_fixture() {
 fn tool_recovery_scenario_declares_recovery_tool_groups() {
     let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::ToolRecovery);
 
-    assert_eq!(
-        groups,
-        vec![vec!["fs.read"], vec!["fs.stat"], vec!["fs.write"]]
-    );
+    assert_eq!(groups, vec![vec!["fs.read"]]);
 }
 
 #[test]
 fn tool_recovery_scenario_declares_expected_exact_tool_calls() {
     let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::ToolRecovery);
 
-    assert_eq!(calls.len(), 4);
+    assert_eq!(calls.len(), 2);
     assert_eq!(calls[0]["tool"], "fs.read");
     assert_eq!(
         calls[0]["path"],
         ".spark-scenarios/tool-recovery/source/missing-note.md"
     );
-    assert_eq!(calls[1]["tool"], "fs.stat");
+    assert_eq!(calls[1]["tool"], "fs.read");
     assert_eq!(
         calls[1]["path"],
         ".spark-scenarios/tool-recovery/source/note.md"
-    );
-    assert_eq!(calls[2]["tool"], "fs.read");
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/tool-recovery/source/note.md"
-    );
-    assert_eq!(calls[3]["tool"], "fs.write");
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/tool-recovery/recovery-summary.txt"
     );
 }
 
@@ -413,12 +400,25 @@ fn react_calculator_scaffold_declares_project_file_expectations() {
 fn codex_cli_prompt_uses_cli_neutral_actions_for_scaffolding() {
     let prompt = codex_cli_benchmark_prompt(ProfileScenarioKind::ReactCalculatorScaffold);
 
-    assert!(prompt.contains("Codex CLI benchmark scenario: react-calculator-scaffold"));
+    assert!(prompt.contains("Benchmark scenario: react-calculator-scaffold"));
     assert!(prompt.contains("Use bun for JavaScript package management"));
     assert!(prompt.contains("Create .spark-scenarios/react-calculator/index.html"));
     assert!(prompt.contains("Create .spark-scenarios/react-calculator/src/App.tsx"));
     assert!(!prompt.contains("fs.write"));
     assert!(!prompt.contains("cmd.exec"));
+}
+
+#[test]
+fn benchmark_profile_prompt_matches_codex_cli_prompt_for_fairness() {
+    let prompts = benchmark_profile_prompts(ProfileScenarioKind::ReactCalculatorScaffold, 45_000)
+        .expect("benchmark prompt");
+
+    assert_eq!(
+        prompts,
+        vec![codex_cli_benchmark_prompt(
+            ProfileScenarioKind::ReactCalculatorScaffold
+        )]
+    );
 }
 
 #[test]

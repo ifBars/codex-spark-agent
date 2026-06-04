@@ -128,7 +128,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
         },
         ToolDescriptor {
             name: "cmd.exec".to_string(),
-            description: "Execute a shell command in the workspace. Use PowerShell-compatible commands on Windows.".to_string(),
+            description: "Execute a shell command in the workspace. On Windows this runs through powershell -NoProfile -Command; do not use && because Windows PowerShell 5.1 rejects it. Run dependent commands as separate cmd.exec calls or use PowerShell-compatible control flow.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

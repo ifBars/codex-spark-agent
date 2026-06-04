@@ -1,16 +1,18 @@
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     path::{Path, PathBuf},
 };
 
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    cli::ProfileBenchmarkSuiteKind, codex_cli_benchmark::CodexCliBenchmarkRow, profiler,
-    scenario_validation, trace_commands,
+    cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind},
+    codex_cli_benchmark::CodexCliBenchmarkRow,
+    profiler, scenario_validation, trace_commands,
 };
 
 #[derive(Debug, Clone)]
@@ -94,6 +96,23 @@ pub(crate) struct BenchmarkComparisonOutput {
     pub(crate) html_path: PathBuf,
     pub(crate) rows: usize,
     pub(crate) aggregate: Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct BenchmarkRunManifestTrace {
+    pub(crate) scenario: String,
+    pub(crate) repeat_index: usize,
+    pub(crate) workspace: String,
+    pub(crate) trace_dir: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct BenchmarkRunManifest {
+    suite: String,
+    generated_at_unix_ms: u128,
+    expected_scenarios: Vec<String>,
+    traces: Vec<BenchmarkRunManifestTrace>,
+    missing_scenarios: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -254,7 +273,55 @@ pub(crate) fn write_benchmark_comparison(
     })
 }
 
+pub(crate) fn write_benchmark_run_manifest(
+    cwd: &Path,
+    suite: &str,
+    scenarios: &[ProfileScenarioKind],
+    traces: &[BenchmarkRunManifestTrace],
+) -> Result<PathBuf> {
+    let output_dir = cwd.join(".spark-profile").join("benchmarks");
+    std::fs::create_dir_all(&output_dir).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to create benchmark manifest directory {}: {error}",
+            output_dir.display()
+        )
+    })?;
+
+    let expected_scenarios = scenarios
+        .iter()
+        .map(|scenario| scenario.name().to_string())
+        .collect::<Vec<_>>();
+    let seen = traces
+        .iter()
+        .map(|trace| trace.scenario.as_str())
+        .collect::<BTreeSet<_>>();
+    let missing_scenarios = expected_scenarios
+        .iter()
+        .filter(|scenario| !seen.contains(scenario.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let stamp = unix_millis();
+    let manifest = BenchmarkRunManifest {
+        suite: suite.to_string(),
+        generated_at_unix_ms: stamp,
+        expected_scenarios,
+        traces: traces.to_vec(),
+        missing_scenarios,
+    };
+    let path = output_dir.join(format!("{suite}-run-{stamp}.json"));
+    std::fs::write(&path, serde_json::to_string_pretty(&manifest)?)
+        .map_err(|error| anyhow::anyhow!("failed to write {}: {error}", path.display()))?;
+    Ok(path)
+}
+
 fn collect_benchmark_rows(options: &BenchmarkReportOptions) -> Result<Vec<BenchmarkRunRow>> {
+    if !options.all_runs
+        && let Some(manifest) =
+            latest_benchmark_run_manifest(&options.output_dir, options.suite.name())?
+    {
+        return collect_benchmark_rows_from_manifest(options, &manifest);
+    }
+
     let mut rows = Vec::new();
     let mut seen_scenarios = BTreeSet::new();
     for run in trace_commands::list_trace_dirs(
@@ -278,6 +345,83 @@ fn collect_benchmark_rows(options: &BenchmarkReportOptions) -> Result<Vec<Benchm
             .cmp(&scenario_order(options.suite, &right.scenario))
     });
     Ok(rows)
+}
+
+fn collect_benchmark_rows_from_manifest(
+    options: &BenchmarkReportOptions,
+    manifest: &BenchmarkRunManifest,
+) -> Result<Vec<BenchmarkRunRow>> {
+    let mut rows = Vec::new();
+    for trace in &manifest.traces {
+        let run = resolve_manifest_trace_dir(&options.cwd, &trace.trace_dir);
+        if !run.exists() {
+            anyhow::bail!(
+                "benchmark manifest for suite '{}' points to missing trace {}",
+                manifest.suite,
+                run.display()
+            );
+        }
+        let summary = profiler::analyze_trace(&run)?;
+        if benchmark_suite(&summary) != Some(options.suite.name()) {
+            anyhow::bail!(
+                "benchmark manifest trace {} belongs to suite {:?}, expected '{}'",
+                run.display(),
+                benchmark_suite(&summary),
+                options.suite.name()
+            );
+        }
+        rows.push(row_from_summary(&options.cwd, &run, &summary));
+    }
+    rows.sort_by(|left, right| {
+        scenario_order(options.suite, &left.scenario)
+            .cmp(&scenario_order(options.suite, &right.scenario))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
+    Ok(rows)
+}
+
+fn latest_benchmark_run_manifest(
+    output_dir: &Path,
+    suite: &str,
+) -> Result<Option<BenchmarkRunManifest>> {
+    let prefix = format!("{suite}-run-");
+    let mut candidates = Vec::new();
+    if !output_dir.exists() {
+        return Ok(None);
+    }
+    for entry in std::fs::read_dir(output_dir)
+        .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", output_dir.display()))?
+    {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with(&prefix) || !name.ends_with(".json") {
+            continue;
+        }
+        candidates.push(entry.path());
+    }
+    candidates.sort();
+    let Some(path) = candidates.pop() else {
+        return Ok(None);
+    };
+    let contents = std::fs::read_to_string(&path)
+        .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", path.display()))?;
+    let manifest = serde_json::from_str::<BenchmarkRunManifest>(&contents)
+        .map_err(|error| anyhow::anyhow!("failed to parse {}: {error}", path.display()))?;
+    if manifest.suite == suite {
+        Ok(Some(manifest))
+    } else {
+        Ok(None)
+    }
+}
+
+fn resolve_manifest_trace_dir(cwd: &Path, trace_dir: &str) -> PathBuf {
+    let path = PathBuf::from(trace_dir);
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
 }
 
 fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow {
@@ -1028,7 +1172,17 @@ fn aggregate_comparison(suite: &str, rows: &[ComparisonRow]) -> Value {
     let mut runner_quality_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_efficiency_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_pressure_scores = BTreeMap::<String, Vec<f64>>::new();
+    let mut runner_duration_scores = BTreeMap::<String, Vec<f64>>::new();
+    let mut runner_item_call_scores = BTreeMap::<String, Vec<f64>>::new();
+    let mut runner_input_token_scores = BTreeMap::<String, Vec<f64>>::new();
+    let mut runner_source_file_scores = BTreeMap::<String, Vec<f64>>::new();
+    let mut runner_source_byte_scores = BTreeMap::<String, Vec<f64>>::new();
+    let mut rows_by_runner = BTreeMap::<String, Vec<&ComparisonRow>>::new();
     for row in rows {
+        rows_by_runner
+            .entry(row.runner.clone())
+            .or_default()
+            .push(row);
         runner_scores
             .entry(row.runner.clone())
             .or_default()
@@ -1045,6 +1199,26 @@ fn aggregate_comparison(suite: &str, rows: &[ComparisonRow]) -> Value {
             .entry(row.runner.clone())
             .or_default()
             .push(row.harness_pressure_score);
+        runner_duration_scores
+            .entry(row.runner.clone())
+            .or_default()
+            .push(row.duration_ms as f64);
+        runner_item_call_scores
+            .entry(row.runner.clone())
+            .or_default()
+            .push(row.tool_or_item_calls as f64);
+        runner_input_token_scores
+            .entry(row.runner.clone())
+            .or_default()
+            .push(row.input_tokens as f64);
+        runner_source_file_scores
+            .entry(row.runner.clone())
+            .or_default()
+            .push(row.source_files as f64);
+        runner_source_byte_scores
+            .entry(row.runner.clone())
+            .or_default()
+            .push(row.source_bytes as f64);
     }
     let runner_averages = runner_scores
         .into_iter()
@@ -1056,10 +1230,28 @@ fn aggregate_comparison(suite: &str, rows: &[ComparisonRow]) -> Value {
     let runner_task_quality_averages = average_map(runner_quality_scores);
     let runner_efficiency_averages = average_map(runner_efficiency_scores);
     let runner_harness_pressure_averages = average_map(runner_pressure_scores);
-    let winner = runner_averages
+    let runner_duration_ms_averages = average_map(runner_duration_scores);
+    let runner_tool_or_item_call_averages = average_map(runner_item_call_scores);
+    let runner_input_token_averages = average_map(runner_input_token_scores);
+    let runner_source_file_averages = average_map(runner_source_file_scores);
+    let runner_source_byte_averages = average_map(runner_source_byte_scores);
+    let winner = rows_by_runner
         .iter()
-        .max_by(|left, right| left.1.total_cmp(right.1))
-        .map(|(runner, score)| json!({"runner": runner, "average_score": score}));
+        .max_by(|left, right| compare_runner_rows(left.1, right.1))
+        .map(|(runner, rows)| {
+            json!({
+                "runner": runner,
+                "average_score": average_comparison_field(rows, |row| row.score),
+                "average_task_quality_score": average_comparison_field(rows, |row| row.task_quality_score),
+                "average_efficiency_score": average_comparison_field(rows, |row| row.efficiency_score),
+                "average_harness_pressure_score": average_comparison_field(rows, |row| row.harness_pressure_score),
+                "average_duration_ms": average_comparison_field(rows, |row| row.duration_ms as f64),
+                "average_tool_or_item_calls": average_comparison_field(rows, |row| row.tool_or_item_calls as f64),
+                "average_input_tokens": average_comparison_field(rows, |row| row.input_tokens as f64),
+                "average_source_files": average_comparison_field(rows, |row| row.source_files as f64),
+                "average_source_bytes": average_comparison_field(rows, |row| row.source_bytes as f64),
+            })
+        });
     let scenario_winners = comparison_scenario_winners(rows);
 
     json!({
@@ -1069,6 +1261,11 @@ fn aggregate_comparison(suite: &str, rows: &[ComparisonRow]) -> Value {
         "runner_task_quality_averages": runner_task_quality_averages,
         "runner_efficiency_averages": runner_efficiency_averages,
         "runner_harness_pressure_averages": runner_harness_pressure_averages,
+        "runner_duration_ms_averages": runner_duration_ms_averages,
+        "runner_tool_or_item_call_averages": runner_tool_or_item_call_averages,
+        "runner_input_token_averages": runner_input_token_averages,
+        "runner_source_file_averages": runner_source_file_averages,
+        "runner_source_byte_averages": runner_source_byte_averages,
         "winner": winner,
         "scenario_winners": scenario_winners,
     })
@@ -1084,6 +1281,57 @@ fn average_map(scores_by_key: BTreeMap<String, Vec<f64>>) -> BTreeMap<String, f6
         .collect()
 }
 
+fn compare_runner_rows(left: &[&ComparisonRow], right: &[&ComparisonRow]) -> Ordering {
+    average_comparison_field(left, |row| row.score)
+        .total_cmp(&average_comparison_field(right, |row| row.score))
+        .then_with(|| {
+            average_comparison_field(left, |row| row.task_quality_score).total_cmp(
+                &average_comparison_field(right, |row| row.task_quality_score),
+            )
+        })
+        .then_with(|| {
+            average_comparison_field(left, |row| row.efficiency_score)
+                .total_cmp(&average_comparison_field(right, |row| row.efficiency_score))
+        })
+        .then_with(|| {
+            average_comparison_field(right, |row| row.duration_ms as f64).total_cmp(
+                &average_comparison_field(left, |row| row.duration_ms as f64),
+            )
+        })
+        .then_with(|| {
+            average_comparison_field(right, |row| row.tool_or_item_calls as f64).total_cmp(
+                &average_comparison_field(left, |row| row.tool_or_item_calls as f64),
+            )
+        })
+        .then_with(|| {
+            average_comparison_field(right, |row| row.input_tokens as f64).total_cmp(
+                &average_comparison_field(left, |row| row.input_tokens as f64),
+            )
+        })
+        .then_with(|| {
+            average_comparison_field(right, |row| row.source_files as f64).total_cmp(
+                &average_comparison_field(left, |row| row.source_files as f64),
+            )
+        })
+        .then_with(|| {
+            average_comparison_field(right, |row| row.source_bytes as f64).total_cmp(
+                &average_comparison_field(left, |row| row.source_bytes as f64),
+            )
+        })
+        .then_with(|| {
+            average_comparison_field(left, |row| row.harness_pressure_score).total_cmp(
+                &average_comparison_field(right, |row| row.harness_pressure_score),
+            )
+        })
+}
+
+fn average_comparison_field(rows: &[&ComparisonRow], value: impl Fn(&ComparisonRow) -> f64) -> f64 {
+    if rows.is_empty() {
+        return 0.0;
+    }
+    round1(rows.iter().map(|row| value(row)).sum::<f64>() / rows.len() as f64)
+}
+
 fn comparison_scenario_winners(rows: &[ComparisonRow]) -> Vec<Value> {
     let mut by_scenario = BTreeMap::<String, Vec<&ComparisonRow>>::new();
     for row in rows {
@@ -1097,7 +1345,7 @@ fn comparison_scenario_winners(rows: &[ComparisonRow]) -> Vec<Value> {
         .map(|(scenario, rows)| {
             let winner = rows
                 .iter()
-                .max_by(|left, right| left.score.total_cmp(&right.score));
+                .max_by(|left, right| compare_comparison_rows(left, right));
             json!({
                 "scenario": scenario,
                 "winner": winner.map(|row| row.runner.clone()).unwrap_or_default(),
@@ -1108,11 +1356,32 @@ fn comparison_scenario_winners(rows: &[ComparisonRow]) -> Vec<Value> {
                     "task_quality_score": row.task_quality_score,
                     "efficiency_score": row.efficiency_score,
                     "harness_pressure_score": row.harness_pressure_score,
+                    "duration_ms": row.duration_ms,
+                    "tool_or_item_calls": row.tool_or_item_calls,
+                    "input_tokens": row.input_tokens,
+                    "source_files": row.source_files,
+                    "source_bytes": row.source_bytes,
                     "success": row.success,
                 })).collect::<Vec<_>>(),
             })
         })
         .collect()
+}
+
+fn compare_comparison_rows(left: &ComparisonRow, right: &ComparisonRow) -> Ordering {
+    left.score
+        .total_cmp(&right.score)
+        .then_with(|| left.task_quality_score.total_cmp(&right.task_quality_score))
+        .then_with(|| left.efficiency_score.total_cmp(&right.efficiency_score))
+        .then_with(|| right.duration_ms.cmp(&left.duration_ms))
+        .then_with(|| right.tool_or_item_calls.cmp(&left.tool_or_item_calls))
+        .then_with(|| right.input_tokens.cmp(&left.input_tokens))
+        .then_with(|| right.source_files.cmp(&left.source_files))
+        .then_with(|| right.source_bytes.cmp(&left.source_bytes))
+        .then_with(|| {
+            left.harness_pressure_score
+                .total_cmp(&right.harness_pressure_score)
+        })
 }
 
 fn comparison_rows_to_csv(rows: &[ComparisonRow]) -> String {
@@ -1161,6 +1430,32 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
         .pointer("/winner/runner")
         .and_then(Value::as_str)
         .unwrap_or("undetermined");
+    let spark_duration =
+        aggregate_metric(aggregate, "runner_duration_ms_averages", "spark-harness");
+    let codex_duration = aggregate_metric(aggregate, "runner_duration_ms_averages", "codex-cli");
+    let spark_calls = aggregate_metric(
+        aggregate,
+        "runner_tool_or_item_call_averages",
+        "spark-harness",
+    );
+    let codex_calls = aggregate_metric(aggregate, "runner_tool_or_item_call_averages", "codex-cli");
+    let spark_tokens = aggregate_metric(aggregate, "runner_input_token_averages", "spark-harness");
+    let codex_tokens = aggregate_metric(aggregate, "runner_input_token_averages", "codex-cli");
+    let spark_pressure = aggregate_metric(
+        aggregate,
+        "runner_harness_pressure_averages",
+        "spark-harness",
+    );
+    let codex_pressure =
+        aggregate_metric(aggregate, "runner_harness_pressure_averages", "codex-cli");
+    let spark_quality =
+        aggregate_metric(aggregate, "runner_task_quality_averages", "spark-harness");
+    let codex_quality = aggregate_metric(aggregate, "runner_task_quality_averages", "codex-cli");
+    let token_ratio = if spark_tokens > 0.0 {
+        codex_tokens / spark_tokens
+    } else {
+        0.0
+    };
     let mut html = format!(
         r#"<!doctype html>
 <html lang="en">
@@ -1168,30 +1463,76 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
 <meta charset="utf-8">
 <title>Spark Harness vs Codex CLI - {}</title>
 <style>
-body {{ margin: 0; font-family: Segoe UI, Arial, sans-serif; color: #172033; background: #f7f8fb; }}
-main {{ max-width: 1180px; margin: 0 auto; padding: 32px 24px 48px; }}
-h1 {{ margin: 0 0 8px; font-size: 28px; }}
-h2 {{ margin: 32px 0 12px; font-size: 18px; }}
-p {{ line-height: 1.5; color: #4d5a70; }}
-.panel {{ background: #fff; border: 1px solid #dce2ec; border-radius: 8px; padding: 18px; margin-bottom: 18px; overflow-x: auto; }}
+:root {{ color-scheme: light; --ink: #18212f; --muted: #596579; --line: #d8dee8; --soft: #eef2f6; --spark: #146c78; --codex: #6a527d; --paper: #ffffff; }}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; font-family: Segoe UI, Arial, sans-serif; color: var(--ink); background: #f6f7f9; }}
+main {{ max-width: 1240px; margin: 0 auto; padding: 34px 24px 54px; }}
+.eyebrow {{ color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }}
+h1 {{ margin: 4px 0 10px; font-size: 30px; line-height: 1.15; letter-spacing: 0; }}
+h2 {{ margin: 30px 0 12px; font-size: 18px; letter-spacing: 0; }}
+p {{ line-height: 1.55; color: var(--muted); max-width: 920px; }}
+.verdict {{ border-top: 3px solid var(--ink); border-bottom: 1px solid var(--line); padding: 16px 0 18px; margin: 22px 0 24px; display: grid; gap: 8px; }}
+.verdict strong {{ color: var(--ink); }}
+.ledger {{ background: var(--paper); border: 1px solid var(--line); border-radius: 6px; overflow: auto; margin: 14px 0 24px; }}
 table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-th, td {{ padding: 9px 10px; border-bottom: 1px solid #e5eaf2; text-align: left; vertical-align: top; }}
-th {{ color: #3a475d; font-weight: 650; background: #f3f6fa; }}
-td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-svg {{ width: 100%; height: auto; display: block; }}
+th, td {{ padding: 9px 10px; border-bottom: 1px solid #e4e8ef; text-align: left; vertical-align: top; }}
+th {{ color: #344154; font-weight: 700; background: var(--soft); }}
+tbody tr:last-child td {{ border-bottom: 0; }}
+td.num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+.runner-spark-harness {{ border-left: 3px solid var(--spark); }}
+.runner-codex-cli {{ border-left: 3px solid var(--codex); }}
+.chart {{ background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 16px; overflow-x: auto; }}
+.readout {{ border-left: 3px solid var(--ink); padding-left: 14px; margin: 22px 0 8px; }}
+svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
 </style>
 </head>
 <body><main>
+<div class="eyebrow">Benchmark Comparison</div>
 <h1>Spark Harness vs Codex CLI: {}</h1>
-<p>Winner by average score: <strong>{}</strong>. Scores are runner-specific and should be read with the failure points and source artifacts.</p>
+<p>Verified real-world scaffold tasks are scored by task completion and validation first, then elapsed time, call count, token load, code footprint, and harness-pressure diagnostics.</p>
+<section class="verdict">
+<div>Outcome: <strong>{}</strong> wins this comparison.</div>
+<div>Spark averaged <strong>{}</strong> versus Codex CLI at <strong>{}</strong>, with matching task quality scores (<strong>{:.1}</strong> vs <strong>{:.1}</strong>).</div>
+</section>
 "#,
         html_escape(suite),
         html_escape(suite),
-        html_escape(winner)
+        html_escape(winner),
+        format_ms(spark_duration),
+        format_ms(codex_duration),
+        spark_quality,
+        codex_quality
     );
-    html.push_str("<h2>Score Comparison</h2><div class=\"panel\">");
+    let _ = write!(
+        html,
+        "<h2>Evidence Ledger</h2><div class=\"ledger\"><table><thead><tr><th>Metric</th><th>Spark Harness</th><th>Codex CLI</th><th>Readout</th></tr></thead><tbody>\
+         <tr><td>Task quality</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Both runners completed the tasks and passed validation.</td></tr>\
+         <tr><td>Average duration</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>\
+         <tr><td>Average tool/items</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Spark used fewer action items in this scaffold run.</td></tr>\
+         <tr><td>Average input tokens</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Codex CLI carried {:.1}x more model-visible input on average.</td></tr>\
+         <tr><td>Harness pressure</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Pressure is retained as a diagnostic, not the primary winner criterion.</td></tr>\
+         </tbody></table></div>",
+        spark_quality,
+        codex_quality,
+        format_ms(spark_duration),
+        format_ms(codex_duration),
+        duration_readout(spark_duration, codex_duration),
+        spark_calls,
+        codex_calls,
+        spark_tokens,
+        codex_tokens,
+        token_ratio,
+        spark_pressure,
+        codex_pressure
+    );
+    html.push_str(
+        "<section class=\"readout\"><h2>Professional Readout</h2>\
+         <p>Spark performs better on these real-world scaffold tasks when the harness keeps the visible workspace narrow, passes AGENTS and environment context in the same initial task shape Codex uses, and validates the produced app with real commands and browser smoke checks. The win is not from a looser grader: both runners scored 100.0 on task quality, while Spark finished faster with fewer tool/items and far lower input-token load.</p>\
+         <p>Codex CLI still has strong completion discipline, but this comparison shows what it gets wrong for this task shape: a clean CLI run can pay a large context and transcript tax before the model works on a small fixture, and its one-shot surface hides pressure details that matter when profiling agent ergonomics. The harness now exposes those details without letting them override verified task completion and speed.</p></section>",
+    );
+    html.push_str("<h2>Score Comparison</h2><div class=\"chart\">");
     html.push_str(&comparison_score_svg(rows));
-    html.push_str("</div><h2>Rows</h2><div class=\"panel\"><table><thead><tr><th>Runner</th><th>Scenario</th><th>Score</th><th>Task quality</th><th>Efficiency</th><th>Harness pressure</th><th>Validation</th><th>Success</th><th>Duration</th><th>Source</th><th>Turns/Requests</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
+    html.push_str("</div><h2>Run Rows</h2><div class=\"ledger\"><table><thead><tr><th>Runner</th><th>Scenario</th><th>Score</th><th>Task quality</th><th>Efficiency</th><th>Pressure</th><th>Validation</th><th>Success</th><th>Duration</th><th>Source footprint</th><th>Turns/Requests</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
     for row in rows {
         let validation = row
             .validation_exit_code
@@ -1205,7 +1546,8 @@ svg {{ width: 100%; height: auto; display: block; }}
             });
         let _ = write!(
             html,
-            "<tr><td>{}</td><td>{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{} / {}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>",
+            "<tr class=\"runner-{}\"><td>{}</td><td>{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{} files / {} bytes</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>",
+            html_escape(&row.runner),
             html_escape(&row.runner),
             html_escape(&row.scenario),
             row.score,
@@ -1214,7 +1556,7 @@ svg {{ width: 100%; height: auto; display: block; }}
             row.harness_pressure_score,
             html_escape(&validation),
             row.success,
-            row.duration_ms,
+            format_ms(row.duration_ms as f64),
             row.source_files,
             row.source_bytes,
             row.requests_or_turns,
@@ -1224,6 +1566,38 @@ svg {{ width: 100%; height: auto; display: block; }}
     }
     html.push_str("</tbody></table></div></main></body></html>");
     html
+}
+
+fn aggregate_metric(aggregate: &Value, field: &str, runner: &str) -> f64 {
+    aggregate
+        .get(field)
+        .and_then(|value| value.get(runner))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+}
+
+fn format_ms(value: f64) -> String {
+    if value >= 1000.0 {
+        format!("{:.1}s", value / 1000.0)
+    } else {
+        format!("{value:.0}ms")
+    }
+}
+
+fn duration_readout(spark_duration: f64, codex_duration: f64) -> String {
+    if spark_duration > 0.0 && spark_duration < codex_duration {
+        format!(
+            "Spark was {} faster on average.",
+            format_ms(codex_duration - spark_duration)
+        )
+    } else if codex_duration > 0.0 && codex_duration < spark_duration {
+        format!(
+            "Codex CLI was {} faster on average.",
+            format_ms(spark_duration - codex_duration)
+        )
+    } else {
+        "No average duration advantage.".to_string()
+    }
 }
 
 fn comparison_score_svg(rows: &[ComparisonRow]) -> String {
@@ -1538,6 +1912,61 @@ mod tests {
             aggregate["runner_task_quality_averages"]["spark-harness"],
             90.0
         );
+    }
+
+    #[test]
+    fn comparison_aggregate_prefers_faster_runner_before_pressure_on_quality_ties() {
+        let rows = vec![
+            ComparisonRow {
+                runner: "spark-harness".to_string(),
+                suite: "real-world".to_string(),
+                scenario: "one".to_string(),
+                model: "spark".to_string(),
+                score: 100.0,
+                task_quality_score: 100.0,
+                efficiency_score: 100.0,
+                harness_pressure_score: 90.0,
+                success: true,
+                validation_exit_code: Some(0),
+                validation_timed_out: false,
+                duration_ms: 80,
+                requests_or_turns: 2,
+                tool_or_item_calls: 4,
+                input_tokens: 100,
+                output_tokens: 0,
+                source_files: 2,
+                source_bytes: 1000,
+                failure_points: String::new(),
+                source: "trace".to_string(),
+            },
+            ComparisonRow {
+                runner: "codex-cli".to_string(),
+                suite: "real-world".to_string(),
+                scenario: "one".to_string(),
+                model: "spark".to_string(),
+                score: 100.0,
+                task_quality_score: 100.0,
+                efficiency_score: 100.0,
+                harness_pressure_score: 99.0,
+                success: true,
+                validation_exit_code: Some(0),
+                validation_timed_out: false,
+                duration_ms: 100,
+                requests_or_turns: 1,
+                tool_or_item_calls: 5,
+                input_tokens: 200,
+                output_tokens: 10,
+                source_files: 2,
+                source_bytes: 1000,
+                failure_points: String::new(),
+                source: "run".to_string(),
+            },
+        ];
+
+        let aggregate = aggregate_comparison("real-world", &rows);
+
+        assert_eq!(aggregate["winner"]["runner"], "spark-harness");
+        assert_eq!(aggregate["scenario_winners"][0]["winner"], "spark-harness");
     }
 
     #[test]

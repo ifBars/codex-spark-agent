@@ -533,6 +533,7 @@ fn spark_system_prompt() -> &'static str {
 
 Use the available native tools when they help. Answer directly when they do not.
 When a user names a project, library, or repo ambiguously, first take a small look at the current workspace before assuming they mean a public product or SDK.
+When a user gives explicit paths, files, or a narrow workspace scope, start there instead of listing the repository root.
 Batch independent tool calls in the same turn when possible, especially reads, searches, and writes for a known set of files.
 After required evidence is gathered and validation passes, stop calling tools and provide the final answer.
 When validation fails, inspect the first concrete failure, make a targeted code or config change, and do not rerun the same failing command again unless something relevant changed.
@@ -557,6 +558,8 @@ mod tests {
 
         assert!(prompt.contains("first take a small look at the current workspace"));
         assert!(prompt.contains("before assuming they mean a public product or SDK"));
+        assert!(prompt.contains("explicit paths, files, or a narrow workspace scope"));
+        assert!(prompt.contains("instead of listing the repository root"));
         assert!(prompt.contains("Batch independent tool calls in the same turn"));
         assert!(prompt.contains("After required evidence is gathered and validation passes"));
     }

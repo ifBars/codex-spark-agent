@@ -68,21 +68,30 @@ pub(super) async fn cmd_exec(cwd: &Path, args: Value) -> Result<ToolResult> {
 
     let ok = output.status.success();
     let code = output.status.code();
+    let hint = command_failure_hint(&stderr.text);
     Ok(ToolResult {
         ok,
         data: json!({
             "code": code,
+            "shell": command_shell_name(),
             "stdout": stdout.text,
             "stderr": stderr.text,
+            "hint": hint,
             "stdout_chars": stdout.original_chars,
             "stderr_chars": stderr.original_chars,
             "stdout_truncated": stdout.truncated,
             "stderr_truncated": stderr.truncated,
             "workdir": display_rel(cwd, &workdir),
         }),
-        error: (!ok).then(|| match code {
-            Some(code) => format!("command exited with code {code}"),
-            None => "command terminated by signal".to_string(),
+        error: (!ok).then(|| {
+            let base = match code {
+                Some(code) => format!("command exited with code {code}"),
+                None => "command terminated by signal".to_string(),
+            };
+            match hint {
+                Some(hint) => format!("{base}; {hint}"),
+                None => base,
+            }
         }),
     })
 }
@@ -135,4 +144,30 @@ fn shell_command_for(workdir: &Path, command: &str) -> Command {
         cmd.args(["-lc", command]).current_dir(workdir);
         cmd
     }
+}
+
+fn command_shell_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "powershell"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "sh"
+    }
+}
+
+fn command_failure_hint(stderr: &str) -> Option<&'static str> {
+    #[cfg(target_os = "windows")]
+    {
+        if stderr.contains("The token '&&' is not a valid statement separator")
+            || stderr.contains("InvalidEndOfLine")
+        {
+            return Some(
+                "Windows cmd.exec runs through powershell -NoProfile -Command; PowerShell 5.1 does not support &&. Run commands in separate cmd.exec calls or use PowerShell-compatible separators.",
+            );
+        }
+    }
+    let _ = stderr;
+    None
 }

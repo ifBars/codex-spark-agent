@@ -4,8 +4,9 @@ use anyhow::Result;
 use serde_json::json;
 
 use crate::{
-    APPROX_CHARS_PER_TOKEN, benchmark_workspace, cli::ProfileScenarioKind, config,
-    profile_scenarios, profiler, scenario_validation, skill_commands, tools, trace_commands,
+    APPROX_CHARS_PER_TOKEN, benchmark_results, benchmark_workspace, cli::ProfileScenarioKind,
+    config, profile_scenarios, profiler, scenario_validation, skill_commands, tools,
+    trace_commands,
 };
 
 pub(crate) struct ProfileRunOptions {
@@ -45,9 +46,13 @@ pub(crate) async fn run_profile_scenarios(
 
     let auth = config::load_auth()?;
     let mut suite_summaries = Vec::new();
+    let mut benchmark_traces = Vec::new();
     for scenario in scenarios {
-        let prompts =
-            profile_scenarios::profile_scenario_prompts(*scenario, options.target_tokens)?;
+        let prompts = if options.benchmark_suite.is_some() {
+            profile_scenarios::benchmark_profile_prompts(*scenario, options.target_tokens)?
+        } else {
+            profile_scenarios::profile_scenario_prompts(*scenario, options.target_tokens)?
+        };
         let total_prompt_chars = prompts.iter().map(String::len).sum::<usize>();
         println!(
             "scenario={:?} repeat={} prompts={} prompt_chars={} approx_tokens={} compact_after_chars={} compact_after_tool_only_turns={} max_input_chars={}",
@@ -114,6 +119,11 @@ pub(crate) async fn run_profile_scenarios(
                 })),
                 tools::AgentMode::Work,
             )?;
+            let startup_context = if options.benchmark_suite.is_some() {
+                benchmark_startup_context(&scenario_cwd)?
+            } else {
+                None
+            };
             for (index, prompt) in prompts.iter().enumerate() {
                 println!(
                     "scenario_turn={}/{} prompt_chars={} approx_tokens={}",
@@ -122,8 +132,19 @@ pub(crate) async fn run_profile_scenarios(
                     prompt.len(),
                     prompt.len() / APPROX_CHARS_PER_TOKEN
                 );
-                skill_commands::load_skill_mentions(&mut runner, &scenario_cwd, prompt).await?;
-                if let Err(error) = runner.run(prompt).await {
+                let prompt_with_context;
+                let run_prompt = if index == 0 {
+                    if let Some(context) = &startup_context {
+                        prompt_with_context = format!("{context}\n\n{prompt}");
+                        prompt_with_context.as_str()
+                    } else {
+                        prompt
+                    }
+                } else {
+                    prompt
+                };
+                skill_commands::load_skill_mentions(&mut runner, &scenario_cwd, run_prompt).await?;
+                if let Err(error) = runner.run(run_prompt).await {
                     run_result = Err(error);
                     break;
                 }
@@ -179,6 +200,14 @@ pub(crate) async fn run_profile_scenarios(
                         if options.benchmark_suite.is_some() {
                             latest =
                                 benchmark_workspace::mirror_trace_to_source(&options.cwd, &latest)?;
+                            benchmark_traces.push(benchmark_results::BenchmarkRunManifestTrace {
+                                scenario: scenario.name().to_string(),
+                                repeat_index,
+                                workspace: scenario_cwd.display().to_string(),
+                                trace_dir: trace_commands::display_trace_dir(&options.cwd, &latest)
+                                    .display()
+                                    .to_string(),
+                            });
                         }
                         match profiler::analyze_trace(&latest) {
                             Ok(summary) => {
@@ -233,8 +262,49 @@ pub(crate) async fn run_profile_scenarios(
             profiler::format_trace_aggregate_row(suite, &suite_summaries)
         );
     }
+    if !options.no_trace
+        && let Some(suite) = &options.benchmark_suite
+    {
+        let manifest_path = benchmark_results::write_benchmark_run_manifest(
+            &options.cwd,
+            suite,
+            scenarios,
+            &benchmark_traces,
+        )?;
+        println!(
+            "benchmark_run_manifest suite={} traces={} path={}",
+            suite,
+            benchmark_traces.len(),
+            manifest_path.display()
+        );
+    }
 
     Ok(())
+}
+
+fn benchmark_startup_context(cwd: &std::path::Path) -> Result<Option<String>> {
+    let Some(agents) = agents_context_message(cwd)? else {
+        return Ok(None);
+    };
+    Ok(Some(format!(
+        "{agents}\n\n<environment_context>\n  <cwd>{}</cwd>\n</environment_context>",
+        cwd.display()
+    )))
+}
+
+fn agents_context_message(cwd: &std::path::Path) -> Result<Option<String>> {
+    let path = cwd.join("AGENTS.md");
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let instructions = std::fs::read_to_string(&path)
+        .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", path.display()))?;
+    Ok(Some(format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\n{}\n</INSTRUCTIONS>",
+        cwd.display(),
+        instructions.trim_end()
+    )))
 }
 
 fn validation_failed(validation: &scenario_validation::ScenarioValidationResult) -> bool {
@@ -285,4 +355,51 @@ fn bounded_excerpt(value: &str, max_chars: usize) -> String {
     let mut excerpt = trimmed.chars().take(max_chars).collect::<String>();
     excerpt.push_str("\n[truncated]");
     excerpt
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{agents_context_message, benchmark_startup_context};
+
+    #[test]
+    fn agents_context_message_matches_codex_project_instruction_shape() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "Use bun.\nNever set CARGO_TARGET_DIR.\n",
+        )
+        .expect("write agents");
+
+        let context = agents_context_message(dir.path())
+            .expect("agents context")
+            .expect("context should exist");
+
+        assert!(context.starts_with("# AGENTS.md instructions for "));
+        assert!(context.contains("<INSTRUCTIONS>\nUse bun."));
+        assert!(context.contains("Never set CARGO_TARGET_DIR."));
+        assert!(context.ends_with("</INSTRUCTIONS>"));
+    }
+
+    #[test]
+    fn agents_context_message_is_absent_without_agents_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let context = agents_context_message(dir.path()).expect("agents context");
+
+        assert!(context.is_none());
+    }
+
+    #[test]
+    fn benchmark_startup_context_includes_environment_cwd() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("AGENTS.md"), "Use bun.").expect("write agents");
+
+        let context = benchmark_startup_context(dir.path())
+            .expect("startup context")
+            .expect("context should exist");
+
+        assert!(context.contains("# AGENTS.md instructions for "));
+        assert!(context.contains("<environment_context>"));
+        assert!(context.contains("<cwd>"));
+    }
 }

@@ -260,6 +260,105 @@ pub(crate) fn profile_scenario_prompts(
     }
 }
 
+pub(crate) fn benchmark_profile_prompts(
+    scenario: ProfileScenarioKind,
+    target_tokens: usize,
+) -> Result<Vec<String>> {
+    match scenario {
+        ProfileScenarioKind::NaturalCompaction | ProfileScenarioKind::CompactionPressure => {
+            profile_scenario_prompts(scenario, target_tokens)
+        }
+        _ => Ok(vec![benchmark_task_prompt(scenario)]),
+    }
+}
+
+pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
+    match scenario {
+        ProfileScenarioKind::RepoSurvey => {
+            "Benchmark scenario: repo-survey.\n\
+             Inspect this repository like a coding agent. Use bounded file reads and targeted searches rather than broad output.\n\
+             1. List the repository root.\n\
+             2. Read Cargo.toml and README.md.\n\
+             3. Search src for tool and compaction surfaces.\n\
+             4. Finish with a concise harness-risk summary and one next profiling recommendation."
+                .to_string()
+        }
+        ProfileScenarioKind::RepoArchitectureSurvey => {
+            "Benchmark scenario: repo-architecture-survey.\n\
+             Understand this Spark harness repo before changing it.\n\
+             Required evidence path:\n\
+             1. Inspect the repository root.\n\
+             2. Read AGENTS.md.\n\
+             3. Read README.md.\n\
+             4. Search src for ProfileScenarioKind.\n\
+             5. Search src for AgentRunner.\n\
+             Finish with a concise architecture map, the scenario/profiler flow, and two likely failure surfaces to profile next."
+                .to_string()
+        }
+        ProfileScenarioKind::BenchmarkDesignSurvey => {
+            "Benchmark scenario: benchmark-design-survey.\n\
+             Survey the existing profiling scenarios and propose benchmark coverage gaps grounded in this repo.\n\
+             Do not run benchmarks.\n\
+             Required evidence path:\n\
+             1. Read src/profile_scenarios.rs.\n\
+             2. Read src/profiler/analyze/expectations.rs.\n\
+             3. Search README.md for profile-scenario.\n\
+             4. Search src for expected_tool_calls.\n\
+             Finish with a prioritized benchmark plan containing three concrete new task prompts, expected evidence signals, and which existing scenarios they should be compared against."
+                .to_string()
+        }
+        ProfileScenarioKind::ReactCalculatorScaffold => {
+            "Benchmark scenario: react-calculator-scaffold.\n\
+             Build a brand new React + TypeScript calculator app only under .spark-scenarios/react-calculator.\n\
+             Use bun for JavaScript package management. Do not create files outside this ignored fixture folder.\n\
+             This is a scoped fixture task: start with the listed brief and do not survey unrelated repository files unless a concrete blocker requires it.\n\
+             The finished app will be checked by bun test and a Playwright browser smoke check, so it must be runnable through Vite in a real browser.\n\
+             On Windows, run validation commands separately rather than chaining them with &&.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/react-calculator/brief.md.\n\
+             2. Create .spark-scenarios/react-calculator/package.json.\n\
+             3. Create .spark-scenarios/react-calculator/index.html.\n\
+             4. Create .spark-scenarios/react-calculator/src/main.tsx.\n\
+             5. Create .spark-scenarios/react-calculator/src/App.tsx.\n\
+             6. Create .spark-scenarios/react-calculator/src/App.test.tsx.\n\
+             7. Create .spark-scenarios/react-calculator/src/styles.css.\n\
+             8. Run bun test if possible; if tests need a DOM, configure it before using DOM-based test helpers.\n\
+             Finish with the app files created, validation result, and any agent behavior that made project scaffolding easier or harder."
+                .to_string()
+        }
+        ProfileScenarioKind::RustLogAnalyzerScaffold => {
+            "Benchmark scenario: rust-log-analyzer-scaffold.\n\
+             Build a brand new Rust CLI project only under .spark-scenarios/rust-log-analyzer.\n\
+             Do not set CARGO_TARGET_DIR; use Cargo's default target/ directory for this nested project.\n\
+             This is a scoped fixture task: start with the listed brief/sample log and do not survey unrelated repository files unless a concrete blocker requires it.\n\
+             On Windows, run validation commands separately rather than chaining them with &&.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/rust-log-analyzer/brief.md.\n\
+             2. Read .spark-scenarios/rust-log-analyzer/sample.log.\n\
+             3. Create .spark-scenarios/rust-log-analyzer/Cargo.toml.\n\
+             4. Create .spark-scenarios/rust-log-analyzer/src/lib.rs.\n\
+             5. Create .spark-scenarios/rust-log-analyzer/src/main.rs.\n\
+             6. Run cargo test for the nested project.\n\
+             Finish with the CLI behavior, test result, and any agent behavior that made project scaffolding easier or harder."
+                .to_string()
+        }
+        ProfileScenarioKind::ToolRecovery => {
+            "Benchmark scenario: tool-recovery.\n\
+             Work only under .spark-scenarios/tool-recovery.\n\
+             Required actions:\n\
+             1. First attempt to read .spark-scenarios/tool-recovery/source/missing-note.md. This path is intentionally missing; do not skip this failing probe.\n\
+             2. Recover by checking .spark-scenarios/tool-recovery/source/note.md.\n\
+             3. Verify it contains: Spark recovery path verified.\n\
+             Finish with what failed, how you recovered, and whether verification passed."
+                .to_string()
+        }
+        other => profile_scenario_prompts(other, 45_000)
+            .ok()
+            .and_then(|prompts| prompts.into_iter().next())
+            .unwrap_or_else(|| format!("Benchmark scenario: {}", other.name())),
+    }
+}
+
 pub(crate) fn natural_compaction_scenario_prompts(target_tokens: usize) -> Result<Vec<String>> {
     let turn_count = 3usize;
     let target_chars = target_tokens.saturating_mul(APPROX_CHARS_PER_TOKEN);
@@ -297,86 +396,7 @@ pub(crate) fn natural_compaction_scenario_prompts(target_tokens: usize) -> Resul
 }
 
 pub(crate) fn codex_cli_benchmark_prompt(scenario: ProfileScenarioKind) -> String {
-    match scenario {
-        ProfileScenarioKind::RepoSurvey => {
-            "Codex CLI benchmark scenario: repo-survey.\n\
-             Inspect this repository like a coding agent. Use bounded file reads and targeted searches rather than broad output.\n\
-             1. List the repository root.\n\
-             2. Read Cargo.toml and README.md.\n\
-             3. Search src for tool and compaction surfaces.\n\
-             4. Finish with a concise harness-risk summary and one next profiling recommendation."
-                .to_string()
-        }
-        ProfileScenarioKind::RepoArchitectureSurvey => {
-            "Codex CLI benchmark scenario: repo-architecture-survey.\n\
-             Understand this Spark harness repo before changing it.\n\
-             Required evidence path:\n\
-             1. Inspect the repository root.\n\
-             2. Read AGENTS.md.\n\
-             3. Read README.md.\n\
-             4. Search src for ProfileScenarioKind.\n\
-             5. Search src for AgentRunner.\n\
-             Finish with a concise architecture map, the scenario/profiler flow, and two likely failure surfaces to profile next."
-                .to_string()
-        }
-        ProfileScenarioKind::BenchmarkDesignSurvey => {
-            "Codex CLI benchmark scenario: benchmark-design-survey.\n\
-             Survey the existing profiling scenarios and propose benchmark coverage gaps grounded in this repo.\n\
-             Do not run benchmarks.\n\
-             Required evidence path:\n\
-             1. Read src/profile_scenarios.rs.\n\
-             2. Read src/profiler/analyze/expectations.rs.\n\
-             3. Search README.md for profile-scenario.\n\
-             4. Search src for expected_tool_calls.\n\
-             Finish with a prioritized benchmark plan containing three concrete new task prompts, expected evidence signals, and which existing scenarios they should be compared against."
-                .to_string()
-        }
-        ProfileScenarioKind::ReactCalculatorScaffold => {
-            "Codex CLI benchmark scenario: react-calculator-scaffold.\n\
-             Build a brand new React + TypeScript calculator app only under .spark-scenarios/react-calculator.\n\
-             Use bun for JavaScript package management. Do not create files outside this ignored fixture folder.\n\
-             The finished app will be checked by bun test and a Playwright browser smoke check, so it must be runnable through Vite in a real browser.\n\
-             Required actions:\n\
-             1. Read .spark-scenarios/react-calculator/brief.md.\n\
-             2. Create .spark-scenarios/react-calculator/package.json.\n\
-             3. Create .spark-scenarios/react-calculator/index.html.\n\
-             4. Create .spark-scenarios/react-calculator/src/main.tsx.\n\
-             5. Create .spark-scenarios/react-calculator/src/App.tsx.\n\
-             6. Create .spark-scenarios/react-calculator/src/App.test.tsx.\n\
-             7. Create .spark-scenarios/react-calculator/src/styles.css.\n\
-             8. Run bun test if possible; if tests need a DOM, configure it before using DOM-based test helpers.\n\
-             Finish with the app files created, validation result, and any CLI behavior that made project scaffolding easier or harder."
-                .to_string()
-        }
-        ProfileScenarioKind::RustLogAnalyzerScaffold => {
-            "Codex CLI benchmark scenario: rust-log-analyzer-scaffold.\n\
-             Build a brand new Rust CLI project only under .spark-scenarios/rust-log-analyzer.\n\
-             Do not set CARGO_TARGET_DIR; use Cargo's default target/ directory for this nested project.\n\
-             Required actions:\n\
-             1. Read .spark-scenarios/rust-log-analyzer/brief.md.\n\
-             2. Read .spark-scenarios/rust-log-analyzer/sample.log.\n\
-             3. Create .spark-scenarios/rust-log-analyzer/Cargo.toml.\n\
-             4. Create .spark-scenarios/rust-log-analyzer/src/lib.rs.\n\
-             5. Create .spark-scenarios/rust-log-analyzer/src/main.rs.\n\
-             6. Run cargo test for the nested project.\n\
-             Finish with the CLI behavior, test result, and any CLI behavior that made project scaffolding easier or harder."
-                .to_string()
-        }
-        ProfileScenarioKind::ToolRecovery => {
-            "Codex CLI benchmark scenario: tool-recovery.\n\
-             Work only under .spark-scenarios/tool-recovery.\n\
-             Required actions:\n\
-             1. First attempt to read .spark-scenarios/tool-recovery/source/missing-note.md. This path is intentionally missing; do not skip this failing probe.\n\
-             2. Recover by checking .spark-scenarios/tool-recovery/source/note.md.\n\
-             3. Verify it contains: Spark recovery path verified.\n\
-             Finish with what failed, how you recovered, and whether verification passed."
-                .to_string()
-        }
-        other => profile_scenario_prompts(other, 45_000)
-            .ok()
-            .and_then(|prompts| prompts.into_iter().next())
-            .unwrap_or_else(|| format!("Codex CLI benchmark scenario: {}", other.name())),
-    }
+    benchmark_task_prompt(scenario)
 }
 
 pub(crate) fn profile_scenario_validation_command(
@@ -421,9 +441,7 @@ pub(crate) fn profile_scenario_expected_tool_groups(
                 vec!["fs.search"],
             ]
         }
-        ProfileScenarioKind::ToolRecovery => {
-            vec![vec!["fs.read"], vec!["fs.stat"], vec!["fs.write"]]
-        }
+        ProfileScenarioKind::ToolRecovery => vec![vec!["fs.read"]],
         ProfileScenarioKind::SkillUse => vec![vec!["fs.read"], vec!["fs.search"]],
         ProfileScenarioKind::SteamNetworkLibSurvey => {
             vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
@@ -491,16 +509,8 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "path": ".spark-scenarios/tool-recovery/source/missing-note.md",
             }),
             json!({
-                "tool": "fs.stat",
-                "path": ".spark-scenarios/tool-recovery/source/note.md",
-            }),
-            json!({
                 "tool": "fs.read",
                 "path": ".spark-scenarios/tool-recovery/source/note.md",
-            }),
-            json!({
-                "tool": "fs.write",
-                "path": ".spark-scenarios/tool-recovery/recovery-summary.txt",
             }),
         ],
         ProfileScenarioKind::SkillUse => vec![

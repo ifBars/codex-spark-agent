@@ -144,8 +144,8 @@ async fn run_browser_validation(
     })?;
     let workdir = cwd.join(".spark-scenarios/react-calculator");
     let screenshot = artifact_subdir.join("react-calculator-browser.png");
-    let script = workdir.join(".spark-browser-smoke.mjs");
-    std::fs::write(&script, browser_validation_script(&screenshot)).map_err(|error| {
+    let script = artifact_subdir.join("react-calculator-browser-smoke.mjs");
+    std::fs::write(&script, browser_validation_script(&screenshot, &workdir)).map_err(|error| {
         anyhow::anyhow!(
             "failed to write browser validation script {}: {error}",
             script.display()
@@ -157,7 +157,7 @@ async fn run_browser_validation(
         VALIDATION_TIMEOUT,
         Command::new("bun")
             .args(["add", "--dev", "--no-save", "playwright"])
-            .current_dir(&workdir)
+            .current_dir(&artifact_subdir)
             .output(),
     )
     .await;
@@ -169,7 +169,7 @@ async fn run_browser_validation(
                 VALIDATION_TIMEOUT,
                 Command::new("node")
                     .arg(&script_arg)
-                    .current_dir(&workdir)
+                    .current_dir(&artifact_subdir)
                     .output(),
             )
             .await,
@@ -257,14 +257,17 @@ fn command_output_parts(
     }
 }
 
-fn browser_validation_script(screenshot: &Path) -> String {
+fn browser_validation_script(screenshot: &Path, app_dir: &Path) -> String {
     let screenshot = child_process_path(screenshot).replace('\\', "\\\\");
+    let app_dir = child_process_path(app_dir).replace('\\', "\\\\");
     format!(
         r#"import {{ chromium }} from "playwright";
 import {{ spawn }} from "node:child_process";
 
 const screenshotPath = "{screenshot}";
+const appDir = "{app_dir}";
 const server = spawn("bun", ["x", "vite", "--host", "127.0.0.1", "--port", "4173"], {{
+  cwd: appDir,
   shell: false,
   stdio: ["ignore", "pipe", "pipe"],
 }});
@@ -428,4 +431,21 @@ fn command_parts(program: &str, args: &[&str]) -> Vec<String> {
         .chain(args.iter().copied())
         .map(str::to_string)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::browser_validation_script;
+
+    #[test]
+    fn browser_validation_script_runs_vite_from_app_directory() {
+        let screenshot = std::path::Path::new("artifacts/react-calculator-browser.png");
+        let app_dir = std::path::Path::new(".spark-scenarios/react-calculator");
+
+        let script = browser_validation_script(screenshot, app_dir);
+
+        assert!(script.contains("const appDir = \".spark-scenarios/react-calculator\";"));
+        assert!(script.contains("cwd: appDir"));
+        assert!(script.contains("from \"playwright\""));
+    }
 }

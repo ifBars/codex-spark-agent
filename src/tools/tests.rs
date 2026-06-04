@@ -651,3 +651,33 @@ async fn cmd_exec_reports_nonzero_exit_as_tool_error() {
     let stdout = result.data["stdout"].as_str().expect("stdout");
     assert!(stdout.contains("nope"));
 }
+
+#[tokio::test]
+async fn cmd_exec_reports_windows_separator_hint() {
+    if !cfg!(target_os = "windows") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let result = cmd_exec(
+        dir.path(),
+        json!({
+            "command": "Write-Output one && Write-Output two",
+            "timeout_ms": 5000
+        }),
+    )
+    .await
+    .expect("cmd result");
+
+    assert!(!result.ok);
+    assert_eq!(result.data["shell"], "powershell");
+    let hint = result.data["hint"].as_str().expect("hint");
+    assert!(hint.contains("does not support &&"));
+    assert!(
+        result
+            .error
+            .as_deref()
+            .expect("error")
+            .contains("does not support &&")
+    );
+}
