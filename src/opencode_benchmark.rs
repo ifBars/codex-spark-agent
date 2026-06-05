@@ -234,6 +234,7 @@ async fn run_opencode_scenario(
             .model
             .clone()
             .unwrap_or_else(|| "opencode-default".to_string()),
+        reasoning_effort: options.reasoning_effort.clone(),
         score: 0.0,
         success: exit_code == Some(0)
             && !timed_out

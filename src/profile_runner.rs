@@ -265,8 +265,8 @@ fn benchmark_startup_context(
 ) -> Result<Option<String>> {
     let reference_context = benchmark_reference_context(read_roots);
     let environment = format!(
-        "<environment_context>\n  <cwd>{}</cwd>{}\n</environment_context>\n\n<benchmark_quality_context>\n{}\n</benchmark_quality_context>",
-        cwd.display(),
+        "<environment_context>\n  <cwd>{}</cwd>\n  <note>Use paths relative to cwd for native filesystem and shell tools. Do not copy the absolute cwd into fs.* path arguments.</note>{}\n</environment_context>\n\n<benchmark_quality_context>\n{}\n</benchmark_quality_context>",
+        context_path(cwd),
         reference_context,
         benchmark_quality_context(scenario)
     );
@@ -285,7 +285,7 @@ fn benchmark_reference_context(read_roots: &[PathBuf]) -> String {
             .map(|root| {
                 format!(
                     "\n  <read_only_reference_root>{}</read_only_reference_root>",
-                    root.display()
+                    context_path(root)
                 )
             })
             .collect::<String>();
@@ -303,6 +303,9 @@ fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
         ProfileScenarioKind::ReactCalculatorScaffold
         | ProfileScenarioKind::RustLogAnalyzerScaffold => {
             "Comparison evidence: Spark lost scaffold quality when browser/runtime validation failed, tool output was truncated, or retries drifted. Spend extra effort here: read the brief, create every required file, keep commands scoped to the fixture, run the requested test, and verify the app or CLI entrypoint satisfies the harness smoke check before finalizing."
+        }
+        ProfileScenarioKind::RustNotesTuiScaffold => {
+            "Comparison evidence: Spark can complete Rust scaffold tasks but loses process quality when it duplicates harness-owned smoke validation through many separate shell calls. Spend extra effort here on implementation and unit tests: read the brief, create the required Cargo files, run cargo test once after fixes, optionally inspect validate-notes.ps1, and rely on the harness-owned validation script for the full add/list/search/export/help-keys smoke check."
         }
         ProfileScenarioKind::TechnicalEssay => {
             "Comparison evidence: Spark lost essay quality on validation failure and incomplete brief coverage. Spend extra effort here: read every local source note, build the essay from those notes only, verify title/headings/word count/citations [S1], [S2], and [S3], then report the checks."
@@ -328,6 +331,14 @@ fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
             "Comparison evidence: Codex/OpenCode generally scored higher by spending more time on evidence and validation, while Spark won speed. Complete the scenario's required evidence path, use one focused self-check near the end, verify required files/searches/commands are present, then stop without broad repo sweeps or repeated equivalent reads."
         }
     }
+}
+
+fn context_path(path: &std::path::Path) -> String {
+    let display = path.display().to_string();
+    display
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&display)
+        .to_string()
 }
 
 fn agents_context_message(cwd: &std::path::Path) -> Result<Option<String>> {
@@ -396,7 +407,9 @@ fn project_root(cwd: &std::path::Path) -> std::path::PathBuf {
 mod tests {
     use crate::cli::ProfileScenarioKind;
 
-    use super::{agents_context_message, benchmark_quality_context, benchmark_startup_context};
+    use super::{
+        agents_context_message, benchmark_quality_context, benchmark_startup_context, context_path,
+    };
 
     #[test]
     fn agents_context_message_matches_codex_project_instruction_shape() {
@@ -471,7 +484,8 @@ mod tests {
         assert!(!context.contains("# AGENTS.md instructions for "));
         assert!(context.contains("<environment_context>"));
         assert!(context.contains("<cwd>"));
-        assert!(context.contains(&dir.path().display().to_string()));
+        assert!(context.contains(&context_path(dir.path())));
+        assert!(context.contains("Use paths relative to cwd"));
     }
 
     #[test]
@@ -489,8 +503,15 @@ mod tests {
         .expect("environment context should exist");
 
         assert!(context.contains("<read_only_reference_root>"));
-        assert!(context.contains(&source.path().display().to_string()));
+        assert!(context.contains(&context_path(source.path())));
         assert!(context.contains("writes and shell commands remain scoped to cwd"));
+    }
+
+    #[test]
+    fn context_path_strips_windows_verbatim_prefix() {
+        let path = std::path::Path::new(r"\\?\C:\repo\workspace");
+
+        assert_eq!(context_path(path), r"C:\repo\workspace");
     }
 
     #[test]
@@ -498,6 +519,10 @@ mod tests {
         let scaffold = benchmark_quality_context(ProfileScenarioKind::ReactCalculatorScaffold);
         assert!(scaffold.contains("browser/runtime validation failed"));
         assert!(scaffold.contains("verify the app or CLI entrypoint"));
+
+        let notes = benchmark_quality_context(ProfileScenarioKind::RustNotesTuiScaffold);
+        assert!(notes.contains("harness-owned validation script"));
+        assert!(notes.contains("add/list/search/export/help-keys"));
 
         let recovery = benchmark_quality_context(ProfileScenarioKind::ToolRecovery);
         assert!(recovery.contains("Follow the required failing probe"));

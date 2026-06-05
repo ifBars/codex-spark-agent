@@ -503,6 +503,7 @@ async fn main() -> Result<()> {
             codex_cli_report,
             opencode_report,
             llm_judge_report,
+            group_by_reasoning,
             output_dir,
         } => {
             let cwd = std::fs::canonicalize(&cwd)
@@ -518,14 +519,15 @@ async fn main() -> Result<()> {
                     suite,
                     limit,
                     all_runs,
-                    codex_cli_report,
-                    opencode_report,
+                    codex_cli_reports: codex_cli_report,
+                    opencode_reports: opencode_report,
                     llm_judge_report,
+                    group_by_reasoning,
                     output_dir,
                 },
             )?;
             println!(
-                "benchmark_comparison suite={} rows={} winner={} spark_benchmark_index={} codex_benchmark_index={} opencode_benchmark_index={} json={} csv={} html={}",
+                "benchmark_comparison suite={} rows={} winner={} benchmark_indices={} json={} csv={} html={}",
                 suite.name(),
                 report.rows,
                 report
@@ -535,19 +537,9 @@ async fn main() -> Result<()> {
                     .unwrap_or("undetermined"),
                 report
                     .aggregate
-                    .pointer("/matched_runner_benchmark_index_averages/spark-harness")
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(0.0),
-                report
-                    .aggregate
-                    .pointer("/matched_runner_benchmark_index_averages/codex-cli")
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(0.0),
-                report
-                    .aggregate
-                    .pointer("/matched_runner_benchmark_index_averages/opencode")
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(0.0),
+                    .get("matched_runner_benchmark_index_averages")
+                    .map(serde_json::Value::to_string)
+                    .unwrap_or_else(|| "{}".to_string()),
                 report.json_path.display(),
                 report.csv_path.display(),
                 report.html_path.display()

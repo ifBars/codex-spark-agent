@@ -25,7 +25,10 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
         ProfileScenarioKind::MultiFilePatch => Some("multi-file-patch"),
         ProfileScenarioKind::ReactCalculatorScaffold => Some("react-calculator"),
         ProfileScenarioKind::RustLogAnalyzerScaffold => Some("rust-log-analyzer"),
+        ProfileScenarioKind::RustNotesTuiScaffold => Some("rust-notes-tui"),
         ProfileScenarioKind::GithubIssueBugfix => Some("github-issue-bugfix"),
+        ProfileScenarioKind::RustFailingTestBugfix => Some("rust-failing-test-bugfix"),
+        ProfileScenarioKind::TypeScriptReducerBugfix => Some("typescript-reducer-bugfix"),
         ProfileScenarioKind::GithubIssueTriage => Some("github-issue-triage"),
         ProfileScenarioKind::TechnicalEssay => Some("technical-essay"),
         ProfileScenarioKind::ConfigMigration => Some("config-migration"),
@@ -169,6 +172,40 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture sample.log: {error}"))?;
         }
+        ProfileScenarioKind::RustNotesTuiScaffold => {
+            std::fs::write(
+                dir.join("brief.md"),
+                "# Rust Notes TUI Brief\n\nCreate a small Rust CLI project in this folder named `notevim`. It should feel like a vim-style notes tool while staying scriptable enough for automated validation. Keep Cargo output in this project's default target/ directory; do not set CARGO_TARGET_DIR.\n\nRequired behavior:\n- Store notes in a plain text file selected with `--store <path>`.\n- Support `add <title> <body...>` and print the generated note id.\n- Support `list` and show each note id and title.\n- Support `search <query>` across note titles and bodies.\n- Support `export <path>` and write all notes as Markdown.\n- Support `help-keys` and include vim-style keys: `j`, `k`, `/`, `i`, `Esc`, and `:w`.\n- Include focused tests for note parsing/storage/search/export behavior.\n\nYou may use only the Rust standard library unless adding a dependency clearly reduces complexity.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
+            std::fs::write(
+                dir.join("validate-notes.ps1"),
+                "$ErrorActionPreference = 'Stop'\n\
+                 cargo test\n\
+                 $store = Join-Path $PWD 'notes.db'\n\
+                 $export = Join-Path $PWD 'export.md'\n\
+                 if (Test-Path -LiteralPath $store) { Remove-Item -LiteralPath $store -Force }\n\
+                 if (Test-Path -LiteralPath $export) { Remove-Item -LiteralPath $export -Force }\n\
+                 $addOut = cargo run --quiet -- --store $store add 'Inbox plan' 'First body with alpha marker'\n\
+                 if ($LASTEXITCODE -ne 0) { throw 'add command failed' }\n\
+                 if (($addOut -join \"`n\") -notmatch 'note|id|[0-9]') { throw 'add output did not mention a note id' }\n\
+                 cargo run --quiet -- --store $store add 'Project Vim Mode' 'Use j and k to browse beta marker'\n\
+                 if ($LASTEXITCODE -ne 0) { throw 'second add command failed' }\n\
+                 $listOut = cargo run --quiet -- --store $store list\n\
+                 if (($listOut -join \"`n\") -notmatch 'Inbox plan') { throw 'list missing first title' }\n\
+                 if (($listOut -join \"`n\") -notmatch 'Project Vim Mode') { throw 'list missing second title' }\n\
+                 $searchOut = cargo run --quiet -- --store $store search beta\n\
+                 if (($searchOut -join \"`n\") -notmatch 'Project Vim Mode') { throw 'search missing matching note' }\n\
+                 if (($searchOut -join \"`n\") -match 'Inbox plan') { throw 'search returned unrelated note' }\n\
+                 $keysOut = cargo run --quiet -- help-keys\n\
+                 foreach ($term in @('j','k','/','i','Esc',':w')) { if (($keysOut -join \"`n\") -notlike \"*$term*\") { throw \"help-keys missing $term\" } }\n\
+                 cargo run --quiet -- --store $store export $export\n\
+                 if ($LASTEXITCODE -ne 0) { throw 'export command failed' }\n\
+                 $markdown = Get-Content -LiteralPath $export -Raw\n\
+                 foreach ($term in @('# Inbox plan','# Project Vim Mode','alpha marker','beta marker')) { if ($markdown -notlike \"*$term*\") { throw \"export missing $term\" } }\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture validate-notes.ps1: {error}"))?;
+        }
         ProfileScenarioKind::GithubIssueBugfix => {
             std::fs::create_dir_all(dir.join("src"))
                 .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
@@ -194,6 +231,58 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 "import { expect, test } from 'bun:test';\nimport { quoteTotal } from '../src/quote';\n\ntest('monthly pro quote multiplies seats by monthly price', () => {\n  expect(quoteTotal(20, { plan: 'pro', seats: 3, annual: false })).toBe(60);\n});\n\ntest('enterprise quote keeps the seat discount', () => {\n  expect(quoteTotal(100, { plan: 'enterprise', seats: 10, annual: false })).toBe(850);\n});\n\ntest('annual quote annualizes before applying the annual discount', () => {\n  expect(quoteTotal(10, { plan: 'pro', seats: 2, annual: true })).toBe(192);\n});\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture quote.test.ts: {error}"))?;
+        }
+        ProfileScenarioKind::RustFailingTestBugfix => {
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests"))
+                .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
+            std::fs::write(
+                dir.join("issue.md"),
+                "# Issue #733: retry scheduler runs low-priority work first\n\nThe retry scheduler should return runnable jobs with higher priority values first. It should also drop exhausted jobs and jobs whose id is blank or only whitespace. A recent incident retried low-priority webhooks before urgent billing repairs because the queue order was inverted. Fix the production code with the smallest reasonable Rust change and keep the public API intact.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture issue.md: {error}"))?;
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                "[package]\nname = \"spark-retry-scheduler-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture Cargo.toml: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("lib.rs"),
+                "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct RetryJob {\n    pub id: String,\n    pub priority: u8,\n    pub attempts: u8,\n}\n\npub fn runnable_jobs(mut jobs: Vec<RetryJob>) -> Vec<RetryJob> {\n    jobs.retain(|job| !job.id.is_empty() && job.attempts < 3);\n    jobs.sort_by_key(|job| job.priority);\n    jobs\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture lib.rs: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("retry_scheduler.rs"),
+                "use spark_retry_scheduler_fixture::{runnable_jobs, RetryJob};\n\nfn job(id: &str, priority: u8, attempts: u8) -> RetryJob {\n    RetryJob {\n        id: id.to_string(),\n        priority,\n        attempts,\n    }\n}\n\n#[test]\nfn returns_highest_priority_jobs_first() {\n    let jobs = runnable_jobs(vec![job(\"low\", 1, 0), job(\"urgent\", 9, 0), job(\"normal\", 5, 0)]);\n    let ids = jobs.into_iter().map(|job| job.id).collect::<Vec<_>>();\n    assert_eq!(ids, [\"urgent\", \"normal\", \"low\"]);\n}\n\n#[test]\nfn filters_exhausted_and_blank_jobs() {\n    let jobs = runnable_jobs(vec![job(\"ready\", 4, 2), job(\"done\", 9, 3), job(\"   \", 8, 0), job(\"\", 7, 0)]);\n    assert_eq!(jobs, vec![job(\"ready\", 4, 2)]);\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture retry_scheduler.rs: {error}"))?;
+        }
+        ProfileScenarioKind::TypeScriptReducerBugfix => {
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests"))
+                .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
+            std::fs::write(
+                dir.join("issue.md"),
+                "# Issue #812: cart restore can charge removed items\n\nRestored carts can contain inactive historical lines. `cartSubtotalCents` must ignore inactive lines. Also, setting a SKU quantity to zero or a negative value should remove that line from the cart instead of leaving a zero-quantity item around. Fix the reducer with the smallest reasonable production change and keep the exported types/functions intact.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture issue.md: {error}"))?;
+            std::fs::write(
+                dir.join("package.json"),
+                "{\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"bun test\"\n  }\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture package.json: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("cart.ts"),
+                "export type CartItem = {\n  sku: string;\n  quantity: number;\n  unitPriceCents: number;\n  active: boolean;\n};\n\nexport type CartState = {\n  items: CartItem[];\n  couponCode?: string;\n};\n\nexport type CartAction =\n  | { type: 'add'; item: CartItem }\n  | { type: 'setQuantity'; sku: string; quantity: number }\n  | { type: 'remove'; sku: string };\n\nexport function reduceCart(state: CartState, action: CartAction): CartState {\n  switch (action.type) {\n    case 'add': {\n      const existing = state.items.find((item) => item.sku === action.item.sku);\n      if (!existing) {\n        return { ...state, items: [...state.items, action.item] };\n      }\n      return {\n        ...state,\n        items: state.items.map((item) =>\n          item.sku === action.item.sku\n            ? { ...item, quantity: item.quantity + action.item.quantity, active: true }\n            : item,\n        ),\n      };\n    }\n    case 'setQuantity':\n      return {\n        ...state,\n        items: state.items.map((item) =>\n          item.sku === action.sku ? { ...item, quantity: action.quantity } : item,\n        ),\n      };\n    case 'remove':\n      return { ...state, items: state.items.filter((item) => item.sku !== action.sku) };\n  }\n}\n\nexport function cartSubtotalCents(state: CartState): number {\n  return state.items.reduce((total, item) => total + item.quantity * item.unitPriceCents, 0);\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture cart.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("cart.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { cartSubtotalCents, reduceCart, type CartState } from '../src/cart';\n\nconst baseState: CartState = {\n  couponCode: 'WELCOME',\n  items: [\n    { sku: 'active-a', quantity: 2, unitPriceCents: 500, active: true },\n    { sku: 'old-b', quantity: 9, unitPriceCents: 999, active: false },\n  ],\n};\n\ntest('subtotal ignores inactive restored lines', () => {\n  expect(cartSubtotalCents(baseState)).toBe(1000);\n});\n\ntest('setting quantity to zero removes the cart line', () => {\n  const next = reduceCart(baseState, { type: 'setQuantity', sku: 'active-a', quantity: 0 });\n  expect(next.items.map((item) => item.sku)).toEqual(['old-b']);\n});\n\ntest('setting quantity negative also removes the cart line', () => {\n  const next = reduceCart(baseState, { type: 'setQuantity', sku: 'active-a', quantity: -3 });\n  expect(next.items.some((item) => item.sku === 'active-a')).toBe(false);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture cart.test.ts: {error}"))?;
         }
         ProfileScenarioKind::GithubIssueTriage => {
             std::fs::create_dir_all(dir.join("src"))
@@ -474,6 +563,21 @@ pub(crate) fn profile_scenario_prompts(
              Finish with the CLI behavior, test result, and any harness behavior that made project scaffolding easier or harder."
                 .to_string(),
         ]),
+        ProfileScenarioKind::RustNotesTuiScaffold => Ok(vec![
+            "Profile scenario: rust-notes-tui-scaffold.\n\
+             Build a brand new Rust CLI project only under .spark-scenarios/rust-notes-tui.\n\
+             Do not set CARGO_TARGET_DIR; use Cargo's default target/ directory for this nested project.\n\
+             Required actions:\n\
+             1. Use fs.read on .spark-scenarios/rust-notes-tui/brief.md.\n\
+             2. Use fs.write to create .spark-scenarios/rust-notes-tui/Cargo.toml.\n\
+             3. Use fs.write to create .spark-scenarios/rust-notes-tui/src/lib.rs.\n\
+             4. Use fs.write to create .spark-scenarios/rust-notes-tui/src/main.rs.\n\
+             5. Include focused tests for note parsing, storage, search, and export behavior.\n\
+             6. Use cmd.exec from .spark-scenarios/rust-notes-tui to run cargo test.\n\
+             7. Do not manually run the full add/list/search/export/help-keys smoke path; the harness will run validate-notes.ps1 after your run completes.\n\
+             Finish with the CLI behavior, test result, and any harness behavior that made project scaffolding easier or harder."
+                .to_string(),
+        ]),
         ProfileScenarioKind::GithubIssueBugfix => Ok(vec![
             "Profile scenario: github-issue-bugfix.\n\
              Work only under .spark-scenarios/github-issue-bugfix.\n\
@@ -484,6 +588,32 @@ pub(crate) fn profile_scenario_prompts(
              3. Read .spark-scenarios/github-issue-bugfix/tests/quote.test.ts.\n\
              4. Patch the production code with the smallest reasonable change so annual quotes annualize before discounting.\n\
              5. Run bun test from .spark-scenarios/github-issue-bugfix.\n\
+             Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::RustFailingTestBugfix => Ok(vec![
+            "Profile scenario: rust-failing-test-bugfix.\n\
+             Work only under .spark-scenarios/rust-failing-test-bugfix.\n\
+             Treat issue.md like a Rust bug report assigned to you.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/rust-failing-test-bugfix/issue.md.\n\
+             2. Read .spark-scenarios/rust-failing-test-bugfix/src/lib.rs.\n\
+             3. Read .spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs.\n\
+             4. Patch production code with the smallest reasonable change so runnable jobs are filtered and ordered correctly.\n\
+             5. Run cargo test from .spark-scenarios/rust-failing-test-bugfix. Do not set CARGO_TARGET_DIR.\n\
+             Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::TypeScriptReducerBugfix => Ok(vec![
+            "Profile scenario: typescript-reducer-bugfix.\n\
+             Work only under .spark-scenarios/typescript-reducer-bugfix.\n\
+             Treat issue.md like a TypeScript bug report assigned to you.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/typescript-reducer-bugfix/issue.md.\n\
+             2. Read .spark-scenarios/typescript-reducer-bugfix/src/cart.ts.\n\
+             3. Read .spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts.\n\
+             4. Patch production code with the smallest reasonable change so inactive lines are ignored and non-positive quantities remove the line.\n\
+             5. Run bun test from .spark-scenarios/typescript-reducer-bugfix.\n\
              Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
                 .to_string(),
         ]),
@@ -652,6 +782,25 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Finish with the CLI behavior, test result, and any agent behavior that made project scaffolding easier or harder."
                 .to_string()
         }
+        ProfileScenarioKind::RustNotesTuiScaffold => {
+            "Benchmark scenario: rust-notes-tui-scaffold.\n\
+             Build a brand new Rust CLI project only under .spark-scenarios/rust-notes-tui.\n\
+             Do not set CARGO_TARGET_DIR; use Cargo's default target/ directory for this nested project.\n\
+             This is a scoped fixture task: start with the listed brief and do not survey unrelated repository files unless a concrete blocker requires it.\n\
+             The app should feel like a vim-style notes tool while remaining scriptable for validation.\n\
+             On Windows, run validation commands separately rather than chaining them with &&.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/rust-notes-tui/brief.md.\n\
+             2. Create .spark-scenarios/rust-notes-tui/Cargo.toml.\n\
+             3. Create .spark-scenarios/rust-notes-tui/src/lib.rs.\n\
+             4. Create .spark-scenarios/rust-notes-tui/src/main.rs.\n\
+             5. Implement `--store <path> add <title> <body...>`, `list`, `search <query>`, `export <path>`, and `help-keys`.\n\
+             6. Include focused tests for note parsing/storage/search/export behavior.\n\
+             7. Run cargo test for the nested project.\n\
+             8. Do not manually run the full add/list/search/export/help-keys smoke path; the harness will run .spark-scenarios/rust-notes-tui/validate-notes.ps1 after your run completes.\n\
+             Finish with the CLI behavior, test result, and any agent behavior that made project scaffolding easier or harder."
+                .to_string()
+        }
         ProfileScenarioKind::GithubIssueBugfix => {
             "Benchmark scenario: github-issue-bugfix.\n\
              Work only under .spark-scenarios/github-issue-bugfix.\n\
@@ -661,6 +810,32 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              2. Inspect the production code and tests under .spark-scenarios/github-issue-bugfix.\n\
              3. Patch production code with the smallest reasonable change so annual quotes annualize before discounting.\n\
              4. Run bun test from .spark-scenarios/github-issue-bugfix.\n\
+             Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
+                .to_string()
+        }
+        ProfileScenarioKind::RustFailingTestBugfix => {
+            "Benchmark scenario: rust-failing-test-bugfix.\n\
+             Work only under .spark-scenarios/rust-failing-test-bugfix.\n\
+             Treat issue.md like a Rust bug report assigned to you. This is a scoped fixture task; do not inspect unrelated repository files unless a concrete blocker requires it.\n\
+             Do not set CARGO_TARGET_DIR; use Cargo's default target/ directory for this nested project.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/rust-failing-test-bugfix/issue.md.\n\
+             2. Inspect the production code and tests under .spark-scenarios/rust-failing-test-bugfix.\n\
+             3. Patch production code with the smallest reasonable change so runnable jobs filter blank ids and sort higher priority values first.\n\
+             4. Run cargo test from .spark-scenarios/rust-failing-test-bugfix.\n\
+             Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
+                .to_string()
+        }
+        ProfileScenarioKind::TypeScriptReducerBugfix => {
+            "Benchmark scenario: typescript-reducer-bugfix.\n\
+             Work only under .spark-scenarios/typescript-reducer-bugfix.\n\
+             Treat issue.md like a TypeScript bug report assigned to you. This is a scoped fixture task; do not inspect unrelated repository files unless a concrete blocker requires it.\n\
+             Use bun for JavaScript package management and validation.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/typescript-reducer-bugfix/issue.md.\n\
+             2. Inspect the production code and tests under .spark-scenarios/typescript-reducer-bugfix.\n\
+             3. Patch production code with the smallest reasonable change so inactive lines are ignored by subtotal and non-positive quantities remove the line.\n\
+             4. Run bun test from .spark-scenarios/typescript-reducer-bugfix.\n\
              Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
                 .to_string()
         }
@@ -782,8 +957,23 @@ pub(crate) fn profile_scenario_validation_command(
             program: "cargo",
             args: &["test"],
         }),
+        ProfileScenarioKind::RustNotesTuiScaffold => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/rust-notes-tui",
+            program: "powershell",
+            args: &["-NoProfile", "-File", "validate-notes.ps1"],
+        }),
         ProfileScenarioKind::GithubIssueBugfix => Some(ProfileScenarioValidationCommand {
             workdir: ".spark-scenarios/github-issue-bugfix",
+            program: "bun",
+            args: &["test"],
+        }),
+        ProfileScenarioKind::RustFailingTestBugfix => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/rust-failing-test-bugfix",
+            program: "cargo",
+            args: &["test"],
+        }),
+        ProfileScenarioKind::TypeScriptReducerBugfix => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/typescript-reducer-bugfix",
             program: "bun",
             args: &["test"],
         }),
@@ -915,7 +1105,24 @@ pub(crate) fn profile_scenario_expected_tool_groups(
         ProfileScenarioKind::RustLogAnalyzerScaffold => {
             vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
         }
+        ProfileScenarioKind::RustNotesTuiScaffold => {
+            vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
+        }
         ProfileScenarioKind::GithubIssueBugfix => {
+            vec![
+                vec!["fs.read"],
+                vec!["fs.edit", "fs.replace"],
+                vec!["cmd.exec"],
+            ]
+        }
+        ProfileScenarioKind::RustFailingTestBugfix => {
+            vec![
+                vec!["fs.read"],
+                vec!["fs.edit", "fs.replace"],
+                vec!["cmd.exec"],
+            ]
+        }
+        ProfileScenarioKind::TypeScriptReducerBugfix => {
             vec![
                 vec!["fs.read"],
                 vec!["fs.edit", "fs.replace"],
@@ -1176,6 +1383,28 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "command": "cargo test",
             }),
         ],
+        ProfileScenarioKind::RustNotesTuiScaffold => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/rust-notes-tui/brief.md",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/rust-notes-tui/Cargo.toml",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/rust-notes-tui/src/lib.rs",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/rust-notes-tui/src/main.rs",
+            }),
+            json!({
+                "tool": "cmd.exec",
+                "command": "cargo test",
+            }),
+        ],
         ProfileScenarioKind::GithubIssueBugfix => vec![
             json!({
                 "tool": "fs.read",
@@ -1188,6 +1417,42 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.read",
                 "path": ".spark-scenarios/github-issue-bugfix/tests/quote.test.ts",
+            }),
+            json!({
+                "tool": "cmd.exec",
+                "command": "bun test",
+            }),
+        ],
+        ProfileScenarioKind::RustFailingTestBugfix => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/rust-failing-test-bugfix/issue.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs",
+            }),
+            json!({
+                "tool": "cmd.exec",
+                "command": "cargo test",
+            }),
+        ],
+        ProfileScenarioKind::TypeScriptReducerBugfix => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/typescript-reducer-bugfix/issue.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts",
             }),
             json!({
                 "tool": "cmd.exec",

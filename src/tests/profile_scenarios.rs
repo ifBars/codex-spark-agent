@@ -1,9 +1,9 @@
 use crate::cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind};
 use crate::profile_scenarios::{
-    benchmark_profile_prompts, codex_cli_benchmark_prompt, prepare_profile_scenario,
-    profile_scenario_expected_skills, profile_scenario_expected_tool_calls,
-    profile_scenario_expected_tool_groups, profile_scenario_prompts,
-    profile_scenario_validation_command,
+    benchmark_profile_prompts, benchmark_task_prompt, codex_cli_benchmark_prompt,
+    prepare_profile_scenario, profile_scenario_expected_skills,
+    profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
+    profile_scenario_prompts, profile_scenario_validation_command,
 };
 use crate::{APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS};
 
@@ -643,12 +643,172 @@ fn rust_log_analyzer_scaffold_declares_project_file_expectations() {
 }
 
 #[test]
+fn rust_notes_tui_scaffold_prepares_brief_and_validation_script() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::RustNotesTuiScaffold)
+        .expect("prepare scenario");
+
+    let root = dir.path().join(".spark-scenarios").join("rust-notes-tui");
+    let brief = std::fs::read_to_string(root.join("brief.md")).expect("read brief");
+    let validation =
+        std::fs::read_to_string(root.join("validate-notes.ps1")).expect("read validation");
+
+    assert!(brief.contains("notevim"));
+    assert!(brief.contains("vim-style notes tool"));
+    assert!(brief.contains("do not set CARGO_TARGET_DIR"));
+    assert!(validation.contains("cargo test"));
+    assert!(validation.contains("help-keys"));
+    assert!(validation.contains("export missing"));
+}
+
+#[test]
+fn rust_notes_tui_scaffold_declares_project_file_expectations() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::RustNotesTuiScaffold, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::RustNotesTuiScaffold);
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::RustNotesTuiScaffold)
+        .expect("validation");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::RustNotesTuiScaffold);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::RustNotesTuiScaffold);
+
+    assert!(prompt.contains("Profile scenario: rust-notes-tui-scaffold"));
+    assert!(benchmark_prompt.contains("Benchmark scenario: rust-notes-tui-scaffold"));
+    assert!(benchmark_prompt.contains("help-keys"));
+    assert!(benchmark_prompt.contains("validate-notes.ps1"));
+    assert!(
+        benchmark_prompt
+            .contains("Do not manually run the full add/list/search/export/help-keys smoke path")
+    );
+    assert!(benchmark_prompt.contains("Do not set CARGO_TARGET_DIR"));
+    assert_eq!(validation.workdir, ".spark-scenarios/rust-notes-tui");
+    assert_eq!(validation.program, "powershell");
+    assert_eq!(
+        validation.args,
+        &["-NoProfile", "-File", "validate-notes.ps1"]
+    );
+    assert_eq!(
+        groups,
+        vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
+    );
+    assert_eq!(calls.len(), 5);
+    assert_eq!(calls[0]["path"], ".spark-scenarios/rust-notes-tui/brief.md");
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/rust-notes-tui/Cargo.toml"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/rust-notes-tui/src/lib.rs"
+    );
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/rust-notes-tui/src/main.rs"
+    );
+    assert_eq!(calls[4]["tool"], "cmd.exec");
+    assert_eq!(calls[4]["command"], "cargo test");
+}
+
+#[test]
+fn rust_failing_test_bugfix_declares_cargo_validation_expectations() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::RustFailingTestBugfix, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::RustFailingTestBugfix);
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::RustFailingTestBugfix)
+            .expect("validation");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::RustFailingTestBugfix);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::RustFailingTestBugfix);
+
+    assert!(prompt.contains("Profile scenario: rust-failing-test-bugfix"));
+    assert!(benchmark_prompt.contains("Do not set CARGO_TARGET_DIR"));
+    assert_eq!(
+        validation.workdir,
+        ".spark-scenarios/rust-failing-test-bugfix"
+    );
+    assert_eq!(validation.program, "cargo");
+    assert_eq!(validation.args, &["test"]);
+    assert_eq!(
+        groups,
+        vec![
+            vec!["fs.read"],
+            vec!["fs.edit", "fs.replace"],
+            vec!["cmd.exec"]
+        ]
+    );
+    assert_eq!(calls.len(), 4);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/rust-failing-test-bugfix/issue.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs"
+    );
+    assert_eq!(calls[3]["tool"], "cmd.exec");
+    assert_eq!(calls[3]["command"], "cargo test");
+}
+
+#[test]
+fn typescript_reducer_bugfix_declares_bun_validation_expectations() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::TypeScriptReducerBugfix, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::TypeScriptReducerBugfix);
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::TypeScriptReducerBugfix)
+            .expect("validation");
+    let groups =
+        profile_scenario_expected_tool_groups(ProfileScenarioKind::TypeScriptReducerBugfix);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::TypeScriptReducerBugfix);
+
+    assert!(prompt.contains("Profile scenario: typescript-reducer-bugfix"));
+    assert!(benchmark_prompt.contains("Use bun for JavaScript package management"));
+    assert_eq!(
+        validation.workdir,
+        ".spark-scenarios/typescript-reducer-bugfix"
+    );
+    assert_eq!(validation.program, "bun");
+    assert_eq!(validation.args, &["test"]);
+    assert_eq!(
+        groups,
+        vec![
+            vec!["fs.read"],
+            vec!["fs.edit", "fs.replace"],
+            vec!["cmd.exec"]
+        ]
+    );
+    assert_eq!(calls.len(), 4);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/typescript-reducer-bugfix/issue.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts"
+    );
+    assert_eq!(calls[3]["tool"], "cmd.exec");
+    assert_eq!(calls[3]["command"], "bun test");
+}
+
+#[test]
 fn benchmark_suites_group_existing_and_real_world_scenarios() {
     assert_eq!(
         ProfileBenchmarkSuiteKind::Scaffolding.scenarios(),
         &[
             ProfileScenarioKind::ReactCalculatorScaffold,
-            ProfileScenarioKind::RustLogAnalyzerScaffold
+            ProfileScenarioKind::RustLogAnalyzerScaffold,
+            ProfileScenarioKind::RustNotesTuiScaffold
         ]
     );
     assert_eq!(
@@ -657,6 +817,8 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::PrecisePatch,
             ProfileScenarioKind::MultiFilePatch,
             ProfileScenarioKind::GithubIssueBugfix,
+            ProfileScenarioKind::RustFailingTestBugfix,
+            ProfileScenarioKind::TypeScriptReducerBugfix,
             ProfileScenarioKind::ConfigMigration
         ]
     );
@@ -673,6 +835,11 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
     assert!(
         ProfileBenchmarkSuiteKind::RealWorld
             .scenarios()
+            .contains(&ProfileScenarioKind::RustNotesTuiScaffold)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
             .contains(&ProfileScenarioKind::ShellRecovery)
     );
     assert!(
@@ -684,6 +851,16 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
         ProfileBenchmarkSuiteKind::RealWorld
             .scenarios()
             .contains(&ProfileScenarioKind::GithubIssueBugfix)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::RustFailingTestBugfix)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::TypeScriptReducerBugfix)
     );
     assert!(
         ProfileBenchmarkSuiteKind::RealWorld
@@ -714,6 +891,16 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
             ProfileScenarioKind::GithubIssueBugfix,
             ".spark-scenarios/github-issue-bugfix/issue.md",
             "annual quotes are undercharged",
+        ),
+        (
+            ProfileScenarioKind::RustFailingTestBugfix,
+            ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs",
+            "returns_highest_priority_jobs_first",
+        ),
+        (
+            ProfileScenarioKind::TypeScriptReducerBugfix,
+            ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts",
+            "subtotal ignores inactive restored lines",
         ),
         (
             ProfileScenarioKind::GithubIssueTriage,

@@ -37,6 +37,8 @@ pub(crate) struct CodexCliBenchmarkRow {
     pub(crate) scenario: String,
     pub(crate) repeat_index: usize,
     pub(crate) model: String,
+    #[serde(default = "default_reasoning_effort")]
+    pub(crate) reasoning_effort: String,
     pub(crate) score: f64,
     pub(crate) success: bool,
     pub(crate) exit_code: Option<i32>,
@@ -292,6 +294,7 @@ async fn run_codex_cli_scenario(
         scenario: scenario_name.to_string(),
         repeat_index,
         model: options.model.clone(),
+        reasoning_effort: options.reasoning_effort.clone(),
         score: 0.0,
         success: exit_code == Some(0)
             && !timed_out
@@ -339,6 +342,10 @@ async fn run_codex_cli_scenario(
     };
     row.score = codex_score(&row);
     Ok(row)
+}
+
+fn default_reasoning_effort() -> String {
+    "unknown".to_string()
 }
 
 fn external_benchmark_prompt(
@@ -751,6 +758,7 @@ mod tests {
             scenario: "react-calculator-scaffold".to_string(),
             repeat_index: 1,
             model: "gpt-5.3-codex-spark".to_string(),
+            reasoning_effort: "medium".to_string(),
             score: 0.0,
             success: false,
             exit_code: Some(0),

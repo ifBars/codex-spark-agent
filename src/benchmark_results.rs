@@ -32,6 +32,7 @@ struct BenchmarkRunRow {
     suite: String,
     scenario: String,
     model: String,
+    reasoning_effort: String,
     completion_score: f64,
     quality_score: f64,
     process_score: f64,
@@ -91,9 +92,10 @@ pub(crate) struct BenchmarkComparisonOptions {
     pub(crate) suite: ProfileBenchmarkSuiteKind,
     pub(crate) limit: usize,
     pub(crate) all_runs: bool,
-    pub(crate) codex_cli_report: PathBuf,
-    pub(crate) opencode_report: Option<PathBuf>,
+    pub(crate) codex_cli_reports: Vec<PathBuf>,
+    pub(crate) opencode_reports: Vec<PathBuf>,
     pub(crate) llm_judge_report: Option<PathBuf>,
+    pub(crate) group_by_reasoning: bool,
     pub(crate) output_dir: PathBuf,
 }
 
@@ -131,6 +133,7 @@ struct ComparisonRow {
     attempts: usize,
     successful_attempts: usize,
     model: String,
+    reasoning_effort: String,
     completion_score: f64,
     quality_score: f64,
     process_score: f64,
@@ -228,22 +231,13 @@ pub(crate) fn write_benchmark_comparison(
             trace_commands::trace_runs_root(&options.cwd).display()
         );
     }
-    let codex_rows = read_external_agent_rows(&options.codex_cli_report, "Codex CLI")?;
+    let codex_rows =
+        read_external_agent_report_rows(&options.cwd, &options.codex_cli_reports, "Codex CLI")?;
     if codex_rows.is_empty() {
-        anyhow::bail!(
-            "no Codex CLI rows found in {}",
-            options.codex_cli_report.display()
-        );
+        anyhow::bail!("no Codex CLI rows found in provided reports");
     }
-    let opencode_rows = if let Some(path) = &options.opencode_report {
-        let rows = read_external_agent_rows(path, "opencode")?;
-        if rows.is_empty() {
-            anyhow::bail!("no opencode rows found in {}", path.display());
-        }
-        rows
-    } else {
-        Vec::new()
-    };
+    let opencode_rows =
+        read_external_agent_report_rows(&options.cwd, &options.opencode_reports, "opencode")?;
 
     std::fs::create_dir_all(&options.output_dir).map_err(|error| {
         anyhow::anyhow!(
@@ -266,12 +260,16 @@ pub(crate) fn write_benchmark_comparison(
             .filter(|row| row.suite == options.suite.name())
             .map(comparison_row_from_external_agent),
     );
+    if options.group_by_reasoning {
+        label_rows_by_reasoning(&mut rows);
+    }
     if let Some(path) = &options.llm_judge_report {
         let judge_report = read_llm_judge_report(path)?;
         apply_llm_judge_scores(&mut rows, &judge_report);
     }
     let mut rows = average_comparison_attempts(rows);
-    apply_comparison_indices(&mut rows, "codex-cli");
+    let baseline_runner = comparison_baseline_runner(&rows, "codex-cli");
+    apply_comparison_indices(&mut rows, &baseline_runner);
     rows.sort_by(|left, right| {
         scenario_order(options.suite, &left.scenario)
             .cmp(&scenario_order(options.suite, &right.scenario))
@@ -532,6 +530,7 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
         model: string_at(summary, "/trace_metadata/model")
             .unwrap_or("unknown")
             .to_string(),
+        reasoning_effort: reasoning_effort(summary).unwrap_or("unknown").to_string(),
         completion_score: 0.0,
         quality_score: 0.0,
         process_score: 0.0,
@@ -835,12 +834,15 @@ fn exact_completion_pressure_scenario(scenario: &str) -> bool {
             | "precise-patch"
             | "multi-file-patch"
             | "github-issue-bugfix"
+            | "rust-failing-test-bugfix"
+            | "typescript-reducer-bugfix"
             | "github-issue-triage"
             | "technical-essay"
             | "config-migration"
             | "ops-report"
             | "react-calculator-scaffold"
             | "rust-log-analyzer-scaffold"
+            | "rust-notes-tui-scaffold"
             | "natural-compaction"
             | "compaction-pressure"
     )
@@ -848,7 +850,7 @@ fn exact_completion_pressure_scenario(scenario: &str) -> bool {
 
 fn rows_to_csv(rows: &[BenchmarkRunRow]) -> String {
     let mut csv = String::from(
-        "run_id,trace_dir,suite,scenario,model,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_present,validation_exit_code,validation_timed_out,browser_validation_present,browser_validation_exit_code,browser_validation_timed_out,browser_screenshot,requests,tool_calls,max_approx_input_tokens,max_context_window_pct,max_request_duration_ms,total_duration_ms,source_files,source_bytes,compactions,tool_failures,recovered_tool_failures,unrecovered_tool_failures,truncated_tool_results,repeated_tool_calls,tool_only_turns,max_tool_only_streak,expected_tool_groups,satisfied_tool_groups,expected_tool_calls,satisfied_tool_calls,extra_calls_after_satisfied,extra_turns_after_satisfied,context_growth_after_satisfied_chars,diagnostics,failure_points,completion_score,quality_score,process_score,efficiency_index,benchmark_index\n",
+        "run_id,trace_dir,suite,scenario,model,reasoning_effort,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_present,validation_exit_code,validation_timed_out,browser_validation_present,browser_validation_exit_code,browser_validation_timed_out,browser_screenshot,requests,tool_calls,max_approx_input_tokens,max_context_window_pct,max_request_duration_ms,total_duration_ms,source_files,source_bytes,compactions,tool_failures,recovered_tool_failures,unrecovered_tool_failures,truncated_tool_results,repeated_tool_calls,tool_only_turns,max_tool_only_streak,expected_tool_groups,satisfied_tool_groups,expected_tool_calls,satisfied_tool_calls,extra_calls_after_satisfied,extra_turns_after_satisfied,context_growth_after_satisfied_chars,diagnostics,failure_points,completion_score,quality_score,process_score,efficiency_index,benchmark_index\n",
     );
     for row in rows {
         let values = [
@@ -857,6 +859,7 @@ fn rows_to_csv(rows: &[BenchmarkRunRow]) -> String {
             row.suite.clone(),
             row.scenario.clone(),
             row.model.clone(),
+            row.reasoning_effort.clone(),
             row.score.to_string(),
             row.task_quality_score.to_string(),
             row.efficiency_score.to_string(),
@@ -1153,6 +1156,72 @@ fn read_external_agent_rows(path: &Path, label: &str) -> Result<Vec<CodexCliBenc
     )
 }
 
+fn read_external_agent_report_rows(
+    cwd: &Path,
+    paths: &[PathBuf],
+    label: &str,
+) -> Result<Vec<CodexCliBenchmarkRow>> {
+    let mut rows = Vec::new();
+    let mut skipped_infrastructure_failures = 0usize;
+    for path in paths {
+        for row in read_external_agent_rows(path, label)? {
+            if external_agent_row_is_infrastructure_failure(cwd, &row) {
+                skipped_infrastructure_failures += 1;
+                continue;
+            }
+            rows.push(row);
+        }
+    }
+    if skipped_infrastructure_failures > 0 {
+        eprintln!(
+            "benchmark_compare skipped {skipped_infrastructure_failures} {label} infrastructure/API failure row(s)"
+        );
+    }
+    Ok(rows)
+}
+
+fn external_agent_row_is_infrastructure_failure(cwd: &Path, row: &CodexCliBenchmarkRow) -> bool {
+    let run_dir = resolve_external_run_dir(cwd, &row.run_dir);
+    let mut evidence = String::new();
+    evidence.push_str(&row.failure_points);
+    for file_name in ["last-message.txt", "stdout.jsonl", "stderr.txt"] {
+        let path = run_dir.join(file_name);
+        if let Ok(text) = std::fs::read_to_string(path) {
+            evidence.push('\n');
+            evidence.push_str(&text);
+        }
+    }
+    contains_infrastructure_failure_signal(&evidence)
+}
+
+fn resolve_external_run_dir(cwd: &Path, run_dir: &str) -> PathBuf {
+    let path = PathBuf::from(run_dir);
+    if path.is_absolute() {
+        path
+    } else {
+        cwd.join(path)
+    }
+}
+
+fn contains_infrastructure_failure_signal(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    [
+        "insufficient balance",
+        "insufficient-balance",
+        "insufficient_quota",
+        "quota exceeded",
+        "rate limit exceeded",
+        "too many requests",
+        "resource exhausted",
+    ]
+    .iter()
+    .any(|signal| text.contains(signal))
+        || text.contains("\"statuscode\":429")
+        || text.contains("\"statuscode\": 429")
+        || (text.contains("\"statuscode\":401") && text.contains("insufficient"))
+        || (text.contains("\"statuscode\": 401") && text.contains("insufficient"))
+}
+
 fn read_llm_judge_report(path: &Path) -> Result<BenchmarkJudgeReport> {
     serde_json::from_str(&std::fs::read_to_string(path).map_err(|error| {
         anyhow::anyhow!(
@@ -1211,6 +1280,7 @@ fn comparison_row_from_harness(row: &BenchmarkRunRow) -> ComparisonRow {
         attempts: 1,
         successful_attempts: usize::from(row.success),
         model: row.model.clone(),
+        reasoning_effort: row.reasoning_effort.clone(),
         completion_score: row.completion_score,
         quality_score: row.quality_score,
         process_score: row.process_score,
@@ -1250,6 +1320,7 @@ fn comparison_row_from_external_agent(row: &CodexCliBenchmarkRow) -> ComparisonR
         attempts: 1,
         successful_attempts: usize::from(row.success),
         model: row.model.clone(),
+        reasoning_effort: row.reasoning_effort.clone(),
         completion_score,
         quality_score,
         process_score,
@@ -1306,6 +1377,7 @@ fn average_comparison_group(rows: Vec<ComparisonRow>) -> ComparisonRow {
     row.attempts = attempts;
     row.successful_attempts = successful_attempts;
     row.model = join_unique(rows.iter().map(|row| row.model.as_str()));
+    row.reasoning_effort = join_unique(rows.iter().map(|row| row.reasoning_effort.as_str()));
     row.completion_score = average_f64(rows.iter().map(|row| row.completion_score));
     row.quality_score = average_f64(rows.iter().map(|row| row.quality_score));
     row.process_score = average_f64(rows.iter().map(|row| row.process_score));
@@ -1516,12 +1588,34 @@ struct EfficiencyComponents {
     duration_ms: f64,
     input_tokens: f64,
     tool_or_item_calls: f64,
-    source_load: f64,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct ScenarioBaseline {
     efficiency: EfficiencyComponents,
+}
+
+fn label_rows_by_reasoning(rows: &mut [ComparisonRow]) {
+    for row in rows {
+        let reasoning = row.reasoning_effort.trim();
+        if reasoning.is_empty() || reasoning == "unknown" {
+            continue;
+        }
+        row.runner = format!("{}/{}", row.runner, reasoning);
+    }
+}
+
+fn comparison_baseline_runner(rows: &[ComparisonRow], preferred_runner: &str) -> String {
+    if rows.iter().any(|row| row.runner == preferred_runner) {
+        return preferred_runner.to_string();
+    }
+    let prefix = format!("{preferred_runner}/");
+    rows.iter()
+        .map(|row| row.runner.as_str())
+        .filter(|runner| runner.starts_with(&prefix))
+        .min()
+        .unwrap_or(preferred_runner)
+        .to_string()
 }
 
 fn apply_comparison_indices(rows: &mut [ComparisonRow], baseline_runner: &str) {
@@ -1582,23 +1676,30 @@ fn scenario_baselines(
 }
 
 fn raw_benchmark_index(row: &ComparisonRow, raw_efficiency: f64) -> f64 {
-    let quality_points = quality_gate(row) * 0.8;
-    let efficiency_points = raw_efficiency * 0.35;
-    (quality_points + efficiency_points).max(0.0)
+    let resource_multiplier = raw_efficiency / 100.0;
+    (quality_gate(row) * resource_multiplier).max(0.0)
 }
 
 fn raw_efficiency_index(row: &ComparisonRow, baseline: &ScenarioBaseline) -> f64 {
     let row_efficiency = efficiency_components(row);
-    efficiency_ratio(baseline.efficiency.duration_ms, row_efficiency.duration_ms) * 25.0
-        + efficiency_ratio(
-            baseline.efficiency.input_tokens,
-            row_efficiency.input_tokens,
-        ) * 20.0
-        + efficiency_ratio(
-            baseline.efficiency.tool_or_item_calls,
-            row_efficiency.tool_or_item_calls,
-        ) * 10.0
-        + efficiency_ratio(baseline.efficiency.source_load, row_efficiency.source_load) * 5.0
+    resource_efficiency_multiplier(baseline.efficiency, row_efficiency) * 100.0
+}
+
+fn resource_efficiency_multiplier(
+    baseline: EfficiencyComponents,
+    value: EfficiencyComponents,
+) -> f64 {
+    const DURATION_WEIGHT: f64 = 0.7;
+    const INPUT_TOKEN_WEIGHT: f64 = 0.2;
+    const TOOL_CALL_WEIGHT: f64 = 0.1;
+    const OUTLIER_DAMPING: f64 = 0.5;
+
+    let resource_ratio = positive_ratio(baseline.duration_ms, value.duration_ms)
+        .powf(DURATION_WEIGHT)
+        * positive_ratio(baseline.input_tokens, value.input_tokens).powf(INPUT_TOKEN_WEIGHT)
+        * positive_ratio(baseline.tool_or_item_calls, value.tool_or_item_calls)
+            .powf(TOOL_CALL_WEIGHT);
+    resource_ratio.powf(OUTLIER_DAMPING)
 }
 
 fn quality_gate(row: &ComparisonRow) -> f64 {
@@ -1614,20 +1715,11 @@ fn efficiency_components(row: &ComparisonRow) -> EfficiencyComponents {
         duration_ms: row.duration_ms.max(1) as f64,
         input_tokens: row.input_tokens.max(1) as f64,
         tool_or_item_calls: row.tool_or_item_calls.max(1) as f64,
-        source_load: source_load(row.source_files, row.source_bytes),
     }
 }
 
-fn efficiency_ratio(baseline: f64, value: f64) -> f64 {
-    (baseline.max(1.0) / value.max(1.0)).sqrt()
-}
-
-fn source_load(files: u64, bytes: u64) -> f64 {
-    if files == 0 && bytes == 0 {
-        1.0
-    } else {
-        bytes as f64 + files as f64 * 500.0
-    }
+fn positive_ratio(baseline: f64, value: f64) -> f64 {
+    baseline.max(1.0) / value.max(1.0)
 }
 
 trait AverageIterator: Iterator<Item = f64> + Sized {
@@ -2063,7 +2155,7 @@ fn compare_comparison_rows(left: &ComparisonRow, right: &ComparisonRow) -> Order
 
 fn comparison_rows_to_csv(rows: &[ComparisonRow]) -> String {
     let mut csv = String::from(
-        "runner,suite,scenario,model,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_exit_code,validation_timed_out,duration_ms,tool_or_item_calls,input_tokens,output_tokens,source_files,source_bytes,failure_points,source,completion_score,quality_score,process_score,llm_solution_score,llm_process_score,llm_confidence,llm_notes,efficiency_index,benchmark_index\n",
+        "runner,suite,scenario,model,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_exit_code,validation_timed_out,duration_ms,tool_or_item_calls,input_tokens,output_tokens,source_files,source_bytes,failure_points,reasoning_effort,source,completion_score,quality_score,process_score,llm_solution_score,llm_process_score,llm_confidence,llm_notes,efficiency_index,benchmark_index\n",
     );
     for row in rows {
         let values = [
@@ -2087,6 +2179,7 @@ fn comparison_rows_to_csv(rows: &[ComparisonRow]) -> String {
             row.source_files.to_string(),
             row.source_bytes.to_string(),
             row.failure_points.clone(),
+            row.reasoning_effort.clone(),
             row.source.clone(),
             row.completion_score.to_string(),
             row.quality_score.to_string(),
@@ -2253,6 +2346,35 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
         "runner_quality_score_averages",
         "opencode",
     );
+    let spark_present = runner_family_present(rows, "spark-harness");
+    let codex_present = runner_family_present(rows, "codex-cli");
+    let opencode_present = runner_family_present(rows, "opencode");
+    let spark_index_text = metric_display(spark_index, spark_present);
+    let codex_index_text = metric_display(codex_index, codex_present);
+    let opencode_index_text = metric_display(opencode_index, opencode_present);
+    let spark_completion_text = metric_display(spark_completion, spark_present);
+    let codex_completion_text = metric_display(codex_completion, codex_present);
+    let opencode_completion_text = metric_display(opencode_completion, opencode_present);
+    let spark_quality_text = metric_display(spark_quality, spark_present);
+    let codex_quality_text = metric_display(codex_quality, codex_present);
+    let opencode_quality_text = metric_display(opencode_quality, opencode_present);
+    let spark_duration_text = duration_display(spark_duration, spark_present);
+    let codex_duration_text = duration_display(codex_duration, codex_present);
+    let opencode_duration_text = duration_display(opencode_duration, opencode_present);
+    let spark_calls_text = metric_display(spark_calls, spark_present);
+    let codex_calls_text = metric_display(codex_calls, codex_present);
+    let opencode_calls_text = metric_display(opencode_calls, opencode_present);
+    let spark_tokens_text = metric_display(spark_tokens, spark_present);
+    let codex_tokens_text = metric_display(codex_tokens, codex_present);
+    let opencode_tokens_text = metric_display(opencode_tokens, opencode_present);
+    let spark_pressure_text = metric_display(spark_pressure, spark_present);
+    let codex_pressure_text = metric_display(codex_pressure, codex_present);
+    let opencode_pressure_text = metric_display(opencode_pressure, opencode_present);
+    let opencode_placeholder_note = if opencode_present {
+        String::new()
+    } else {
+        "<p class=\"note\">OpenCode has no valid row in this comparison. Provider/API infrastructure failures such as insufficient balance, quota, or rate-limit errors are excluded instead of being scored as agent output.</p>".to_string()
+    };
     let mut html = format!(
         r#"<!doctype html>
 <html lang="en">
@@ -2304,13 +2426,13 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
 <section class="verdict">
 <div>Outcome on matched scenarios: <strong>{}</strong> wins this comparison.</div>
 <div>Matched rows: <strong>{}</strong>. New coverage rows outside the shared Codex CLI set: <strong>{}</strong>.</div>
-<div>Spark Benchmark Index: <strong>{:.1}</strong>. Codex CLI baseline: <strong>{:.1}</strong>. OpenCode: <strong>{:.1}</strong>. Completion: <strong>{:.1}</strong> / <strong>{:.1}</strong> / <strong>{:.1}</strong>.</div>
+<div>Spark Benchmark Index: <strong>{}</strong>. Codex CLI baseline: <strong>{}</strong>. OpenCode: <strong>{}</strong>. Completion: <strong>{}</strong> / <strong>{}</strong> / <strong>{}</strong>.</div>
 </section>
 <section class="metric-grid">
-<div class="metric"><strong>{:.1}</strong><span>Spark Benchmark Index on matched scenarios</span></div>
-<div class="metric"><strong>{:.1}</strong><span>Codex CLI baseline index on matched scenarios</span></div>
-<div class="metric"><strong>{:.1}</strong><span>OpenCode Benchmark Index on matched scenarios</span></div>
-<div class="metric"><strong>{:.1}</strong><span>Spark process score on matched scenarios</span></div>
+<div class="metric"><strong>{}</strong><span>Spark Benchmark Index on matched scenarios</span></div>
+<div class="metric"><strong>{}</strong><span>Codex CLI baseline index on matched scenarios</span></div>
+<div class="metric"><strong>{}</strong><span>OpenCode Benchmark Index on matched scenarios</span></div>
+<div class="metric"><strong>{}</strong><span>Spark process score on matched scenarios</span></div>
 </section>
 "#,
         html_escape(suite),
@@ -2318,51 +2440,52 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
         html_escape(winner),
         matched_rows,
         unmatched_rows,
-        spark_index,
-        codex_index,
-        opencode_index,
-        spark_completion,
-        codex_completion,
-        opencode_completion,
-        spark_index,
-        codex_index,
-        opencode_index,
-        spark_pressure
+        spark_index_text,
+        codex_index_text,
+        opencode_index_text,
+        spark_completion_text,
+        codex_completion_text,
+        opencode_completion_text,
+        spark_index_text,
+        codex_index_text,
+        opencode_index_text,
+        spark_pressure_text
     );
+    html.push_str(&opencode_placeholder_note);
     let _ = write!(
         html,
         "<h2>Evidence Ledger</h2><div class=\"ledger\"><table><thead><tr><th>Metric</th><th>Spark Harness</th><th>Codex CLI</th><th>OpenCode</th><th>Readout</th></tr></thead><tbody>\
-         <tr><td>Benchmark Index</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Codex CLI matched scenarios normalize to 100; other runners can rank above or below that baseline.</td></tr>\
-         <tr><td>Completion</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Completion is bounded and gates failed runs below successful runs.</td></tr>\
-         <tr><td>Quality</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Quality reflects artifact, validation, and footprint checks available for the scenario.</td></tr>\
+         <tr><td>Benchmark Index</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>Codex CLI matched scenarios normalize to 100; other runners can rank above or below that baseline.</td></tr>\
+         <tr><td>Completion</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>Completion is bounded and gates failed runs below successful runs.</td></tr>\
+         <tr><td>Quality</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>Quality reflects artifact, validation, and footprint checks available for the scenario.</td></tr>\
          <tr><td>Average duration</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>\
-         <tr><td>Average tool/items</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td></tr>\
-         <tr><td>Average input tokens</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Token counts are reported when the runner exposes them.</td></tr>\
-         <tr><td>Process score</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Process penalties are applied after the efficiency index so retries and pressure remain visible.</td></tr>\
+         <tr><td>Average tool/items</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>\
+         <tr><td>Average input tokens</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>Token counts are reported when the runner exposes them.</td></tr>\
+         <tr><td>Process score</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>Process penalties are applied after the efficiency index so retries and pressure remain visible.</td></tr>\
          </tbody></table></div>",
-        spark_index,
-        codex_index,
-        opencode_index,
-        spark_completion,
-        codex_completion,
-        opencode_completion,
-        spark_quality,
-        codex_quality,
-        opencode_quality,
-        format_ms(spark_duration),
-        format_ms(codex_duration),
-        format_ms(opencode_duration),
+        spark_index_text,
+        codex_index_text,
+        opencode_index_text,
+        spark_completion_text,
+        codex_completion_text,
+        opencode_completion_text,
+        spark_quality_text,
+        codex_quality_text,
+        opencode_quality_text,
+        spark_duration_text,
+        codex_duration_text,
+        opencode_duration_text,
         duration_readout(spark_duration, codex_duration),
-        spark_calls,
-        codex_calls,
-        opencode_calls,
+        spark_calls_text,
+        codex_calls_text,
+        opencode_calls_text,
         tool_items_readout(spark_calls, codex_calls),
-        spark_tokens,
-        codex_tokens,
-        opencode_tokens,
-        spark_pressure,
-        codex_pressure,
-        opencode_pressure
+        spark_tokens_text,
+        codex_tokens_text,
+        opencode_tokens_text,
+        spark_pressure_text,
+        codex_pressure_text,
+        opencode_pressure_text
     );
     if unmatched_rows > 0 {
         let _ = write!(
@@ -2542,10 +2665,10 @@ fn comparison_delta_table(rows: &[ComparisonRow]) -> String {
         "<div class=\"ledger\"><table><thead><tr><th>Scenario</th><th>Spark vs Codex duration</th><th>Token ratio</th><th>Tool ratio</th><th>Index delta</th></tr></thead><tbody>",
     );
     for (scenario, rows) in by_scenario {
-        let Some(spark) = rows.iter().find(|row| row.runner == "spark-harness") else {
+        let Some(spark) = comparison_row_for_runner(&rows, "spark-harness") else {
             continue;
         };
-        let Some(codex) = rows.iter().find(|row| row.runner == "codex-cli") else {
+        let Some(codex) = comparison_row_for_runner(&rows, "codex-cli") else {
             continue;
         };
         let duration_delta = spark.duration_ms as i128 - codex.duration_ms as i128;
@@ -2570,6 +2693,22 @@ fn comparison_delta_table(rows: &[ComparisonRow]) -> String {
     html
 }
 
+fn comparison_row_for_runner<'a>(
+    rows: &'a [&ComparisonRow],
+    runner: &str,
+) -> Option<&'a ComparisonRow> {
+    rows.iter()
+        .copied()
+        .find(|row| row.runner == runner)
+        .or_else(|| {
+            let prefix = format!("{runner}/");
+            rows.iter()
+                .copied()
+                .filter(|row| row.runner.starts_with(&prefix))
+                .max_by(|left, right| compare_comparison_rows(left, right))
+        })
+}
+
 fn scenario_family(scenario: &str) -> &'static str {
     match scenario {
         "repo-survey"
@@ -2578,12 +2717,18 @@ fn scenario_family(scenario: &str) -> &'static str {
         | "steamnetworklib-survey"
         | "s1api-survey" => "Survey",
         "tool-recovery" | "shell-recovery" => "Terminal and tool recovery",
-        "file-edit" | "precise-patch" | "github-issue-bugfix" => "Precise edit",
+        "file-edit"
+        | "precise-patch"
+        | "github-issue-bugfix"
+        | "rust-failing-test-bugfix"
+        | "typescript-reducer-bugfix" => "Precise edit",
         "file-ops" | "multi-file-patch" | "config-migration" => "Multi-file coordination",
         "github-issue-triage" => "Issue triage",
         "technical-essay" => "Long-form writing",
         "ops-report" => "Data analysis",
-        "react-calculator-scaffold" | "rust-log-analyzer-scaffold" => "Project scaffold",
+        "react-calculator-scaffold" | "rust-log-analyzer-scaffold" | "rust-notes-tui-scaffold" => {
+            "Project scaffold"
+        }
         "natural-compaction" | "compaction-pressure" => "Context pressure",
         _ => "General",
     }
@@ -2606,6 +2751,12 @@ fn scenario_question(scenario: &str) -> &'static str {
         "file-edit" => "Can it make a scoped edit and verify the changed file?",
         "precise-patch" => "Can it patch one branch without over-editing nearby logic?",
         "github-issue-bugfix" => "Can it solve a GitHub-style issue with a scoped tested fix?",
+        "rust-failing-test-bugfix" => {
+            "Can it fix a Rust bug with failing tests and Cargo validation?"
+        }
+        "typescript-reducer-bugfix" => {
+            "Can it fix a TypeScript reducer bug with failing tests and Bun validation?"
+        }
         "github-issue-triage" => "Can it investigate an issue and write a grounded triage note?",
         "file-ops" => "Can it create, rename, search, and verify files?",
         "multi-file-patch" => "Can it update code and docs consistently across files?",
@@ -2614,6 +2765,7 @@ fn scenario_question(scenario: &str) -> &'static str {
         "ops-report" => "Can it compute metrics and write an operational readout?",
         "react-calculator-scaffold" => "Can it build and browser-verify a React TypeScript app?",
         "rust-log-analyzer-scaffold" => "Can it scaffold and validate a small Rust CLI project?",
+        "rust-notes-tui-scaffold" => "Can it scaffold and validate a vim-style Rust notes CLI?",
         "natural-compaction" | "compaction-pressure" => {
             "Can it keep useful context under pressure?"
         }
@@ -2622,11 +2774,45 @@ fn scenario_question(scenario: &str) -> &'static str {
 }
 
 fn aggregate_metric(aggregate: &Value, field: &str, runner: &str) -> f64 {
-    aggregate
+    if let Some(value) = aggregate
         .get(field)
         .and_then(|value| value.get(runner))
         .and_then(Value::as_f64)
+    {
+        return value;
+    }
+    let Some(object) = aggregate.get(field).and_then(Value::as_object) else {
+        return 0.0;
+    };
+    let prefix = format!("{runner}/");
+    object
+        .iter()
+        .filter_map(|(key, value)| key.starts_with(&prefix).then(|| value.as_f64()).flatten())
+        .pipe_average()
+        .map(round1)
         .unwrap_or(0.0)
+}
+
+fn runner_family_present(rows: &[ComparisonRow], family: &str) -> bool {
+    let prefix = format!("{family}/");
+    rows.iter()
+        .any(|row| row.runner == family || row.runner.starts_with(&prefix))
+}
+
+fn metric_display(value: f64, present: bool) -> String {
+    if present {
+        format!("{value:.1}")
+    } else {
+        "n/a".to_string()
+    }
+}
+
+fn duration_display(value: f64, present: bool) -> String {
+    if present {
+        format_ms(value)
+    } else {
+        "n/a".to_string()
+    }
 }
 
 fn format_ms(value: f64) -> String {
@@ -2708,22 +2894,31 @@ fn comparison_score_svg(rows: &[ComparisonRow]) -> String {
     }
     let mut scenarios = Vec::<String>::new();
     let mut rows_by_scenario = BTreeMap::<String, Vec<&ComparisonRow>>::new();
-    for row in indexed_rows {
+    for row in &indexed_rows {
         if !rows_by_scenario.contains_key(&row.scenario) {
             scenarios.push(row.scenario.clone());
         }
         rows_by_scenario
             .entry(row.scenario.clone())
             .or_default()
-            .push(row);
+            .push(*row);
     }
+    let mut runners = indexed_rows
+        .iter()
+        .map(|row| row.runner.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    runners.sort_by(|left, right| compare_runner_labels(left, right));
     let label_width = 250usize;
     let chart_width = 650usize;
     let right_padding = 96usize;
-    let legend_height = 44usize;
-    let group_height = 78usize;
+    let legend_columns = 3usize;
+    let legend_rows = runners.len().div_ceil(legend_columns).max(1);
+    let legend_height = 34usize + legend_rows * 24usize;
     let bar_height = 13usize;
     let bar_gap = 7usize;
+    let group_height = 38usize + runners.len() * (bar_height + bar_gap);
     let height = legend_height + 28 + scenarios.len() * group_height;
     let max_index = rows_by_scenario
         .values()
@@ -2739,18 +2934,20 @@ fn comparison_score_svg(rows: &[ComparisonRow]) -> String {
     svg.push_str(
         r##"<text x="0" y="16" font-size="12" font-weight="700" fill="#344154">Runner</text>"##,
     );
-    for (index, runner) in ["spark-harness", "codex-cli", "opencode"]
-        .iter()
-        .enumerate()
-    {
-        let x = 74 + index * 142;
+    for (index, runner) in runners.iter().enumerate() {
+        let column = index % legend_columns;
+        let row = index / legend_columns;
+        let x = 74 + column * 185;
+        let y = 5 + row * 24;
         let _ = write!(
             svg,
-            r##"<rect x="{}" y="5" width="12" height="12" rx="3" fill="{}"/><text x="{}" y="16" font-size="12" fill="#344154">{}</text>"##,
+            r##"<rect x="{}" y="{}" width="12" height="12" rx="3" fill="{}"/><text x="{}" y="{}" font-size="12" fill="#344154">{}</text>"##,
             x,
+            y,
             runner_color(runner),
             x + 18,
-            runner_label(runner)
+            y + 11,
+            html_escape(&runner_label(runner))
         );
     }
     for tick in [
@@ -2790,10 +2987,7 @@ fn comparison_score_svg(rows: &[ComparisonRow]) -> String {
         let Some(scenario_rows) = rows_by_scenario.get(scenario) else {
             continue;
         };
-        for (runner_index, runner) in ["spark-harness", "codex-cli", "opencode"]
-            .iter()
-            .enumerate()
-        {
+        for (runner_index, runner) in runners.iter().enumerate() {
             let Some(row) = scenario_rows.iter().find(|row| row.runner == *runner) else {
                 continue;
             };
@@ -2816,7 +3010,7 @@ fn comparison_score_svg(rows: &[ComparisonRow]) -> String {
                 r##"<text x="{}" y="{}" font-size="10" text-anchor="end" fill="#596579">{}</text><rect x="{}" y="{}" width="{}" height="{}" rx="4" fill="{}"><title>{} / {} benchmark index {:.1}</title></rect><text x="{}" y="{}" font-size="11" text-anchor="{}" fill="#263244">{:.1}</text>"##,
                 label_width - 12,
                 y + 10,
-                runner_label(runner),
+                html_escape(&runner_label(runner)),
                 label_width,
                 y,
                 width,
@@ -2837,7 +3031,7 @@ fn comparison_score_svg(rows: &[ComparisonRow]) -> String {
 }
 
 fn runner_color(runner: &str) -> &'static str {
-    match runner {
+    match runner_family(runner) {
         "spark-harness" => "#2f7da1",
         "opencode" => "#b8832f",
         "codex-cli" => "#7b6bb7",
@@ -2845,12 +3039,52 @@ fn runner_color(runner: &str) -> &'static str {
     }
 }
 
-fn runner_label(runner: &str) -> &'static str {
-    match runner {
+fn runner_label(runner: &str) -> String {
+    let family = match runner_family(runner) {
         "spark-harness" => "Spark",
         "codex-cli" => "Codex CLI",
         "opencode" => "OpenCode",
         _ => "Runner",
+    };
+    if let Some((_, variant)) = runner.split_once('/') {
+        format!("{family} {variant}")
+    } else {
+        family.to_string()
+    }
+}
+
+fn runner_family(runner: &str) -> &str {
+    runner
+        .split_once('/')
+        .map(|(family, _)| family)
+        .unwrap_or(runner)
+}
+
+fn compare_runner_labels(left: &str, right: &str) -> Ordering {
+    runner_family_order(left)
+        .cmp(&runner_family_order(right))
+        .then_with(|| runner_variant_order(left).cmp(&runner_variant_order(right)))
+        .then_with(|| left.cmp(right))
+}
+
+fn runner_family_order(runner: &str) -> usize {
+    match runner_family(runner) {
+        "spark-harness" => 0,
+        "codex-cli" => 1,
+        "opencode" => 2,
+        _ => 3,
+    }
+}
+
+fn runner_variant_order(runner: &str) -> usize {
+    match runner.split_once('/').map(|(_, variant)| variant) {
+        Some("minimal") => 0,
+        Some("low") => 1,
+        Some("medium") => 2,
+        Some("high") => 3,
+        Some("xhigh") | Some("max") => 4,
+        Some(_) => 5,
+        None => 0,
     }
 }
 
@@ -2871,6 +3105,15 @@ fn benchmark_suite(summary: &Value) -> Option<&str> {
 
 fn scenario_name(summary: &Value) -> Option<&str> {
     string_at(summary, "/trace_metadata/context/profile_scenario/name")
+}
+
+fn reasoning_effort(summary: &Value) -> Option<&str> {
+    string_at(summary, "/trace_metadata/reasoning_effort").or_else(|| {
+        string_at(
+            summary,
+            "/trace_metadata/context/profile_scenario/reasoning_effort",
+        )
+    })
 }
 
 fn diagnostic_kinds(summary: &Value) -> Vec<String> {
@@ -2943,6 +3186,7 @@ mod tests {
             attempts: 1,
             successful_attempts: 1,
             model: "spark".to_string(),
+            reasoning_effort: "medium".to_string(),
             completion_score: 100.0,
             quality_score: 100.0,
             process_score: 100.0,
@@ -2975,6 +3219,48 @@ mod tests {
         rows
     }
 
+    fn external_report_json(runner: &str, scenario: &str) -> Value {
+        json!({
+            "rows": [{
+                "runner": runner,
+                "suite": "real-world",
+                "scenario": scenario,
+                "repeat_index": 1,
+                "model": "gpt-test",
+                "score": 100.0,
+                "success": true,
+                "exit_code": 0,
+                "timed_out": false,
+                "duration_ms": 10000,
+                "json_events": 1,
+                "non_json_stdout_lines": 0,
+                "stderr_lines": 0,
+                "actionable_stderr_lines": 0,
+                "turns": 1,
+                "completed_items": 1,
+                "agent_messages": 1,
+                "tool_items": 1,
+                "input_tokens": 1000,
+                "cached_input_tokens": 0,
+                "output_tokens": 100,
+                "reasoning_output_tokens": 0,
+                "expected_artifacts": 0,
+                "present_artifacts": 0,
+                "validation_exit_code": 0,
+                "validation_timed_out": false,
+                "browser_validation_present": false,
+                "browser_validation_exit_code": null,
+                "browser_validation_timed_out": false,
+                "browser_screenshot": "",
+                "source_files": 1,
+                "source_bytes": 100,
+                "final_message_chars": 100,
+                "run_dir": "run",
+                "failure_points": ""
+            }]
+        })
+    }
+
     fn benchmark_row() -> BenchmarkRunRow {
         BenchmarkRunRow {
             run_id: "run-1".to_string(),
@@ -2982,6 +3268,7 @@ mod tests {
             suite: "real-world".to_string(),
             scenario: "react-calculator-scaffold".to_string(),
             model: "spark".to_string(),
+            reasoning_effort: "medium".to_string(),
             completion_score: 0.0,
             quality_score: 0.0,
             process_score: 0.0,
@@ -3025,6 +3312,21 @@ mod tests {
             diagnostics: String::new(),
             failure_points: String::new(),
         }
+    }
+
+    #[test]
+    fn reasoning_effort_reads_nested_profile_scenario_metadata() {
+        let summary = json!({
+            "trace_metadata": {
+                "context": {
+                    "profile_scenario": {
+                        "reasoning_effort": "high"
+                    }
+                }
+            }
+        });
+
+        assert_eq!(reasoning_effort(&summary), Some("high"));
     }
 
     #[test]
@@ -3136,6 +3438,51 @@ mod tests {
     }
 
     #[test]
+    fn external_agent_reader_merges_multiple_report_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let first = dir.path().join("codex-one.json");
+        let second = dir.path().join("codex-two.json");
+        std::fs::write(
+            &first,
+            serde_json::to_string(&external_report_json("codex-cli", "one")).expect("json"),
+        )
+        .expect("write first report");
+        std::fs::write(
+            &second,
+            serde_json::to_string(&external_report_json("codex-cli", "two")).expect("json"),
+        )
+        .expect("write second report");
+
+        let rows = read_external_agent_report_rows(dir.path(), &[first, second], "Codex CLI")
+            .expect("rows");
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].scenario, "one");
+        assert_eq!(rows[1].scenario, "two");
+    }
+
+    #[test]
+    fn external_agent_reader_skips_infrastructure_api_failures() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let run_dir = dir.path().join("run-infra-error");
+        std::fs::create_dir_all(&run_dir).expect("run dir");
+        std::fs::write(
+            run_dir.join("stdout.jsonl"),
+            r#"{"type":"error","error":{"name":"APIError","data":{"message":"Insufficient balance. Manage your billing here.","statusCode":401}}}"#,
+        )
+        .expect("stdout");
+
+        let mut report = external_report_json("opencode", "one");
+        report["rows"][0]["run_dir"] = json!("run-infra-error");
+        let path = dir.path().join("opencode.json");
+        std::fs::write(&path, serde_json::to_string(&report).expect("json")).expect("write report");
+
+        let rows = read_external_agent_report_rows(dir.path(), &[path], "opencode").expect("rows");
+
+        assert!(rows.is_empty());
+    }
+
+    #[test]
     fn codex_cli_scenario_indices_can_vary_while_average_stays_baseline() {
         let codex_one = comparison_row("codex-cli", "one");
         let mut codex_two = comparison_row("codex-cli", "two");
@@ -3200,6 +3547,23 @@ mod tests {
             .unwrap();
 
         assert!(spark.benchmark_index.unwrap() > 100.0);
+    }
+
+    #[test]
+    fn benchmark_index_reflects_quality_gated_throughput() {
+        let codex = comparison_row("codex-cli", "one");
+        let mut spark = comparison_row("spark-harness", "one");
+        spark.duration_ms = 1_000;
+        spark.input_tokens = 1_000;
+        spark.tool_or_item_calls = 2;
+
+        let rows = indexed(vec![spark, codex]);
+        let spark = rows
+            .iter()
+            .find(|row| row.runner == "spark-harness")
+            .unwrap();
+
+        assert!(spark.benchmark_index.unwrap() >= 200.0);
     }
 
     #[test]
@@ -3398,6 +3762,7 @@ mod tests {
             scenario: "technical-essay".to_string(),
             repeat_index: 1,
             model: "opencode-default".to_string(),
+            reasoning_effort: "medium".to_string(),
             score: 0.0,
             success: true,
             exit_code: Some(0),
@@ -3441,6 +3806,7 @@ mod tests {
     fn benchmark_index_chart_excludes_coverage_only_rows() {
         let rows = indexed(vec![
             comparison_row("codex-cli", "one"),
+            comparison_row("opencode", "one"),
             comparison_row("spark-harness", "one"),
             comparison_row("spark-harness", "shell-recovery"),
         ]);
@@ -3452,5 +3818,27 @@ mod tests {
         assert!(svg.contains(">OpenCode<"));
         assert!(svg.contains("one / spark-harness"));
         assert!(!svg.contains("shell-recovery / spark-harness"));
+    }
+
+    #[test]
+    fn benchmark_index_chart_renders_grouped_runner_variants() {
+        let mut rows = vec![
+            comparison_row("codex-cli/low", "one"),
+            comparison_row("opencode/low", "one"),
+            comparison_row("spark-harness/high", "one"),
+            comparison_row("spark-harness/low", "one"),
+            comparison_row("spark-harness/medium", "one"),
+        ];
+        for row in &mut rows {
+            row.benchmark_index = Some(100.0);
+        }
+        let svg = comparison_score_svg(&rows);
+
+        assert!(svg.contains(">Spark low<"));
+        assert!(svg.contains(">Spark medium<"));
+        assert!(svg.contains(">Spark high<"));
+        assert!(svg.contains(">Codex CLI low<"));
+        assert!(svg.contains(">OpenCode low<"));
+        assert!(svg.contains("one / spark-harness/medium"));
     }
 }

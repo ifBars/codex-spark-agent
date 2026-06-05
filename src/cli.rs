@@ -331,15 +331,18 @@ pub(crate) enum Command {
         /// Include every matching harness run instead of only the newest run per scenario.
         #[arg(long)]
         all_runs: bool,
-        /// Codex CLI benchmark JSON report to compare against.
+        /// Codex CLI benchmark JSON report(s) to compare against. Repeat to merge reports.
+        #[arg(long, required = true)]
+        codex_cli_report: Vec<PathBuf>,
+        /// Optional opencode benchmark JSON report(s) to include in the comparison. Repeat to merge reports.
         #[arg(long)]
-        codex_cli_report: PathBuf,
-        /// Optional opencode benchmark JSON report to include in the comparison.
-        #[arg(long)]
-        opencode_report: Option<PathBuf>,
+        opencode_report: Vec<PathBuf>,
         /// Optional LLM judge JSON report to fold into solution/process scoring.
         #[arg(long)]
         llm_judge_report: Option<PathBuf>,
+        /// Split runner labels by recorded reasoning effort, e.g. spark-harness/high.
+        #[arg(long)]
+        group_by_reasoning: bool,
         /// Directory where comparison JSON, CSV, and HTML files are written.
         #[arg(long, default_value = ".spark-profile/benchmarks")]
         output_dir: PathBuf,
@@ -419,8 +422,18 @@ pub(crate) enum ProfileScenarioKind {
     ReactCalculatorScaffold,
     /// Repo-local Rust log analyzer CLI scaffold in an ignored fixture folder.
     RustLogAnalyzerScaffold,
+    /// Repo-local Rust modal notes CLI scaffold in an ignored fixture folder.
+    RustNotesTuiScaffold,
     /// GitHub-style bugfix task with issue context, code, tests, and validation.
     GithubIssueBugfix,
+    /// Rust failing-test bugfix task with objective Cargo validation.
+    RustFailingTestBugfix,
+    /// TypeScript reducer bugfix task with objective Bun validation.
+    #[value(
+        name = "typescript-reducer-bugfix",
+        alias = "type-script-reducer-bugfix"
+    )]
+    TypeScriptReducerBugfix,
     /// GitHub-style issue triage task that writes a grounded investigation note.
     GithubIssueTriage,
     /// Sourced essay task that checks long-form writing from provided materials.
@@ -516,7 +529,10 @@ impl ProfileScenarioKind {
             Self::BenchmarkDesignSurvey => "benchmark-design-survey",
             Self::ReactCalculatorScaffold => "react-calculator-scaffold",
             Self::RustLogAnalyzerScaffold => "rust-log-analyzer-scaffold",
+            Self::RustNotesTuiScaffold => "rust-notes-tui-scaffold",
             Self::GithubIssueBugfix => "github-issue-bugfix",
+            Self::RustFailingTestBugfix => "rust-failing-test-bugfix",
+            Self::TypeScriptReducerBugfix => "typescript-reducer-bugfix",
             Self::GithubIssueTriage => "github-issue-triage",
             Self::TechnicalEssay => "technical-essay",
             Self::ConfigMigration => "config-migration",
@@ -558,11 +574,14 @@ impl ProfileBenchmarkSuiteKind {
             Self::Scaffolding => &[
                 ProfileScenarioKind::ReactCalculatorScaffold,
                 ProfileScenarioKind::RustLogAnalyzerScaffold,
+                ProfileScenarioKind::RustNotesTuiScaffold,
             ],
             Self::Editing => &[
                 ProfileScenarioKind::PrecisePatch,
                 ProfileScenarioKind::MultiFilePatch,
                 ProfileScenarioKind::GithubIssueBugfix,
+                ProfileScenarioKind::RustFailingTestBugfix,
+                ProfileScenarioKind::TypeScriptReducerBugfix,
                 ProfileScenarioKind::ConfigMigration,
             ],
             Self::RealWorld => &[
@@ -575,9 +594,12 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::PrecisePatch,
                 ProfileScenarioKind::MultiFilePatch,
                 ProfileScenarioKind::GithubIssueBugfix,
+                ProfileScenarioKind::RustFailingTestBugfix,
+                ProfileScenarioKind::TypeScriptReducerBugfix,
                 ProfileScenarioKind::ConfigMigration,
                 ProfileScenarioKind::ReactCalculatorScaffold,
                 ProfileScenarioKind::RustLogAnalyzerScaffold,
+                ProfileScenarioKind::RustNotesTuiScaffold,
                 ProfileScenarioKind::OpsReport,
                 ProfileScenarioKind::ToolRecovery,
             ],

@@ -162,9 +162,16 @@ fn matched_scenario_pairs(
     by_scenario
         .into_iter()
         .filter(|(_, runners)| {
-            runners.contains_key("spark-harness") && runners.contains_key("codex-cli")
+            has_runner_family(runners, "spark-harness") && has_runner_family(runners, "codex-cli")
         })
         .collect()
+}
+
+fn has_runner_family(runners: &BTreeMap<String, ComparisonRunRow>, family: &str) -> bool {
+    let prefix = format!("{family}/");
+    runners
+        .keys()
+        .any(|runner| runner == family || runner.starts_with(&prefix))
 }
 
 fn judge_prompt(
@@ -179,6 +186,24 @@ fn judge_prompt(
             "artifacts": run_artifact_evidence(cwd, &row.source)?,
         }));
     }
+    let score_template = runs
+        .keys()
+        .map(|runner| {
+            json!({
+                "runner": runner,
+                "solution_score": 0,
+                "process_score": 0,
+                "confidence": 0,
+                "notes": "short evidence-backed note",
+            })
+        })
+        .collect::<Vec<_>>();
+    let verdict_options = runs
+        .keys()
+        .map(String::as_str)
+        .chain(["tie", "inconclusive"])
+        .collect::<Vec<_>>()
+        .join("|");
     Ok(format!(
         r#"You are judging a benchmark comparison for real coding-agent work.
 
@@ -200,15 +225,13 @@ Rubric:
 - Do not award points for post-run repair; the run evidence here is the benchmark run plus external validation only.
 - Do not use or cite request counts or turn counts; those protocol units are intentionally not comparable between runners.
 - Compare runners on the same scenario only.
+- Return exactly one scores entry for every runner present in the evidence JSON.
 
 Return JSON only with this exact shape:
 {{
   "scenario": "{scenario}",
-  "scores": [
-    {{"runner": "spark-harness", "solution_score": 0, "process_score": 0, "confidence": 0, "notes": "short evidence-backed note"}},
-    {{"runner": "codex-cli", "solution_score": 0, "process_score": 0, "confidence": 0, "notes": "short evidence-backed note"}}
-  ],
-  "verdict": "spark-harness|codex-cli|tie|inconclusive",
+  "scores": {},
+  "verdict": "{}",
   "rationale": "short comparison rationale"
 }}
 
@@ -216,6 +239,8 @@ Evidence JSON:
 ```json
 {}
 ```"#,
+        serde_json::to_string_pretty(&score_template)?,
+        verdict_options,
         serde_json::to_string_pretty(&evidence)?
     ))
 }
@@ -475,6 +500,38 @@ mod tests {
     }
 
     #[test]
+    fn judge_prompt_requires_scores_for_all_present_runners() {
+        let cwd = tempfile::tempdir().expect("tempdir");
+        let mut runs = BTreeMap::new();
+        for runner in ["spark-harness", "codex-cli", "opencode"] {
+            runs.insert(runner.to_string(), comparison_row(runner, "repo-survey"));
+        }
+
+        let prompt = judge_prompt(cwd.path(), "repo-survey", &runs).expect("build prompt");
+
+        assert!(prompt.contains("Return exactly one scores entry for every runner"));
+        assert!(prompt.contains(r#""runner": "opencode""#));
+        assert!(prompt.contains("codex-cli|opencode|spark-harness|tie|inconclusive"));
+    }
+
+    #[test]
+    fn matched_scenario_pairs_accept_grouped_runner_variants() {
+        let rows = vec![
+            comparison_row("spark-harness/high", "repo-survey"),
+            comparison_row("codex-cli/low", "repo-survey"),
+            comparison_row("opencode/low", "repo-survey"),
+            comparison_row("spark-harness/high", "technical-essay"),
+        ];
+
+        let matched = matched_scenario_pairs(&rows);
+
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].0, "repo-survey");
+        assert!(matched[0].1.contains_key("spark-harness/high"));
+        assert!(matched[0].1.contains_key("codex-cli/low"));
+    }
+
+    #[test]
     fn parse_judge_response_clamps_scores() {
         let parsed = parse_judge_response(
             "precise-patch",
@@ -511,5 +568,28 @@ mod tests {
         assert!(text.contains("extra_calls_after_satisfied"));
         assert!(text.contains("duration_ms"));
         assert!(text.contains("tool_calls"));
+    }
+
+    fn comparison_row(runner: &str, scenario: &str) -> ComparisonRunRow {
+        ComparisonRunRow {
+            runner: runner.to_string(),
+            suite: "real-world".to_string(),
+            scenario: scenario.to_string(),
+            model: "model".to_string(),
+            completion_score: 100.0,
+            quality_score: 90.0,
+            process_score: 90.0,
+            success: true,
+            validation_exit_code: Some(0),
+            validation_timed_out: false,
+            duration_ms: 1_000,
+            tool_or_item_calls: 1,
+            input_tokens: 1_000,
+            output_tokens: 100,
+            source_files: 1,
+            source_bytes: 100,
+            failure_points: String::new(),
+            source: ".".to_string(),
+        }
     }
 }
