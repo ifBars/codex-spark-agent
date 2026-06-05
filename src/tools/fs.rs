@@ -40,8 +40,7 @@ pub(super) fn fs_read(cwd: &Path, args: Value) -> Result<ToolResult> {
         .get("line_numbers")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let content = std::fs::read_to_string(&full)
-        .with_context(|| format!("failed to read {}", full.display()))?;
+    let content = read_text_file(&full)?;
     let total_lines = content.lines().count();
     let start_index = (offset - 1) as usize;
     let (lines, returned_lines, content_truncated) = bounded_read_window(
@@ -308,6 +307,9 @@ fn fs_search_with_ripgrep(cwd: &Path, options: &SearchOptions<'_>) -> Result<Opt
         .arg("2M")
         .arg("--max-depth")
         .arg(options.max_depth.to_string());
+    if is_generated_discovery_path(&options.root) {
+        command.arg("--no-ignore");
+    }
     if !options.regex {
         command.arg("--fixed-strings");
     }
@@ -444,7 +446,7 @@ fn fs_search_in_process(cwd: &Path, options: &SearchOptions<'_>) -> Result<ToolR
         if !metadata.is_file() || metadata.len() > 2_000_000 {
             continue;
         }
-        let Ok(content) = std::fs::read_to_string(&path) else {
+        let Ok(content) = read_text_file(&path) else {
             continue;
         };
         files_scanned += 1;
@@ -535,9 +537,6 @@ impl SearchMatcher {
 }
 
 fn add_ripgrep_skip_globs(command: &mut Command, root: &Path) {
-    if is_generated_discovery_dir(root) {
-        return;
-    }
     for directory in [
         ".git",
         ".hg",
@@ -546,28 +545,37 @@ fn add_ripgrep_skip_globs(command: &mut Command, root: &Path) {
         "node_modules",
         ".spark",
         ".spark-runs",
+        ".spark-scenarios",
         ".spark-profile",
         ".spark-codex",
     ] {
+        if path_has_component(root, directory) {
+            continue;
+        }
         command.arg("--glob").arg(format!("!**/{directory}/**"));
     }
 }
 
-fn is_generated_discovery_dir(path: &Path) -> bool {
-    matches!(
-        path.file_name().and_then(|name| name.to_str()),
-        Some(
-            ".git"
-                | ".hg"
-                | ".svn"
-                | "target"
-                | "node_modules"
-                | ".spark"
-                | ".spark-runs"
-                | ".spark-profile"
-                | ".spark-codex"
-        )
-    )
+fn is_generated_discovery_path(path: &Path) -> bool {
+    [
+        ".git",
+        ".hg",
+        ".svn",
+        "target",
+        "node_modules",
+        ".spark",
+        ".spark-runs",
+        ".spark-scenarios",
+        ".spark-profile",
+        ".spark-codex",
+    ]
+    .iter()
+    .any(|directory| path_has_component(path, directory))
+}
+
+fn path_has_component(path: &Path, name: &str) -> bool {
+    path.components()
+        .any(|component| component.as_os_str().to_string_lossy() == name)
 }
 
 fn path_from_ripgrep(cwd: &Path, path_text: &str) -> PathBuf {
@@ -586,8 +594,7 @@ fn search_snippet(
     context_lines: usize,
 ) -> Result<(String, bool)> {
     if !file_cache.contains_key(path) {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read matched file {}", path.display()))?;
+        let content = read_text_file(path)?;
         file_cache.insert(
             path.to_path_buf(),
             content.lines().map(str::to_string).collect(),
@@ -635,6 +642,42 @@ fn search_result(
         }),
         error: None,
     }
+}
+
+fn read_text_file(path: &Path) -> Result<String> {
+    let bytes =
+        std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    decode_text_bytes(&bytes).with_context(|| format!("failed to decode {}", path.display()))
+}
+
+fn decode_text_bytes(bytes: &[u8]) -> Result<String> {
+    if let Some(content) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        return String::from_utf8(content.to_vec()).context("invalid utf-8 text");
+    }
+    if let Some(content) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        return decode_utf16_bytes(content, true);
+    }
+    if let Some(content) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        return decode_utf16_bytes(content, false);
+    }
+    String::from_utf8(bytes.to_vec()).context("invalid utf-8 text")
+}
+
+fn decode_utf16_bytes(bytes: &[u8], little_endian: bool) -> Result<String> {
+    if bytes.len() % 2 != 0 {
+        anyhow::bail!("invalid utf-16 text: odd byte length");
+    }
+    let units = bytes
+        .chunks_exact(2)
+        .map(|chunk| {
+            if little_endian {
+                u16::from_le_bytes([chunk[0], chunk[1]])
+            } else {
+                u16::from_be_bytes([chunk[0], chunk[1]])
+            }
+        })
+        .collect::<Vec<_>>();
+    String::from_utf16(&units).context("invalid utf-16 text")
 }
 
 trait EmptyStrFallback {

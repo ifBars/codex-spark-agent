@@ -166,6 +166,26 @@ fn fs_read_reports_window_metadata() {
 }
 
 #[test]
+fn fs_read_decodes_utf16le_with_bom() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut bytes = vec![0xFF, 0xFE];
+    for unit in "total=5\r\nfailed=2\r\n".encode_utf16() {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
+    std::fs::write(dir.path().join("summary.txt"), bytes).expect("write summary");
+
+    let result = fs_read(
+        dir.path(),
+        json!({"path": "summary.txt", "line_numbers": false}),
+    )
+    .expect("read");
+
+    let content = result.data["content"].as_str().expect("content");
+    assert!(content.contains("total=5"));
+    assert!(content.contains("failed=2"));
+}
+
+#[test]
 fn fs_read_defaults_to_small_windows_and_clamps_large_limits() {
     let dir = tempfile::tempdir().expect("tempdir");
     let content = (1..=600)
@@ -299,8 +319,14 @@ fn fs_list_clamps_limits_and_caps_result_chars() {
 fn fs_search_skips_generated_dirs_during_recursive_discovery() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir_all(dir.path().join("target")).expect("create target");
+    std::fs::create_dir_all(dir.path().join(".spark-scenarios/case")).expect("create scenarios");
     std::fs::create_dir_all(dir.path().join("src")).expect("create src");
     std::fs::write(dir.path().join("target/generated.txt"), "needle\n").expect("write target");
+    std::fs::write(
+        dir.path().join(".spark-scenarios/case/generated.txt"),
+        "needle\n",
+    )
+    .expect("write scenario");
     std::fs::write(dir.path().join("src/main.rs"), "needle\n").expect("write src");
 
     let result = fs_search(
@@ -315,6 +341,33 @@ fn fs_search_skips_generated_dirs_during_recursive_discovery() {
         .collect::<Vec<_>>();
 
     assert_eq!(paths, vec!["src/main.rs"]);
+}
+
+#[test]
+fn fs_search_allows_explicit_generated_fixture_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".spark-scenarios/case")).expect("create scenario");
+    std::fs::write(
+        dir.path().join(".spark-scenarios/case/source.txt"),
+        "needle\n",
+    )
+    .expect("write scenario");
+
+    let result = fs_search(
+        dir.path(),
+        json!({"query": "needle", "path": ".spark-scenarios/case", "max_depth": 4}),
+    )
+    .expect("search");
+    let matches = result.data["matches"].as_array().expect("matches");
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["path"], ".spark-scenarios/case/source.txt");
+    assert!(
+        result.data["files_scanned"]
+            .as_u64()
+            .expect("files scanned")
+            >= 1
+    );
 }
 
 #[test]

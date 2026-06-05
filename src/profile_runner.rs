@@ -162,40 +162,6 @@ pub(crate) async fn run_profile_scenarios(
                         .await
                         {
                             eprintln!("warning: failed to run scenario validation: {error:#}");
-                        } else if options.benchmark_suite.is_some()
-                            && let Some(validation) =
-                                scenario_validation::read_scenario_validation(&latest)
-                            && validation_failed(&validation)
-                            && let Some(repair_prompt) =
-                                validation_repair_prompt(*scenario, &validation)
-                        {
-                            println!(
-                                "scenario_validation_repair scenario={} prompt_chars={}",
-                                scenario.name(),
-                                repair_prompt.len()
-                            );
-                            skill_commands::load_skill_mentions(
-                                &mut runner,
-                                &scenario_cwd,
-                                &repair_prompt,
-                            )
-                            .await?;
-                            if let Err(error) = runner.run(&repair_prompt).await {
-                                run_result = Err(error);
-                                break;
-                            }
-                            if let Err(error) =
-                                scenario_validation::run_and_write_scenario_validation(
-                                    &scenario_cwd,
-                                    &latest,
-                                    *scenario,
-                                )
-                                .await
-                            {
-                                eprintln!(
-                                    "warning: failed to rerun scenario validation after repair: {error:#}"
-                                );
-                            }
                         }
                         if options.benchmark_suite.is_some() {
                             latest =
@@ -293,68 +259,65 @@ fn benchmark_startup_context(cwd: &std::path::Path) -> Result<Option<String>> {
 }
 
 fn agents_context_message(cwd: &std::path::Path) -> Result<Option<String>> {
-    let path = cwd.join("AGENTS.md");
-    if !path.exists() {
+    let files = agents_instruction_files(cwd);
+    if files.is_empty() {
         return Ok(None);
     }
 
-    let instructions = std::fs::read_to_string(&path)
-        .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", path.display()))?;
-    Ok(Some(format!(
-        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\n{}\n</INSTRUCTIONS>",
-        cwd.display(),
-        instructions.trim_end()
-    )))
-}
-
-fn validation_failed(validation: &scenario_validation::ScenarioValidationResult) -> bool {
-    validation.timed_out
-        || validation.exit_code != Some(0)
-        || validation
-            .browser
-            .as_ref()
-            .is_some_and(|browser| browser.timed_out || browser.exit_code != Some(0))
-}
-
-fn validation_repair_prompt(
-    scenario: ProfileScenarioKind,
-    validation: &scenario_validation::ScenarioValidationResult,
-) -> Option<String> {
-    let scope = match scenario {
-        ProfileScenarioKind::ReactCalculatorScaffold => ".spark-scenarios/react-calculator",
-        ProfileScenarioKind::RustLogAnalyzerScaffold => ".spark-scenarios/rust-log-analyzer",
-        _ => return None,
-    };
-    let mut details = String::new();
-    details.push_str("Primary validation stdout:\n");
-    details.push_str(&bounded_excerpt(&validation.stdout, 2_000));
-    details.push_str("\nPrimary validation stderr:\n");
-    details.push_str(&bounded_excerpt(&validation.stderr, 3_000));
-    if let Some(browser) = &validation.browser {
-        details.push_str("\nBrowser validation stdout:\n");
-        details.push_str(&bounded_excerpt(&browser.stdout, 2_000));
-        details.push_str("\nBrowser validation stderr:\n");
-        details.push_str(&bounded_excerpt(&browser.stderr, 4_000));
+    let mut sections = Vec::with_capacity(files.len());
+    for path in files {
+        let instructions = std::fs::read_to_string(&path)
+            .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", path.display()))?;
+        let dir = path.parent().unwrap_or(cwd);
+        sections.push(format!(
+            "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\n{}\n</INSTRUCTIONS>",
+            dir.display(),
+            instructions.trim_end()
+        ));
     }
-
-    Some(format!(
-        "The external scenario validation failed after your implementation.\n\
-         Work only under {scope}. Inspect the relevant files, fix the concrete failure below, and rerun the relevant validation command if possible.\n\
-         For React browser failures, the app must render in Vite and the browser smoke must be able to click 1 + 2 = and see display result 3.\n\
-         Do not rewrite the project from scratch unless the smallest fix is unclear.\n\n\
-         Validation evidence:\n{details}\n\n\
-         Finish with what you changed and whether validation now passes."
-    ))
+    Ok(Some(sections.join("\n\n--- project-doc ---\n\n")))
 }
 
-fn bounded_excerpt(value: &str, max_chars: usize) -> String {
-    let trimmed = value.trim();
-    if trimmed.chars().count() <= max_chars {
-        return trimmed.to_string();
+fn agents_instruction_files(cwd: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let root = project_root(cwd);
+    let mut dirs = Vec::new();
+    let mut current = root.clone();
+    dirs.push(current.clone());
+    while current != cwd {
+        let Ok(stripped) = cwd.strip_prefix(&current) else {
+            break;
+        };
+        let Some(next_component) = stripped.components().next() else {
+            break;
+        };
+        current = current.join(next_component.as_os_str());
+        dirs.push(current.clone());
     }
-    let mut excerpt = trimmed.chars().take(max_chars).collect::<String>();
-    excerpt.push_str("\n[truncated]");
-    excerpt
+    dirs.into_iter()
+        .filter_map(|dir| {
+            let override_path = dir.join("AGENTS.override.md");
+            if override_path.exists() {
+                Some(override_path)
+            } else {
+                let agents_path = dir.join("AGENTS.md");
+                agents_path.exists().then_some(agents_path)
+            }
+        })
+        .collect()
+}
+
+fn project_root(cwd: &std::path::Path) -> std::path::PathBuf {
+    let mut current = cwd;
+    loop {
+        if current.join(".git").exists() {
+            return current.to_path_buf();
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent;
+    }
+    cwd.to_path_buf()
 }
 
 #[cfg(test)]
@@ -387,6 +350,24 @@ mod tests {
         let context = agents_context_message(dir.path()).expect("agents context");
 
         assert!(context.is_none());
+    }
+
+    #[test]
+    fn agents_context_message_prefers_override_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("AGENTS.md"), "Use bun.").expect("write agents");
+        std::fs::write(
+            dir.path().join("AGENTS.override.md"),
+            "Override instructions.",
+        )
+        .expect("write override");
+
+        let context = agents_context_message(dir.path())
+            .expect("agents context")
+            .expect("context should exist");
+
+        assert!(context.contains("Override instructions."));
+        assert!(!context.contains("Use bun."));
     }
 
     #[test]

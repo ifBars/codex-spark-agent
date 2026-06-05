@@ -133,6 +133,7 @@ pub(super) fn should_skip_discovery_dir(root: &Path, path: &Path) -> bool {
                     | "node_modules"
                     | ".spark"
                     | ".spark-runs"
+                    | ".spark-scenarios"
                     | ".spark-profile"
                     | ".spark-codex"
             )

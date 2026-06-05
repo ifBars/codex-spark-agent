@@ -1,4 +1,7 @@
-use crate::chat::{command_args, parse_mode};
+use crate::chat::{
+    command_args, matching_slash_commands, parse_mode, slash_command_token,
+    unknown_slash_command_warning,
+};
 mod profile_scenarios;
 
 use crate::DEFAULT_COMPACT_AFTER_CHARS;
@@ -29,6 +32,17 @@ fn slash_commands_match_exactly_or_with_whitespace() {
     assert_eq!(command_args("/profiles", "/profile"), None);
     assert_eq!(command_args("/skills", "/skill"), None);
     assert_eq!(command_args("/sessions", "/session"), None);
+}
+
+#[test]
+fn slash_command_helpers_match_menu_and_unknown_warning() {
+    assert_eq!(slash_command_token("/sk load rust"), Some("/sk"));
+    assert_eq!(slash_command_token("hello /sk"), None);
+
+    let matches = matching_slash_commands("/sk");
+    assert!(matches.iter().any(|command| command.name == "/skill"));
+    assert!(matches.iter().any(|command| command.name == "/skills"));
+    assert!(unknown_slash_command_warning("/wat now").contains("unknown command: /wat"));
 }
 
 #[test]

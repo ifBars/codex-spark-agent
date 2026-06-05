@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "ratatui-tui": {
+      "source": "blacktop/dotfiles",
+      "sourceType": "github",
+      "skillPath": "ai/skills/ratatui-tui/SKILL.md",
+      "computedHash": "a31ee419403518c0f3be85279cc3636c5d0a2415311f982766376cd5f1c4a9c5"
+    }
+  }
+}

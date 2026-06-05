@@ -4,6 +4,91 @@ use std::path::PathBuf;
 
 use crate::{agent, chat_tui, sessions, skill_commands, tools};
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SlashCommand {
+    pub(crate) name: &'static str,
+    pub(crate) usage: &'static str,
+    pub(crate) description: &'static str,
+}
+
+pub(crate) const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        name: "/help",
+        usage: "/help",
+        description: "Show command help",
+    },
+    SlashCommand {
+        name: "/status",
+        usage: "/status",
+        description: "Show context and profiler status",
+    },
+    SlashCommand {
+        name: "/mode",
+        usage: "/mode [ask|work]",
+        description: "Show or change tool mode",
+    },
+    SlashCommand {
+        name: "/ask",
+        usage: "/ask",
+        description: "Switch to read-only mode",
+    },
+    SlashCommand {
+        name: "/work",
+        usage: "/work",
+        description: "Switch to work mode",
+    },
+    SlashCommand {
+        name: "/profile",
+        usage: "/profile",
+        description: "Show profiler summary JSON",
+    },
+    SlashCommand {
+        name: "/compact",
+        usage: "/compact",
+        description: "Compact conversation context now",
+    },
+    SlashCommand {
+        name: "/session",
+        usage: "/session [list|open|new|use|rename|delete]",
+        description: "Manage saved sessions",
+    },
+    SlashCommand {
+        name: "/new",
+        usage: "/new [name]",
+        description: "Start a new session",
+    },
+    SlashCommand {
+        name: "/skill",
+        usage: "/skill [load|refresh|list]",
+        description: "Manage skills",
+    },
+    SlashCommand {
+        name: "/skills",
+        usage: "/skills",
+        description: "List available skills",
+    },
+    SlashCommand {
+        name: "/save",
+        usage: "/save",
+        description: "Save the current session",
+    },
+    SlashCommand {
+        name: "/clear",
+        usage: "/clear",
+        description: "Clear the conversation",
+    },
+    SlashCommand {
+        name: "/exit",
+        usage: "/exit",
+        description: "Exit chat",
+    },
+    SlashCommand {
+        name: "/quit",
+        usage: "/quit",
+        description: "Exit chat",
+    },
+];
+
 pub(crate) async fn run_interactive_chat(
     runner: &mut agent::AgentRunner,
     session_name: Option<String>,
@@ -162,6 +247,11 @@ pub(crate) async fn run_line_interactive_chat(
             continue;
         }
 
+        if input.starts_with('/') {
+            eprintln!("{}", unknown_slash_command_warning(input));
+            continue;
+        }
+
         let mut save_after_run = false;
         if let Err(error) = skill_commands::load_skill_mentions(runner, &cwd, input).await {
             eprintln!("error: {error:#}");
@@ -187,6 +277,30 @@ pub(crate) fn command_args<'a>(input: &'a str, command: &str) -> Option<&'a str>
     input
         .strip_prefix(command)
         .and_then(|rest| rest.strip_prefix(char::is_whitespace))
+}
+
+pub(crate) fn slash_command_token(input: &str) -> Option<&str> {
+    let trimmed = input.trim_start();
+    if !trimmed.starts_with('/') {
+        return None;
+    }
+    Some(trimmed.split_whitespace().next().unwrap_or(trimmed))
+}
+
+pub(crate) fn matching_slash_commands(input: &str) -> Vec<SlashCommand> {
+    let Some(token) = slash_command_token(input) else {
+        return Vec::new();
+    };
+    SLASH_COMMANDS
+        .iter()
+        .copied()
+        .filter(|command| command.name.starts_with(token))
+        .collect()
+}
+
+pub(crate) fn unknown_slash_command_warning(input: &str) -> String {
+    let token = slash_command_token(input).unwrap_or(input.trim());
+    format!("unknown command: {token}. Type /help for commands.")
 }
 
 pub(crate) fn parse_mode(input: &str) -> Option<tools::AgentMode> {

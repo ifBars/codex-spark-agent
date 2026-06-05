@@ -21,6 +21,7 @@ pub(crate) struct CodexCliBenchmarkOptions {
     pub(crate) suite: ProfileBenchmarkSuiteKind,
     pub(crate) model: String,
     pub(crate) repeat: usize,
+    pub(crate) scenarios: Vec<ProfileScenarioKind>,
     pub(crate) timeout_seconds: u64,
     pub(crate) ignore_user_config: bool,
     pub(crate) isolated_codex_home: bool,
@@ -94,12 +95,13 @@ pub(crate) async fn run_codex_cli_benchmark(
 
     let started_at = unix_millis();
     let mut rows = Vec::new();
-    for scenario in options.suite.scenarios() {
+    let scenarios = selected_scenarios(options.suite, &options.scenarios)?;
+    for scenario in scenarios {
         for repeat_index in 1..=options.repeat {
             let scenario_cwd = benchmark_workspace::create_benchmark_workspace(
                 &options.cwd,
                 options.suite.name(),
-                *scenario,
+                scenario,
                 repeat_index,
             )?;
             println!(
@@ -107,15 +109,10 @@ pub(crate) async fn run_codex_cli_benchmark(
                 scenario.name(),
                 scenario_cwd.display()
             );
-            profile_scenarios::prepare_profile_scenario(&scenario_cwd, *scenario)?;
-            let row = run_codex_cli_scenario(
-                &options,
-                &scenario_cwd,
-                *scenario,
-                repeat_index,
-                started_at,
-            )
-            .await?;
+            profile_scenarios::prepare_profile_scenario(&scenario_cwd, scenario)?;
+            let row =
+                run_codex_cli_scenario(&options, &scenario_cwd, scenario, repeat_index, started_at)
+                    .await?;
             println!(
                 "codex_cli scenario={} repeat={}/{} score={:.1} success={} duration_ms={} failure_points={}",
                 row.scenario,
@@ -492,6 +489,22 @@ fn expected_artifacts(scenario: ProfileScenarioKind) -> Vec<&'static str> {
             ".spark-scenarios/rust-log-analyzer/src/lib.rs",
             ".spark-scenarios/rust-log-analyzer/src/main.rs",
         ],
+        ProfileScenarioKind::GithubIssueBugfix => {
+            vec![".spark-scenarios/github-issue-bugfix/src/quote.ts"]
+        }
+        ProfileScenarioKind::GithubIssueTriage => {
+            vec![".spark-scenarios/github-issue-triage/triage.md"]
+        }
+        ProfileScenarioKind::TechnicalEssay => vec![".spark-scenarios/technical-essay/essay.md"],
+        ProfileScenarioKind::ConfigMigration => vec![
+            ".spark-scenarios/config-migration/config/app.json",
+            ".spark-scenarios/config-migration/src/config.ts",
+            ".spark-scenarios/config-migration/docs/config.md",
+        ],
+        ProfileScenarioKind::OpsReport => vec![
+            ".spark-scenarios/ops-report/metrics.json",
+            ".spark-scenarios/ops-report/report.md",
+        ],
         _ => Vec::new(),
     }
 }
@@ -634,6 +647,30 @@ fn aggregate_rows(suite: &str, rows: &[CodexCliBenchmarkRow]) -> Value {
     })
 }
 
+fn selected_scenarios(
+    suite: ProfileBenchmarkSuiteKind,
+    requested: &[ProfileScenarioKind],
+) -> Result<Vec<ProfileScenarioKind>> {
+    if requested.is_empty() {
+        return Ok(suite.scenarios().to_vec());
+    }
+    let suite_scenarios = suite.scenarios();
+    let invalid = requested
+        .iter()
+        .copied()
+        .filter(|scenario| !suite_scenarios.contains(scenario))
+        .map(ProfileScenarioKind::name)
+        .collect::<Vec<_>>();
+    if !invalid.is_empty() {
+        anyhow::bail!(
+            "scenario filter includes scenario(s) outside suite '{}': {}",
+            suite.name(),
+            invalid.join(", ")
+        );
+    }
+    Ok(requested.to_vec())
+}
+
 fn unix_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -738,5 +775,27 @@ mod tests {
             3
         );
         assert!(expected_artifacts(ProfileScenarioKind::RepoSurvey).is_empty());
+    }
+
+    #[test]
+    fn selected_scenarios_must_belong_to_suite() {
+        let selected = selected_scenarios(
+            ProfileBenchmarkSuiteKind::RealWorld,
+            &[
+                ProfileScenarioKind::ShellRecovery,
+                ProfileScenarioKind::PrecisePatch,
+                ProfileScenarioKind::MultiFilePatch,
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(selected.len(), 3);
+        assert!(
+            selected_scenarios(
+                ProfileBenchmarkSuiteKind::Editing,
+                &[ProfileScenarioKind::ShellRecovery]
+            )
+            .is_err()
+        );
     }
 }

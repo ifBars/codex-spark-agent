@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{
-    DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS, DEFAULT_MODEL, DEFAULT_SCENARIO_TARGET_TOKENS, tools,
+    DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS, DEFAULT_MODEL, DEFAULT_SCENARIO_TARGET_TOKENS,
+    benchmark_judge::DEFAULT_JUDGE_MODEL, tools,
 };
 
 #[derive(Debug, Parser)]
@@ -198,6 +199,9 @@ pub(crate) enum Command {
         /// Run each scenario in the suite this many times.
         #[arg(long, default_value_t = 1)]
         repeat: usize,
+        /// Run only these scenarios from the selected suite. Repeat to select multiple scenarios.
+        #[arg(long = "scenario", value_enum)]
+        scenarios: Vec<ProfileScenarioKind>,
         /// Disable trace files for this benchmark run.
         #[arg(long)]
         no_trace: bool,
@@ -255,6 +259,9 @@ pub(crate) enum Command {
         /// Run each scenario in the suite this many times.
         #[arg(long, default_value_t = 1)]
         repeat: usize,
+        /// Run only these scenarios from the selected suite. Repeat to select multiple scenarios.
+        #[arg(long = "scenario", value_enum)]
+        scenarios: Vec<ProfileScenarioKind>,
         /// Kill a Codex CLI scenario attempt after this many seconds.
         #[arg(long, default_value_t = 900)]
         timeout_seconds: u64,
@@ -285,9 +292,33 @@ pub(crate) enum Command {
         /// Codex CLI benchmark JSON report to compare against.
         #[arg(long)]
         codex_cli_report: PathBuf,
+        /// Optional LLM judge JSON report to fold into solution/process scoring.
+        #[arg(long)]
+        llm_judge_report: Option<PathBuf>,
         /// Directory where comparison JSON, CSV, and HTML files are written.
         #[arg(long, default_value = ".spark-profile/benchmarks")]
         output_dir: PathBuf,
+    },
+    /// Use Spark as an LLM judge over an existing benchmark comparison report.
+    BenchmarkJudge {
+        /// Benchmark comparison JSON report to review.
+        #[arg(long)]
+        comparison_report: PathBuf,
+        /// Workspace root used to resolve relative run evidence paths.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Model slug to use for the judge pass.
+        #[arg(long, default_value = DEFAULT_JUDGE_MODEL)]
+        model: String,
+        /// Reasoning effort for the judge model.
+        #[arg(long, value_enum, default_value_t = JudgeReasoningEffort::High)]
+        reasoning_effort: JudgeReasoningEffort,
+        /// Directory where judge JSON is written.
+        #[arg(long, default_value = ".spark-profile/benchmarks")]
+        output_dir: PathBuf,
+        /// Maximum matched scenarios to judge. Omit to judge every matched scenario.
+        #[arg(long)]
+        limit: Option<usize>,
     },
 }
 
@@ -322,6 +353,12 @@ pub(crate) enum ProfileScenarioKind {
     FileOps,
     /// Scratch-file task that intentionally exercises native tool failure and recovery.
     ToolRecovery,
+    /// Shell task that intentionally exercises command failure, stdout/stderr inspection, and recovery.
+    ShellRecovery,
+    /// Small code edit task that checks precise patching without unrelated rewrites.
+    PrecisePatch,
+    /// Coordinated multi-file edit task that checks consistency across code and docs.
+    MultiFilePatch,
     /// Repo-local skill mention task that exercises automatic skill compile/load.
     SkillUse,
     /// Open-ended SteamNetworkLib repo explanation that stresses redundant read/search behavior.
@@ -337,6 +374,16 @@ pub(crate) enum ProfileScenarioKind {
     ReactCalculatorScaffold,
     /// Repo-local Rust log analyzer CLI scaffold in an ignored fixture folder.
     RustLogAnalyzerScaffold,
+    /// GitHub-style bugfix task with issue context, code, tests, and validation.
+    GithubIssueBugfix,
+    /// GitHub-style issue triage task that writes a grounded investigation note.
+    GithubIssueTriage,
+    /// Sourced essay task that checks long-form writing from provided materials.
+    TechnicalEssay,
+    /// Config migration task that coordinates JSON, TypeScript, and docs.
+    ConfigMigration,
+    /// Operational data report task with computed metrics and narrative summary.
+    OpsReport,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -347,6 +394,8 @@ pub(crate) enum ProfileBenchmarkSuiteKind {
     Survey,
     /// New-project scaffolding scenarios in ignored fixture folders.
     Scaffolding,
+    /// Precise and coordinated code-edit scenarios.
+    Editing,
     /// Mixed real-world suite for broad Spark profiling.
     RealWorld,
 }
@@ -369,6 +418,21 @@ pub(crate) enum TraceSort {
     RequestMs,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum JudgeReasoningEffort {
+    High,
+    Xhigh,
+}
+
+impl JudgeReasoningEffort {
+    pub(crate) fn wire_value(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Xhigh => "xhigh",
+        }
+    }
+}
+
 impl ProfileScenarioKind {
     pub(crate) fn name(self) -> &'static str {
         match self {
@@ -378,6 +442,9 @@ impl ProfileScenarioKind {
             Self::FileEdit => "file-edit",
             Self::FileOps => "file-ops",
             Self::ToolRecovery => "tool-recovery",
+            Self::ShellRecovery => "shell-recovery",
+            Self::PrecisePatch => "precise-patch",
+            Self::MultiFilePatch => "multi-file-patch",
             Self::SkillUse => "skill-use",
             Self::SteamNetworkLibSurvey => "steamnetworklib-survey",
             Self::S1ApiSurvey => "s1api-survey",
@@ -385,6 +452,11 @@ impl ProfileScenarioKind {
             Self::BenchmarkDesignSurvey => "benchmark-design-survey",
             Self::ReactCalculatorScaffold => "react-calculator-scaffold",
             Self::RustLogAnalyzerScaffold => "rust-log-analyzer-scaffold",
+            Self::GithubIssueBugfix => "github-issue-bugfix",
+            Self::GithubIssueTriage => "github-issue-triage",
+            Self::TechnicalEssay => "technical-essay",
+            Self::ConfigMigration => "config-migration",
+            Self::OpsReport => "ops-report",
         }
     }
 }
@@ -395,6 +467,7 @@ impl ProfileBenchmarkSuiteKind {
             Self::Core => "core",
             Self::Survey => "survey",
             Self::Scaffolding => "scaffolding",
+            Self::Editing => "editing",
             Self::RealWorld => "real-world",
         }
     }
@@ -406,12 +479,15 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::FileEdit,
                 ProfileScenarioKind::FileOps,
                 ProfileScenarioKind::ToolRecovery,
+                ProfileScenarioKind::ShellRecovery,
                 ProfileScenarioKind::SkillUse,
             ],
             Self::Survey => &[
                 ProfileScenarioKind::RepoSurvey,
                 ProfileScenarioKind::RepoArchitectureSurvey,
                 ProfileScenarioKind::BenchmarkDesignSurvey,
+                ProfileScenarioKind::GithubIssueTriage,
+                ProfileScenarioKind::TechnicalEssay,
                 ProfileScenarioKind::SteamNetworkLibSurvey,
                 ProfileScenarioKind::S1ApiSurvey,
             ],
@@ -419,12 +495,26 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::ReactCalculatorScaffold,
                 ProfileScenarioKind::RustLogAnalyzerScaffold,
             ],
+            Self::Editing => &[
+                ProfileScenarioKind::PrecisePatch,
+                ProfileScenarioKind::MultiFilePatch,
+                ProfileScenarioKind::GithubIssueBugfix,
+                ProfileScenarioKind::ConfigMigration,
+            ],
             Self::RealWorld => &[
                 ProfileScenarioKind::RepoSurvey,
                 ProfileScenarioKind::RepoArchitectureSurvey,
                 ProfileScenarioKind::BenchmarkDesignSurvey,
+                ProfileScenarioKind::GithubIssueTriage,
+                ProfileScenarioKind::TechnicalEssay,
+                ProfileScenarioKind::ShellRecovery,
+                ProfileScenarioKind::PrecisePatch,
+                ProfileScenarioKind::MultiFilePatch,
+                ProfileScenarioKind::GithubIssueBugfix,
+                ProfileScenarioKind::ConfigMigration,
                 ProfileScenarioKind::ReactCalculatorScaffold,
                 ProfileScenarioKind::RustLogAnalyzerScaffold,
+                ProfileScenarioKind::OpsReport,
                 ProfileScenarioKind::ToolRecovery,
             ],
         }

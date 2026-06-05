@@ -36,6 +36,9 @@ pub(crate) enum AgentDisplayEvent {
     },
     Assistant(String),
     AssistantDelta(String),
+    ReasoningStart,
+    ReasoningSummary(String),
+    ReasoningFinish,
     CompactionStart {
         trigger: Option<String>,
         input_chars: usize,
@@ -220,6 +223,37 @@ impl AgentRunner {
                 events,
                 AgentDisplayEvent::AssistantDelta(text.to_string()),
             ),
+        }
+    }
+
+    pub(crate) fn emit_reasoning_start(&mut self) {
+        let event = AgentDisplayEvent::ReasoningStart;
+        match &mut self.display {
+            AgentDisplay::Plain | AgentDisplay::Markdown => {}
+            AgentDisplay::Buffered(events) => events.push(event),
+            AgentDisplay::Shared(events) => push_shared_display_event(events, event),
+        }
+    }
+
+    pub(crate) fn emit_reasoning_summary(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        let event = AgentDisplayEvent::ReasoningSummary(text.to_string());
+        match &mut self.display {
+            AgentDisplay::Plain | AgentDisplay::Markdown => {}
+            AgentDisplay::Buffered(events) => events.push(event),
+            AgentDisplay::Shared(events) => push_shared_display_event(events, event),
+        }
+    }
+
+    pub(crate) fn emit_reasoning_finish(&mut self) {
+        let event = AgentDisplayEvent::ReasoningFinish;
+        match &mut self.display {
+            AgentDisplay::Plain | AgentDisplay::Markdown => {}
+            AgentDisplay::Buffered(events) => events.push(event),
+            AgentDisplay::Shared(events) => push_shared_display_event(events, event),
         }
     }
 

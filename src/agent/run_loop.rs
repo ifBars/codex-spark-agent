@@ -4,7 +4,8 @@ use serde_json::{Value, json};
 use crate::agent::compaction::{compaction_trigger_for_turn, format_compaction_notice};
 use crate::agent::{AgentRunner, TOOL_ONLY_STREAK_COMPACTION_TRIGGER};
 use crate::client::{
-    function_calls, output_items_for_next_input, output_text_delta, response_text,
+    ReasoningDisplayUpdate, function_calls, output_items_for_next_input, output_text_delta,
+    reasoning_display_update, response_text,
 };
 use crate::tools::{builtin_tools, tools_for_mode};
 
@@ -120,6 +121,15 @@ impl AgentRunner {
             let mut streamed_text = String::new();
             let (response, raw) = match client
                 .responses_create_with_event_handler(&request_input, &tools, |event| {
+                    if let Some(update) = reasoning_display_update(event) {
+                        match update {
+                            ReasoningDisplayUpdate::Started => self.emit_reasoning_start(),
+                            ReasoningDisplayUpdate::Summary(text) => {
+                                self.emit_reasoning_summary(&text);
+                            }
+                            ReasoningDisplayUpdate::Finished => self.emit_reasoning_finish(),
+                        }
+                    }
                     if let Some(delta) = output_text_delta(event) {
                         streamed_text.push_str(delta);
                         self.emit_assistant_delta(delta);

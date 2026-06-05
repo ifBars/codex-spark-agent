@@ -3,6 +3,7 @@ use crate::profile_scenarios::{
     benchmark_profile_prompts, codex_cli_benchmark_prompt, prepare_profile_scenario,
     profile_scenario_expected_skills, profile_scenario_expected_tool_calls,
     profile_scenario_expected_tool_groups, profile_scenario_prompts,
+    profile_scenario_validation_command,
 };
 use crate::{APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS};
 
@@ -160,8 +161,7 @@ fn tool_recovery_scenario_exercises_failed_probe_then_recovery() {
     assert!(prompt.contains("Profile scenario: tool-recovery"));
     assert!(prompt.contains("missing-note.md"));
     assert!(prompt.contains("This path is intentionally missing"));
-    assert!(prompt.contains("Use fs.stat"));
-    assert!(prompt.contains("Use fs.write"));
+    assert!(prompt.contains("Recover by using fs.read"));
     assert!(prompt.contains("not cmd.exec"));
 }
 
@@ -202,6 +202,158 @@ fn tool_recovery_scenario_declares_expected_exact_tool_calls() {
         calls[1]["path"],
         ".spark-scenarios/tool-recovery/source/note.md"
     );
+}
+
+#[test]
+fn shell_recovery_scenario_exercises_terminal_error_recovery() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::ShellRecovery, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::ShellRecovery);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::ShellRecovery);
+
+    assert!(prompt.contains("Profile scenario: shell-recovery"));
+    assert!(prompt.contains("intentionally wrong command"));
+    assert!(prompt.contains("inspect stdout/stderr"));
+    assert_eq!(
+        groups,
+        vec![
+            vec!["cmd.exec"],
+            vec!["fs.list", "fs.search"],
+            vec!["fs.read"]
+        ]
+    );
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[0]["tool"], "cmd.exec");
+    assert_eq!(calls[1]["tool"], "cmd.exec");
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/shell-recovery/summary.txt"
+    );
+    assert!(profile_scenario_validation_command(ProfileScenarioKind::ShellRecovery).is_some());
+}
+
+#[test]
+fn shell_recovery_scenario_prepares_script_and_events_fixture() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::ShellRecovery)
+        .expect("prepare scenario");
+
+    let root = dir.path().join(".spark-scenarios").join("shell-recovery");
+    let events =
+        std::fs::read_to_string(root.join("data").join("events.csv")).expect("read events fixture");
+    let script = std::fs::read_to_string(root.join("tools").join("analyze-events.ps1"))
+        .expect("read script fixture");
+
+    assert!(events.contains("payments,failed"));
+    assert!(script.contains("top_service"));
+    assert!(!root.join("scripts").join("analyze-events.ps1").exists());
+}
+
+#[test]
+fn precise_patch_scenario_exercises_minimal_code_edit() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::PrecisePatch, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::PrecisePatch);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::PrecisePatch);
+
+    assert!(prompt.contains("Profile scenario: precise-patch"));
+    assert!(prompt.contains("without over-editing"));
+    assert!(prompt.contains("default branch still returns Unknown"));
+    assert_eq!(
+        groups,
+        vec![
+            vec!["fs.read"],
+            vec!["fs.edit", "fs.replace"],
+            vec!["fs.search"]
+        ]
+    );
+    assert_eq!(calls.len(), 4);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/precise-patch/tests/status_map.spec.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/precise-patch/src/status_map.ts"
+    );
+    assert_eq!(calls[2]["path"], ".spark-scenarios/precise-patch/src");
+    assert!(profile_scenario_validation_command(ProfileScenarioKind::PrecisePatch).is_some());
+}
+
+#[test]
+fn precise_patch_scenario_prepares_code_fixture() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::PrecisePatch)
+        .expect("prepare scenario");
+
+    let root = dir.path().join(".spark-scenarios").join("precise-patch");
+    let source =
+        std::fs::read_to_string(root.join("src").join("status_map.ts")).expect("read source");
+    let spec =
+        std::fs::read_to_string(root.join("tests").join("status_map.spec.md")).expect("read spec");
+
+    assert!(source.contains("case 'queued'"));
+    assert!(source.contains("return 'Unknown';"));
+    assert!(spec.contains("`queued` must render as `Queued`"));
+}
+
+#[test]
+fn multi_file_patch_scenario_exercises_coordinated_updates() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::MultiFilePatch, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::MultiFilePatch);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::MultiFilePatch);
+
+    assert!(prompt.contains("Profile scenario: multi-file-patch"));
+    assert!(prompt.contains("coordinate a small feature across multiple files"));
+    assert!(prompt.contains("Reports navigation item"));
+    assert_eq!(
+        groups,
+        vec![
+            vec!["fs.read"],
+            vec!["fs.edit", "fs.replace", "fs.write"],
+            vec!["fs.search"]
+        ]
+    );
+    assert_eq!(calls.len(), 4);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/multi-file-patch/src/routes.ts"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/multi-file-patch/src/navigation.ts"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/multi-file-patch/docs/routes.md"
+    );
+    assert_eq!(calls[3]["path"], ".spark-scenarios/multi-file-patch");
+    assert!(profile_scenario_validation_command(ProfileScenarioKind::MultiFilePatch).is_some());
+}
+
+#[test]
+fn multi_file_patch_scenario_prepares_code_and_docs_fixture() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::MultiFilePatch)
+        .expect("prepare scenario");
+
+    let root = dir.path().join(".spark-scenarios").join("multi-file-patch");
+    let routes = std::fs::read_to_string(root.join("src").join("routes.ts")).expect("routes");
+    let nav = std::fs::read_to_string(root.join("src").join("navigation.ts")).expect("navigation");
+    let docs = std::fs::read_to_string(root.join("docs").join("routes.md")).expect("docs");
+
+    assert!(routes.contains("settings"));
+    assert!(nav.contains("Settings"));
+    assert!(docs.contains("/settings"));
+    assert!(!routes.contains("reports"));
+    assert!(!nav.contains("Reports"));
 }
 
 #[test]
@@ -489,6 +641,15 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::RustLogAnalyzerScaffold
         ]
     );
+    assert_eq!(
+        ProfileBenchmarkSuiteKind::Editing.scenarios(),
+        &[
+            ProfileScenarioKind::PrecisePatch,
+            ProfileScenarioKind::MultiFilePatch,
+            ProfileScenarioKind::GithubIssueBugfix,
+            ProfileScenarioKind::ConfigMigration
+        ]
+    );
     assert!(
         ProfileBenchmarkSuiteKind::Survey
             .scenarios()
@@ -500,10 +661,85 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             .contains(&ProfileScenarioKind::ReactCalculatorScaffold)
     );
     assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::ShellRecovery)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::MultiFilePatch)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::GithubIssueBugfix)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::TechnicalEssay)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::OpsReport)
+    );
+    assert!(
         ProfileBenchmarkSuiteKind::Core
             .scenarios()
             .contains(&ProfileScenarioKind::ToolRecovery)
     );
+    assert!(
+        ProfileBenchmarkSuiteKind::Core
+            .scenarios()
+            .contains(&ProfileScenarioKind::ShellRecovery)
+    );
+}
+
+#[test]
+fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
+    let scenarios = [
+        (
+            ProfileScenarioKind::GithubIssueBugfix,
+            ".spark-scenarios/github-issue-bugfix/issue.md",
+            "annual quotes are undercharged",
+        ),
+        (
+            ProfileScenarioKind::GithubIssueTriage,
+            ".spark-scenarios/github-issue-triage/src/cachePolicy.ts",
+            "stale-while-revalidate=30",
+        ),
+        (
+            ProfileScenarioKind::TechnicalEssay,
+            ".spark-scenarios/technical-essay/brief.md",
+            "Operational Visibility Is a Product Feature",
+        ),
+        (
+            ProfileScenarioKind::ConfigMigration,
+            ".spark-scenarios/config-migration/migration.md",
+            "schema version 2",
+        ),
+        (
+            ProfileScenarioKind::OpsReport,
+            ".spark-scenarios/ops-report/data/tickets.csv",
+            "billing,P1,open,95",
+        ),
+    ];
+
+    for (scenario, path, expected) in scenarios {
+        let dir = tempfile::tempdir().expect("tempdir");
+        prepare_profile_scenario(dir.path(), scenario).expect("prepare scenario");
+        let content = std::fs::read_to_string(dir.path().join(path)).expect("fixture content");
+        assert!(
+            content.contains(expected),
+            "{scenario:?} fixture missing {expected}"
+        );
+        assert!(
+            profile_scenario_validation_command(scenario).is_some(),
+            "{scenario:?} should have deterministic validation"
+        );
+    }
 }
 
 #[test]

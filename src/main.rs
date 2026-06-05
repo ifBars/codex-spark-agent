@@ -1,5 +1,6 @@
 mod agent;
 mod auth;
+mod benchmark_judge;
 mod benchmark_results;
 mod benchmark_workspace;
 mod chat;
@@ -306,6 +307,7 @@ async fn main() -> Result<()> {
             max_turns,
             target_tokens,
             repeat,
+            scenarios,
             no_trace,
             no_profile,
             compact_after_chars,
@@ -328,8 +330,9 @@ async fn main() -> Result<()> {
                 max_input_tokens,
                 DEFAULT_MAX_INPUT_CHARS,
             )?;
+            let scenarios = selected_benchmark_scenarios(suite, &scenarios)?;
             profile_runner::run_profile_scenarios(
-                suite.scenarios(),
+                &scenarios,
                 profile_runner::ProfileRunOptions {
                     cwd,
                     model,
@@ -370,12 +373,22 @@ async fn main() -> Result<()> {
                 },
             )?;
             println!(
-                "benchmark_report suite={} rows={} avg_score={} json={} csv={} html={}",
+                "benchmark_report suite={} rows={} avg_completion={} avg_quality={} avg_process={} json={} csv={} html={}",
                 suite.name(),
                 report.rows,
                 report
                     .aggregate
-                    .get("average_score")
+                    .get("average_completion_score")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
+                report
+                    .aggregate
+                    .get("average_quality_score")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
+                report
+                    .aggregate
+                    .get("average_process_score")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0),
                 report.json_path.display(),
@@ -389,6 +402,7 @@ async fn main() -> Result<()> {
             codex_bin,
             model,
             repeat,
+            scenarios,
             timeout_seconds,
             ignore_user_config,
             isolated_codex_home,
@@ -407,6 +421,7 @@ async fn main() -> Result<()> {
                     suite,
                     model,
                     repeat,
+                    scenarios,
                     timeout_seconds,
                     ignore_user_config,
                     isolated_codex_home,
@@ -416,7 +431,7 @@ async fn main() -> Result<()> {
             )
             .await?;
             println!(
-                "codex_cli_benchmark suite={} rows={} avg_score={} json={}",
+                "codex_cli_benchmark suite={} rows={} legacy_avg_score={} json={}",
                 suite.name(),
                 report.rows,
                 report
@@ -433,6 +448,7 @@ async fn main() -> Result<()> {
             limit,
             all_runs,
             codex_cli_report,
+            llm_judge_report,
             output_dir,
         } => {
             let cwd = std::fs::canonicalize(&cwd)
@@ -449,11 +465,12 @@ async fn main() -> Result<()> {
                     limit,
                     all_runs,
                     codex_cli_report,
+                    llm_judge_report,
                     output_dir,
                 },
             )?;
             println!(
-                "benchmark_comparison suite={} rows={} winner={} json={} csv={} html={}",
+                "benchmark_comparison suite={} rows={} winner={} spark_benchmark_index={} codex_benchmark_index={} json={} csv={} html={}",
                 suite.name(),
                 report.rows,
                 report
@@ -461,12 +478,77 @@ async fn main() -> Result<()> {
                     .pointer("/winner/runner")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("undetermined"),
+                report
+                    .aggregate
+                    .pointer("/matched_runner_benchmark_index_averages/spark-harness")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
+                report
+                    .aggregate
+                    .pointer("/matched_runner_benchmark_index_averages/codex-cli")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
                 report.json_path.display(),
                 report.csv_path.display(),
                 report.html_path.display()
             );
         }
+        Command::BenchmarkJudge {
+            comparison_report,
+            cwd,
+            model,
+            reasoning_effort,
+            output_dir,
+            limit,
+        } => {
+            let cwd = std::fs::canonicalize(&cwd)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
+            let output_dir = if output_dir.is_absolute() {
+                output_dir
+            } else {
+                cwd.join(output_dir)
+            };
+            let report =
+                benchmark_judge::write_llm_judge_report(benchmark_judge::BenchmarkJudgeOptions {
+                    cwd,
+                    comparison_report,
+                    model,
+                    reasoning_effort: reasoning_effort.wire_value().to_string(),
+                    output_dir,
+                    limit,
+                })
+                .await?;
+            println!(
+                "benchmark_judge rows={} json={}",
+                report.rows,
+                report.json_path.display()
+            );
+        }
     }
 
     Ok(())
+}
+
+fn selected_benchmark_scenarios(
+    suite: cli::ProfileBenchmarkSuiteKind,
+    requested: &[cli::ProfileScenarioKind],
+) -> Result<Vec<cli::ProfileScenarioKind>> {
+    if requested.is_empty() {
+        return Ok(suite.scenarios().to_vec());
+    }
+    let allowed = suite.scenarios();
+    let invalid = requested
+        .iter()
+        .copied()
+        .filter(|scenario| !allowed.contains(scenario))
+        .map(cli::ProfileScenarioKind::name)
+        .collect::<Vec<_>>();
+    if !invalid.is_empty() {
+        anyhow::bail!(
+            "scenario(s) not in suite '{}': {}",
+            suite.name(),
+            invalid.join(",")
+        );
+    }
+    Ok(requested.to_vec())
 }

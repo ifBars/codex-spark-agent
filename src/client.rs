@@ -129,6 +129,29 @@ SKILL.md:
         Ok(text)
     }
 
+    pub async fn responses_create_judge(
+        &self,
+        input: &[Value],
+        reasoning_effort: &str,
+        on_event: impl FnMut(&Value),
+    ) -> Result<(Response, Value)> {
+        let body = json!({
+            "model": self.model,
+            "instructions": judge_system_prompt(),
+            "input": input,
+            "tools": [],
+            "parallel_tool_calls": false,
+            "reasoning": {
+                "effort": reasoning_effort,
+            },
+            "store": false,
+            "stream": true,
+        });
+
+        self.send_streaming_body(body, "Benchmark judge request", on_event)
+            .await
+    }
+
     async fn send_streaming_body(
         &self,
         body: Value,
@@ -278,6 +301,52 @@ pub fn output_text_delta(event: &Value) -> Option<&str> {
         return None;
     }
     event.get("delta").and_then(Value::as_str)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReasoningDisplayUpdate {
+    Started,
+    Summary(String),
+    Finished,
+}
+
+pub fn reasoning_display_update(event: &Value) -> Option<ReasoningDisplayUpdate> {
+    let event_type = event.get("type").and_then(Value::as_str)?;
+    match event_type {
+        "response.output_item.added" => {
+            let item = event.get("item")?;
+            (item.get("type").and_then(Value::as_str) == Some("reasoning"))
+                .then_some(ReasoningDisplayUpdate::Started)
+        }
+        "response.output_item.done" => {
+            let item = event.get("item")?;
+            if item.get("type").and_then(Value::as_str) != Some("reasoning") {
+                return None;
+            }
+            reasoning_summary_text(item)
+                .map(ReasoningDisplayUpdate::Summary)
+                .or(Some(ReasoningDisplayUpdate::Finished))
+        }
+        "response.reasoning_summary_text.delta" | "response.reasoning_summary.delta" => event
+            .get("delta")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| ReasoningDisplayUpdate::Summary(text.to_string())),
+        _ => None,
+    }
+}
+
+fn reasoning_summary_text(item: &Value) -> Option<String> {
+    let text = item
+        .get("summary")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.trim().is_empty()).then_some(text)
 }
 
 fn reconstruct_output_from_events(events: &[Value]) -> Vec<Value> {
@@ -540,6 +609,10 @@ When validation fails, inspect the first concrete failure, make a targeted code 
 When finished, provide the final answer as a normal assistant message."#
 }
 
+fn judge_system_prompt() -> &'static str {
+    "You are an expert software benchmark judge. Score only from supplied evidence, call out uncertainty, and return the requested JSON shape without markdown."
+}
+
 fn skill_compiler_prompt() -> &'static str {
     r#"You compile Codex agent skills for GPT-5.3-Codex-Spark.
 
@@ -550,7 +623,10 @@ Produce compact operational guidance, not a prose summary. Preserve source-groun
 mod tests {
     use serde_json::json;
 
-    use super::{Response, response_from_stream, response_text, spark_system_prompt};
+    use super::{
+        ReasoningDisplayUpdate, Response, reasoning_display_update, response_from_stream,
+        response_text, spark_system_prompt,
+    };
 
     #[test]
     fn spark_system_prompt_prefers_workspace_peek_for_ambiguous_repo_names() {
@@ -616,6 +692,36 @@ mod tests {
             error
                 .to_string()
                 .contains("Spark stream ended without response.completed")
+        );
+    }
+
+    #[test]
+    fn reasoning_display_update_surfaces_only_safe_reasoning_events() {
+        assert_eq!(
+            reasoning_display_update(&json!({
+                "type": "response.output_item.added",
+                "item": {"type": "reasoning", "summary": []}
+            })),
+            Some(ReasoningDisplayUpdate::Started)
+        );
+        assert_eq!(
+            reasoning_display_update(&json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "Checked the likely files."}]
+                }
+            })),
+            Some(ReasoningDisplayUpdate::Summary(
+                "Checked the likely files.".to_string()
+            ))
+        );
+        assert_eq!(
+            reasoning_display_update(&json!({
+                "type": "response.reasoning_text.delta",
+                "delta": "raw hidden reasoning"
+            })),
+            None
         );
     }
 }
