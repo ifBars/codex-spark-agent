@@ -132,8 +132,10 @@ pub(crate) async fn compile_skill_cached(
     match runner.compile_skill_summary(name, &raw).await {
         Ok(summary) => registry::compile_or_load_with_summary(cwd, name, true, Some(summary)),
         Err(error) => {
-            eprintln!(
-                "warning: Spark skill compile failed for `{name}`; using local fallback: {error:#}"
+            tracing::warn!(
+                skill = name,
+                error = %format!("{error:#}"),
+                "Spark skill compile failed; using local fallback"
             );
             registry::compile_or_load(cwd, name, true)
         }

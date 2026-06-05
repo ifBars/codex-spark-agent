@@ -16,6 +16,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::agent::{
     AgentDisplayEvent, AgentRunner, SharedDisplayEvents, take_shared_display_events,
@@ -315,7 +316,8 @@ impl ChatTui {
         events: &SharedDisplayEvents,
         input: &str,
     ) -> Result<bool> {
-        let mut run = std::pin::pin!(runner.run(input));
+        let cancellation = CancellationToken::new();
+        let mut run = std::pin::pin!(runner.run_with_cancel(input, cancellation.child_token()));
         loop {
             tokio::select! {
                 result = &mut run => {
@@ -326,6 +328,7 @@ impl ChatTui {
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {
                     self.drain_shared_agent_events(events);
                     if self.handle_running_input()? {
+                        cancellation.cancel();
                         self.drain_shared_agent_events(events);
                         terminal.draw(|frame| self.draw(frame))?;
                         return Ok(true);

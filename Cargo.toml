@@ -18,7 +18,6 @@ anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 crossterm = "0.29"
-dirs = "6"
 open = "5"
 pulldown-cmark = "0.13.4"
 rand = "0.8"
@@ -35,3 +34,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-uti
 toml = "0.9"
 url = "2"
 urlencoding = "2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+directories = "6.0.0"
+inquire = "0.9.4"
+comfy-table = "7.2.2"

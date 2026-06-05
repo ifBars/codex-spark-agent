@@ -8,7 +8,9 @@ mod config;
 mod profile;
 mod profiler;
 mod session;
+mod setup;
 mod skill;
+mod telemetry;
 mod tools;
 mod trace;
 
@@ -33,6 +35,7 @@ const MAX_SCENARIO_REPEAT: usize = 50;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    telemetry::init();
     let cli = Cli::parse();
 
     match cli.command {
@@ -47,6 +50,22 @@ async fn main() -> Result<()> {
                 "Logged in. Account: {}",
                 tokens.account_id.as_deref().unwrap_or("unknown")
             );
+        }
+        Command::Setup {
+            non_interactive,
+            skip_login,
+            skip_skill_migration,
+            skill_source,
+            cwd,
+        } => {
+            setup::run(setup::SetupOptions {
+                cwd,
+                non_interactive,
+                skip_login,
+                skip_skill_migration,
+                skill_source,
+            })
+            .await?;
         }
         Command::AuthStatus => {
             let tokens = config::load_auth()?;

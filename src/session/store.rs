@@ -446,7 +446,7 @@ pub(crate) fn prepare_default_store(protected_session_name: Option<&str>) -> Res
     let migration = store.migrate_json_sessions()?;
     let cleanup = store.cleanup_old_sessions(CleanupPolicy::default(), protected_session_name)?;
     for failure in migration.failed.iter().chain(cleanup.failed.iter()) {
-        eprintln!("warning: session store maintenance: {failure}");
+        tracing::warn!(error = %failure, "session store maintenance failed");
     }
     Ok(())
 }

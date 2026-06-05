@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 
 use crate::agent::compaction::{compaction_trigger_for_turn, format_compaction_notice};
 use crate::agent::{AgentRunner, TOOL_ONLY_STREAK_COMPACTION_TRIGGER};
@@ -22,7 +23,7 @@ impl AgentRunner {
         }));
     }
 
-    pub(super) async fn run_until_idle(&mut self) -> Result<()> {
+    pub(super) async fn run_until_idle(&mut self, cancellation: CancellationToken) -> Result<()> {
         let tools = tools_for_mode(builtin_tools(), self.mode);
 
         let mut turn = 0usize;
@@ -30,6 +31,9 @@ impl AgentRunner {
         let mut last_tool_only_notice_streak = 0usize;
         loop {
             turn += 1;
+            if cancellation.is_cancelled() {
+                return self.record_cancelled(turn, "turn_start");
+            }
             if let Some(max_turns) = self.max_turns
                 && turn > max_turns
             {
@@ -52,6 +56,9 @@ impl AgentRunner {
                     compaction_trigger,
                     serde_json::to_string(&self.input)?.len(),
                 );
+            }
+            if cancellation.is_cancelled() {
+                return self.record_cancelled(self.request_seq + 1, "before_compaction");
             }
             match self
                 .compact_once(&tools, compaction_trigger.is_some(), compaction_trigger)
@@ -105,6 +112,9 @@ impl AgentRunner {
             }
 
             self.request_seq += 1;
+            if cancellation.is_cancelled() {
+                return self.record_cancelled(self.request_seq, "before_request");
+            }
             self.profiler.record_request(input_chars);
             self.emit_request_start(self.request_seq, input_chars);
             if let Some(trace) = &mut self.trace {
@@ -180,6 +190,9 @@ impl AgentRunner {
 
             self.emit_tool_batch_start(calls.len());
             for (call_id, tool_name, args) in calls {
+                if cancellation.is_cancelled() {
+                    return self.record_cancelled(self.request_seq, "before_tool");
+                }
                 self.profiler
                     .record_tool_call(self.request_seq, &tool_name, &args);
                 self.emit_tool_call(&tool_name, &serde_json::to_string(&args)?);
@@ -218,6 +231,12 @@ impl AgentRunner {
                 }));
             }
         }
+    }
+
+    fn record_cancelled(&mut self, turn: usize, stage: &str) -> Result<()> {
+        let message = "run cancelled";
+        self.record_terminal_error(turn, stage, message)?;
+        anyhow::bail!(message)
     }
 
     fn maybe_push_tool_only_notice(

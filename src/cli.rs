@@ -26,6 +26,24 @@ pub(crate) enum Command {
         #[arg(long)]
         device: bool,
     },
+    /// Run first-run setup: device login, local directories, sessions, and optional skill migration.
+    Setup {
+        /// Use defaults without terminal prompts.
+        #[arg(long)]
+        non_interactive: bool,
+        /// Do not run device-code login.
+        #[arg(long)]
+        skip_login: bool,
+        /// Do not offer repo-local skill migration.
+        #[arg(long)]
+        skip_skill_migration: bool,
+        /// Migrate skills from this directory instead of prompting for a discovered source.
+        #[arg(long)]
+        skill_source: Option<PathBuf>,
+        /// Workspace root that receives migrated .agents/skills.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+    },
     /// Show saved auth status.
     AuthStatus,
     /// Send one instruction to the Spark agent loop.

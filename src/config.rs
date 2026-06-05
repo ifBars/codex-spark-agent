@@ -3,12 +3,24 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use directories::{BaseDirs, ProjectDirs};
 
 use crate::auth::AuthTokens;
 
 pub fn app_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().context("failed to resolve home directory")?;
-    Ok(home.join(".spark-codex"))
+    let legacy = legacy_app_dir()?;
+    if legacy.exists() {
+        return Ok(legacy);
+    }
+    if let Some(project_dirs) = ProjectDirs::from("com", "ifbars", "spark") {
+        return Ok(project_dirs.data_local_dir().to_path_buf());
+    }
+    Ok(legacy)
+}
+
+fn legacy_app_dir() -> Result<PathBuf> {
+    let base_dirs = BaseDirs::new().context("failed to resolve home directory")?;
+    Ok(base_dirs.home_dir().join(".spark-codex"))
 }
 
 pub fn auth_path() -> Result<PathBuf> {

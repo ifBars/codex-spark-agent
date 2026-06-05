@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 
 use crate::auth::{self, AuthTokens};
 use crate::client::SparkClient;
@@ -215,8 +216,16 @@ impl AgentRunner {
     }
 
     pub async fn run(&mut self, prompt: &str) -> Result<()> {
+        self.run_with_cancel(prompt, CancellationToken::new()).await
+    }
+
+    pub async fn run_with_cancel(
+        &mut self,
+        prompt: &str,
+        cancellation: CancellationToken,
+    ) -> Result<()> {
         self.push_user_message(prompt);
-        self.run_until_idle().await
+        self.run_until_idle(cancellation).await
     }
 
     pub(crate) fn use_buffered_display(&mut self) {
