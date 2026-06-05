@@ -5,44 +5,93 @@ use std::{
 };
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
 use crate::{
-    benchmark_workspace,
+    benchmark::workspace,
     cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind},
-    codex_cli_benchmark::CodexCliBenchmarkRow,
-    profile_scenarios, scenario_validation,
+    profile::{scenarios, validation},
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct OpencodeBenchmarkOptions {
+pub(crate) struct CodexCliBenchmarkOptions {
     pub(crate) cwd: PathBuf,
     pub(crate) suite: ProfileBenchmarkSuiteKind,
-    pub(crate) model: Option<String>,
+    pub(crate) model: String,
     pub(crate) reasoning_effort: String,
     pub(crate) repeat: usize,
     pub(crate) scenarios: Vec<ProfileScenarioKind>,
     pub(crate) timeout_seconds: u64,
-    pub(crate) opencode_bin: PathBuf,
-    pub(crate) pure: bool,
+    pub(crate) ignore_user_config: bool,
+    pub(crate) isolated_codex_home: bool,
+    pub(crate) codex_bin: PathBuf,
     pub(crate) output_dir: PathBuf,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CodexCliBenchmarkRow {
+    pub(crate) runner: String,
+    pub(crate) suite: String,
+    pub(crate) scenario: String,
+    pub(crate) repeat_index: usize,
+    pub(crate) model: String,
+    #[serde(default = "default_reasoning_effort")]
+    pub(crate) reasoning_effort: String,
+    pub(crate) score: f64,
+    pub(crate) success: bool,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) timed_out: bool,
+    pub(crate) duration_ms: u128,
+    pub(crate) json_events: u64,
+    pub(crate) non_json_stdout_lines: u64,
+    pub(crate) stderr_lines: u64,
+    #[serde(default)]
+    pub(crate) actionable_stderr_lines: u64,
+    pub(crate) turns: u64,
+    pub(crate) completed_items: u64,
+    pub(crate) agent_messages: u64,
+    pub(crate) tool_items: u64,
+    pub(crate) input_tokens: u64,
+    pub(crate) cached_input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) reasoning_output_tokens: u64,
+    pub(crate) expected_artifacts: u64,
+    pub(crate) present_artifacts: u64,
+    pub(crate) validation_exit_code: Option<i32>,
+    pub(crate) validation_timed_out: bool,
+    #[serde(default)]
+    pub(crate) browser_validation_present: bool,
+    #[serde(default)]
+    pub(crate) browser_validation_exit_code: Option<i32>,
+    #[serde(default)]
+    pub(crate) browser_validation_timed_out: bool,
+    #[serde(default)]
+    pub(crate) browser_screenshot: String,
+    #[serde(default)]
+    pub(crate) source_files: u64,
+    #[serde(default)]
+    pub(crate) source_bytes: u64,
+    pub(crate) final_message_chars: u64,
+    pub(crate) run_dir: String,
+    pub(crate) failure_points: String,
+}
+
 #[derive(Debug, Clone)]
-pub(crate) struct OpencodeBenchmarkOutput {
+pub(crate) struct CodexCliBenchmarkOutput {
     pub(crate) json_path: PathBuf,
     pub(crate) rows: usize,
     pub(crate) aggregate: Value,
 }
 
-pub(crate) async fn run_opencode_benchmark(
-    options: OpencodeBenchmarkOptions,
-) -> Result<OpencodeBenchmarkOutput> {
-    profile_scenarios::validate_scenario_repeat(options.repeat)?;
+pub(crate) async fn run_codex_cli_benchmark(
+    options: CodexCliBenchmarkOptions,
+) -> Result<CodexCliBenchmarkOutput> {
+    scenarios::validate_scenario_repeat(options.repeat)?;
     std::fs::create_dir_all(&options.output_dir).map_err(|error| {
         anyhow::anyhow!(
-            "failed to create opencode benchmark output directory {}: {error}",
+            "failed to create Codex CLI benchmark output directory {}: {error}",
             options.output_dir.display()
         )
     })?;
@@ -52,23 +101,23 @@ pub(crate) async fn run_opencode_benchmark(
     let scenarios = selected_scenarios(options.suite, &options.scenarios)?;
     for scenario in scenarios {
         for repeat_index in 1..=options.repeat {
-            let scenario_cwd = benchmark_workspace::create_benchmark_workspace(
+            let scenario_cwd = workspace::create_benchmark_workspace(
                 &options.cwd,
                 options.suite.name(),
                 scenario,
                 repeat_index,
             )?;
             println!(
-                "opencode_workspace scenario={} path={}",
+                "codex_cli_workspace scenario={} path={}",
                 scenario.name(),
                 scenario_cwd.display()
             );
-            profile_scenarios::prepare_profile_scenario(&scenario_cwd, scenario)?;
+            scenarios::prepare_profile_scenario(&scenario_cwd, scenario)?;
             let row =
-                run_opencode_scenario(&options, &scenario_cwd, scenario, repeat_index, started_at)
+                run_codex_cli_scenario(&options, &scenario_cwd, scenario, repeat_index, started_at)
                     .await?;
             println!(
-                "opencode scenario={} repeat={}/{} score={:.1} success={} duration_ms={} failure_points={}",
+                "codex_cli scenario={} repeat={}/{} score={:.1} success={} duration_ms={} failure_points={}",
                 row.scenario,
                 repeat_index,
                 options.repeat,
@@ -83,14 +132,14 @@ pub(crate) async fn run_opencode_benchmark(
 
     let aggregate = aggregate_rows(options.suite.name(), &rows);
     let json_path = options.output_dir.join(format!(
-        "{}-opencode-{started_at}.json",
+        "{}-codex-cli-{started_at}.json",
         options.suite.name()
     ));
     std::fs::write(
         &json_path,
         serde_json::to_string_pretty(&json!({
             "suite": options.suite.name(),
-            "runner": "opencode",
+            "runner": "codex-cli",
             "reasoning_effort": options.reasoning_effort.as_str(),
             "generated_at_unix_ms": started_at,
             "rows": rows,
@@ -99,15 +148,15 @@ pub(crate) async fn run_opencode_benchmark(
     )
     .map_err(|error| anyhow::anyhow!("failed to write {}: {error}", json_path.display()))?;
 
-    Ok(OpencodeBenchmarkOutput {
+    Ok(CodexCliBenchmarkOutput {
         json_path,
         rows: rows.len(),
         aggregate,
     })
 }
 
-async fn run_opencode_scenario(
-    options: &OpencodeBenchmarkOptions,
+async fn run_codex_cli_scenario(
+    options: &CodexCliBenchmarkOptions,
     scenario_cwd: &Path,
     scenario: ProfileScenarioKind,
     repeat_index: usize,
@@ -120,31 +169,51 @@ async fn run_opencode_scenario(
         .join(format!("run-{batch_stamp}-{scenario_name}-{repeat_index}"));
     std::fs::create_dir_all(&run_dir).map_err(|error| {
         anyhow::anyhow!(
-            "failed to create opencode run dir {}: {error}",
+            "failed to create Codex CLI run dir {}: {error}",
             run_dir.display()
         )
     })?;
+    let isolated_codex_home = if options.isolated_codex_home {
+        Some(prepare_isolated_codex_home(&options.cwd, &run_dir)?)
+    } else {
+        None
+    };
+    let final_message_path = run_dir.join("last-message.txt");
     let prompt = external_benchmark_prompt(&options.cwd, scenario_cwd, scenario);
     std::fs::write(run_dir.join("prompt.txt"), &prompt)
-        .map_err(|error| anyhow::anyhow!("failed to write opencode prompt: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("failed to write Codex CLI prompt: {error}"))?;
 
-    let mut command = Command::new(&options.opencode_bin);
+    let mut command = Command::new(&options.codex_bin);
     command
-        .arg("run")
-        .arg("--format")
-        .arg("json")
-        .arg("--dir")
+        .arg("exec")
+        .arg("--json")
+        .arg("--cd")
         .arg(scenario_cwd)
-        .arg("--dangerously-skip-permissions");
-    if options.pure {
-        command.arg("--pure");
+        .arg("--sandbox")
+        .arg("danger-full-access")
+        .arg("--dangerously-bypass-approvals-and-sandbox")
+        .arg("--model")
+        .arg(&options.model)
+        .arg("--config")
+        .arg(codex_cli_reasoning_config_arg(&options.reasoning_effort))
+        .arg("--output-last-message")
+        .arg(&final_message_path);
+    if options.ignore_user_config {
+        command.arg("--ignore-user-config");
     }
-    if let Some(model) = &options.model {
-        command.arg("--model").arg(model);
+    command.arg("--ignore-rules");
+    if let Some(codex_home) = &isolated_codex_home {
+        command
+            .arg("--disable")
+            .arg("plugins")
+            .arg("--disable")
+            .arg("plugin_sharing")
+            .arg("--disable")
+            .arg("remote_plugin")
+            .arg("--disable")
+            .arg("skill_mcp_dependency_install");
+        command.env("CODEX_HOME", codex_home);
     }
-    command
-        .arg("--variant")
-        .arg(opencode_reasoning_variant_arg(&options.reasoning_effort));
     command.arg(prompt);
     command.kill_on_drop(true);
 
@@ -164,29 +233,23 @@ async fn run_opencode_scenario(
             false,
         ),
         Ok(Err(error)) => {
-            anyhow::bail!("failed to run opencode for {scenario_name}: {error}");
+            anyhow::bail!("failed to run Codex CLI for {scenario_name}: {error}");
         }
         Err(_) => (
             String::new(),
-            "timed out waiting for opencode".to_string(),
+            "timed out waiting for Codex CLI".to_string(),
             None,
             true,
         ),
     };
 
     std::fs::write(run_dir.join("stdout.jsonl"), &stdout)
-        .map_err(|error| anyhow::anyhow!("failed to write opencode stdout: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("failed to write Codex CLI stdout: {error}"))?;
     std::fs::write(run_dir.join("stderr.txt"), &stderr)
-        .map_err(|error| anyhow::anyhow!("failed to write opencode stderr: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("failed to write Codex CLI stderr: {error}"))?;
 
-    let metrics = parse_opencode_json_events(&stdout);
-    let trimmed_final_message = metrics.final_message.trim();
-    let final_message = (!trimmed_final_message.is_empty())
-        .then(|| trimmed_final_message.to_string())
-        .unwrap_or_else(|| non_json_final_message(&stdout));
-    std::fs::write(run_dir.join("last-message.txt"), &final_message)
-        .map_err(|error| anyhow::anyhow!("failed to write opencode final message: {error}"))?;
-
+    let final_message = std::fs::read_to_string(&final_message_path).unwrap_or_default();
+    let metrics = parse_codex_json_events(&stdout);
     let stderr_metrics = classify_stderr(&stderr);
     let expected_artifacts = expected_artifacts(scenario);
     let present_artifacts = expected_artifacts
@@ -194,8 +257,7 @@ async fn run_opencode_scenario(
         .filter(|path| scenario_cwd.join(path).exists())
         .count() as u64;
     let validation =
-        scenario_validation::run_and_write_scenario_validation(scenario_cwd, &run_dir, scenario)
-            .await?;
+        validation::run_and_write_scenario_validation(scenario_cwd, &run_dir, scenario).await?;
     let validation_exit_code = validation.as_ref().and_then(|result| result.exit_code);
     let validation_timed_out = validation.as_ref().is_some_and(|result| result.timed_out);
     let browser_validation = validation
@@ -210,11 +272,11 @@ async fn run_opencode_scenario(
     let source_footprint = validation
         .as_ref()
         .and_then(|result| result.source_footprint.as_ref());
-    let failure_points = failure_points(
+    let failure_points = codex_failure_points(
         exit_code,
         timed_out,
-        metrics.non_json_stdout_lines,
-        stderr_metrics.actionable_lines,
+        &metrics,
+        &stderr_metrics,
         &final_message,
         expected_artifacts.len() as u64,
         present_artifacts,
@@ -226,14 +288,11 @@ async fn run_opencode_scenario(
     );
 
     let mut row = CodexCliBenchmarkRow {
-        runner: "opencode".to_string(),
+        runner: "codex-cli".to_string(),
         suite: options.suite.name().to_string(),
         scenario: scenario_name.to_string(),
         repeat_index,
-        model: options
-            .model
-            .clone()
-            .unwrap_or_else(|| "opencode-default".to_string()),
+        model: options.model.clone(),
         reasoning_effort: options.reasoning_effort.clone(),
         score: 0.0,
         success: exit_code == Some(0)
@@ -249,7 +308,10 @@ async fn run_opencode_scenario(
         duration_ms,
         json_events: metrics.json_events,
         non_json_stdout_lines: metrics.non_json_stdout_lines,
-        stderr_lines: stderr_metrics.non_empty_lines,
+        stderr_lines: stderr
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count() as u64,
         actionable_stderr_lines: stderr_metrics.actionable_lines,
         turns: metrics.turns,
         completed_items: metrics.completed_items,
@@ -277,8 +339,12 @@ async fn run_opencode_scenario(
         run_dir: run_dir.display().to_string(),
         failure_points: failure_points.join(";"),
     };
-    row.score = external_agent_score(&row);
+    row.score = codex_score(&row);
     Ok(row)
+}
+
+fn default_reasoning_effort() -> String {
+    "unknown".to_string()
 }
 
 fn external_benchmark_prompt(
@@ -286,7 +352,7 @@ fn external_benchmark_prompt(
     scenario_cwd: &Path,
     scenario: ProfileScenarioKind,
 ) -> String {
-    let base = profile_scenarios::codex_cli_benchmark_prompt(scenario);
+    let base = scenarios::codex_cli_benchmark_prompt(scenario);
     if same_path(source_cwd, scenario_cwd) {
         return base;
     }
@@ -304,8 +370,41 @@ fn same_path(left: &Path, right: &Path) -> bool {
     }
 }
 
+fn prepare_isolated_codex_home(cwd: &Path, run_dir: &Path) -> Result<PathBuf> {
+    let source_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|home| home.join(".codex"))
+        })
+        .unwrap_or_else(|| cwd.join(".codex"));
+    let isolated = run_dir.join("codex-home");
+    std::fs::create_dir_all(&isolated).map_err(|error| {
+        anyhow::anyhow!(
+            "failed to create isolated CODEX_HOME {}: {error}",
+            isolated.display()
+        )
+    })?;
+    let auth = source_home.join("auth.json");
+    if auth.exists() {
+        std::fs::copy(&auth, isolated.join("auth.json")).map_err(|error| {
+            anyhow::anyhow!(
+                "failed to copy Codex auth from {} to {}: {error}",
+                auth.display(),
+                isolated.display()
+            )
+        })?;
+    }
+    Ok(isolated)
+}
+
+fn codex_cli_reasoning_config_arg(reasoning_effort: &str) -> String {
+    format!("model_reasoning_effort=\"{reasoning_effort}\"")
+}
+
 #[derive(Default)]
-struct OpencodeEventMetrics {
+struct CodexEventMetrics {
     json_events: u64,
     non_json_stdout_lines: u64,
     turns: u64,
@@ -316,7 +415,6 @@ struct OpencodeEventMetrics {
     cached_input_tokens: u64,
     output_tokens: u64,
     reasoning_output_tokens: u64,
-    final_message: String,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -325,134 +423,54 @@ struct StderrMetrics {
     actionable_lines: u64,
 }
 
-fn parse_opencode_json_events(stdout: &str) -> OpencodeEventMetrics {
-    let mut metrics = OpencodeEventMetrics::default();
+fn parse_codex_json_events(stdout: &str) -> CodexEventMetrics {
+    let mut metrics = CodexEventMetrics::default();
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             metrics.non_json_stdout_lines += 1;
             continue;
         };
         metrics.json_events += 1;
-        record_usage(&value, &mut metrics);
-        let event_type = value
-            .get("type")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if event_type == "step_finish" {
+        if value.get("type").and_then(Value::as_str) == Some("turn.completed") {
             metrics.turns += 1;
-        }
-        if looks_like_agent_message(&value) {
-            metrics.agent_messages += 1;
-            if let Some(text) = best_text_field(&value)
-                && text.chars().count() > metrics.final_message.chars().count()
-            {
-                metrics.final_message = text;
+            if let Some(usage) = value.get("usage") {
+                metrics.input_tokens += usage
+                    .get("input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                metrics.cached_input_tokens += usage
+                    .get("cached_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                metrics.output_tokens += usage
+                    .get("output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                metrics.reasoning_output_tokens += usage
+                    .get("reasoning_output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
             }
         }
-        if event_type.contains("tool") || event_type.contains("bash") || event_type.contains("call")
-        {
-            metrics.tool_items += 1;
+        if value.get("type").and_then(Value::as_str) == Some("item.completed") {
+            metrics.completed_items += 1;
+            let item_type = value
+                .pointer("/item/type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if item_type == "agent_message" {
+                metrics.agent_messages += 1;
+            }
+            if item_type.contains("tool")
+                || item_type.contains("call")
+                || item_type == "command_execution"
+                || item_type == "file_change"
+            {
+                metrics.tool_items += 1;
+            }
         }
-        metrics.completed_items += 1;
     }
     metrics
-}
-
-fn record_usage(value: &Value, metrics: &mut OpencodeEventMetrics) {
-    match value {
-        Value::Object(map) => {
-            if let Some(usage) = map.get("usage").or_else(|| map.get("tokens")) {
-                metrics.input_tokens += usage_u64(usage, &["input", "input_tokens", "prompt"]);
-                metrics.cached_input_tokens += usage_u64(
-                    usage,
-                    &["cached_input", "cached_input_tokens", "cache_read"],
-                ) + usage
-                    .get("cache")
-                    .map(|cache| usage_u64(cache, &["read"]))
-                    .unwrap_or(0);
-                metrics.output_tokens +=
-                    usage_u64(usage, &["output", "output_tokens", "completion"]);
-                metrics.reasoning_output_tokens += usage_u64(
-                    usage,
-                    &["reasoning", "reasoning_output", "reasoning_output_tokens"],
-                );
-            }
-            for child in map.values() {
-                record_usage(child, metrics);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                record_usage(item, metrics);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn usage_u64(value: &Value, keys: &[&str]) -> u64 {
-    keys.iter()
-        .find_map(|key| value.get(*key).and_then(Value::as_u64))
-        .unwrap_or(0)
-}
-
-fn looks_like_agent_message(value: &Value) -> bool {
-    let event_type = value
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let part_type = value
-        .pointer("/part/type")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let role = value
-        .get("role")
-        .or_else(|| value.pointer("/message/role"))
-        .or_else(|| value.pointer("/part/role"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    event_type.contains("message")
-        || event_type == "text"
-        || part_type == "text"
-        || role == "assistant"
-}
-
-fn best_text_field(value: &Value) -> Option<String> {
-    let mut best = String::new();
-    collect_text_fields(value, &mut best);
-    (!best.trim().is_empty()).then(|| best.trim().to_string())
-}
-
-fn collect_text_fields(value: &Value, best: &mut String) {
-    match value {
-        Value::Object(map) => {
-            for (key, value) in map {
-                if matches!(key.as_str(), "content" | "text" | "message")
-                    && let Some(text) = value.as_str()
-                    && text.chars().count() > best.chars().count()
-                {
-                    *best = text.to_string();
-                }
-                collect_text_fields(value, best);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_text_fields(item, best);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn non_json_final_message(stdout: &str) -> String {
-    stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .last()
-        .unwrap_or_default()
-        .trim()
-        .to_string()
 }
 
 fn classify_stderr(stderr: &str) -> StderrMetrics {
@@ -471,11 +489,23 @@ fn classify_stderr(stderr: &str) -> StderrMetrics {
 }
 
 fn actionable_stderr_line(line: &str) -> bool {
+    if line == "Reading additional input from stdin..." {
+        return false;
+    }
     let benign_fragments = [
-        "WARNING: terminal is not fully functional",
-        "opencode",
-        "server listening",
-        "server started",
+        " WARN codex_core_plugins::",
+        " WARN codex_core_skills::",
+        " WARN codex_core::shell_snapshot:",
+        " WARN codex_mcp::rmcp_client:",
+        " ERROR rmcp::transport::worker:",
+        "AuthRequired(",
+        "Auth required",
+        "plugin MCP server uses an unknown transport type",
+        "failed to parse plugin MCP server",
+        "failed to load plugin",
+        "ignoring interface.",
+        "Failed to create shell snapshot for powershell",
+        "failed to initialize MCP client during shutdown",
     ];
     !benign_fragments
         .iter()
@@ -517,11 +547,11 @@ fn expected_artifacts(scenario: ProfileScenarioKind) -> Vec<&'static str> {
     }
 }
 
-fn failure_points(
+fn codex_failure_points(
     exit_code: Option<i32>,
     timed_out: bool,
-    non_json_stdout_lines: u64,
-    actionable_stderr_lines: u64,
+    metrics: &CodexEventMetrics,
+    stderr_metrics: &StderrMetrics,
     final_message: &str,
     expected_artifacts: u64,
     present_artifacts: u64,
@@ -556,16 +586,16 @@ fn failure_points(
     if browser_validation_present && browser_validation_exit_code != Some(0) {
         points.push("browser_validation_failed".to_string());
     }
-    if non_json_stdout_lines > 0 {
+    if metrics.non_json_stdout_lines > 0 {
         points.push("non_json_stdout_noise".to_string());
     }
-    if actionable_stderr_lines > 0 {
+    if stderr_metrics.actionable_lines > 0 {
         points.push("tool_execution_error".to_string());
     }
     points
 }
 
-fn external_agent_score(row: &CodexCliBenchmarkRow) -> f64 {
+fn codex_score(row: &CodexCliBenchmarkRow) -> f64 {
     let mut quality_penalty = 0.0;
     if row.timed_out {
         quality_penalty += 35.0;
@@ -638,7 +668,7 @@ fn aggregate_rows(suite: &str, rows: &[CodexCliBenchmarkRow]) -> Value {
         });
     json!({
         "suite": suite,
-        "runner": "opencode",
+        "runner": "codex-cli",
         "runs": rows.len(),
         "successful_runs": rows.iter().filter(|row| row.success).count(),
         "average_score": round1(average_score),
@@ -686,10 +716,6 @@ fn unix_millis() -> u128 {
         .as_millis()
 }
 
-fn opencode_reasoning_variant_arg(reasoning_effort: &str) -> &str {
-    reasoning_effort
-}
-
 fn round1(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
 }
@@ -699,25 +725,124 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_opencode_json_lines_for_messages_and_tools() {
-        let metrics = parse_opencode_json_events(
-            "{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"done\"}}\n{\"type\":\"tool_use\",\"part\":{\"type\":\"tool\",\"tool\":\"bash\"}}\n{\"type\":\"step_finish\",\"part\":{\"tokens\":{\"input\":10,\"output\":3,\"reasoning\":1,\"cache\":{\"read\":2}}}}\nnoise\n",
+    fn parses_codex_json_events_and_ignores_warning_lines() {
+        let metrics = parse_codex_json_events(
+            "{\"type\":\"turn.started\"}\nwarn noise\n{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\"}}\n{\"type\":\"item.completed\",\"item\":{\"type\":\"command_execution\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":2,\"output_tokens\":3,\"reasoning_output_tokens\":1}}\n",
         );
 
-        assert_eq!(metrics.json_events, 3);
+        assert_eq!(metrics.json_events, 4);
         assert_eq!(metrics.non_json_stdout_lines, 1);
+        assert_eq!(metrics.turns, 1);
         assert_eq!(metrics.agent_messages, 1);
         assert_eq!(metrics.tool_items, 1);
         assert_eq!(metrics.input_tokens, 10);
         assert_eq!(metrics.cached_input_tokens, 2);
         assert_eq!(metrics.output_tokens, 3);
         assert_eq!(metrics.reasoning_output_tokens, 1);
-        assert_eq!(metrics.turns, 1);
-        assert_eq!(metrics.final_message, "done");
     }
 
     #[test]
-    fn opencode_reasoning_effort_is_passed_as_variant() {
-        assert_eq!(opencode_reasoning_variant_arg("high"), "high");
+    fn codex_reasoning_effort_is_passed_as_config_override() {
+        assert_eq!(
+            codex_cli_reasoning_config_arg("high"),
+            "model_reasoning_effort=\"high\""
+        );
+    }
+
+    #[test]
+    fn codex_score_penalizes_missing_artifacts_and_noise() {
+        let row = CodexCliBenchmarkRow {
+            runner: "codex-cli".to_string(),
+            suite: "real-world".to_string(),
+            scenario: "react-calculator-scaffold".to_string(),
+            repeat_index: 1,
+            model: "gpt-5.3-codex-spark".to_string(),
+            reasoning_effort: "medium".to_string(),
+            score: 0.0,
+            success: false,
+            exit_code: Some(0),
+            timed_out: false,
+            duration_ms: 10_000,
+            json_events: 5,
+            non_json_stdout_lines: 4,
+            stderr_lines: 2,
+            actionable_stderr_lines: 2,
+            turns: 1,
+            completed_items: 1,
+            agent_messages: 1,
+            tool_items: 0,
+            input_tokens: 1,
+            cached_input_tokens: 0,
+            output_tokens: 1,
+            reasoning_output_tokens: 0,
+            expected_artifacts: 4,
+            present_artifacts: 2,
+            validation_exit_code: None,
+            validation_timed_out: false,
+            browser_validation_present: false,
+            browser_validation_exit_code: None,
+            browser_validation_timed_out: false,
+            browser_screenshot: String::new(),
+            source_files: 0,
+            source_bytes: 0,
+            final_message_chars: 20,
+            run_dir: "run".to_string(),
+            failure_points: "missing_expected_artifact".to_string(),
+        };
+
+        assert_eq!(codex_score(&row), 60.0);
+    }
+
+    #[test]
+    fn codex_stderr_classifier_ignores_startup_plugin_noise() {
+        let stderr = r#"Reading additional input from stdin...
+2026-06-04T06:55:39.703102Z  WARN codex_core_plugins::loader: plugin MCP server uses an unknown transport type plugin=C:\Users\ghost\.codex\plugins\cache\bars-local\codex-memory\2.1.0 transport="local"
+2026-06-04T06:56:11.358255Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
+2026-06-04T06:55:41.120472Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { error="invalid_token" })
+"#;
+
+        let metrics = classify_stderr(stderr);
+
+        assert_eq!(metrics.non_empty_lines, 4);
+        assert_eq!(metrics.actionable_lines, 0);
+    }
+
+    #[test]
+    fn codex_stderr_classifier_keeps_unrecognized_errors_actionable() {
+        let metrics = classify_stderr("ERROR failed to run command\n");
+
+        assert_eq!(metrics.non_empty_lines, 1);
+        assert_eq!(metrics.actionable_lines, 1);
+    }
+
+    #[test]
+    fn scaffold_scenarios_have_artifact_expectations() {
+        assert_eq!(
+            expected_artifacts(ProfileScenarioKind::RustLogAnalyzerScaffold).len(),
+            3
+        );
+        assert!(expected_artifacts(ProfileScenarioKind::RepoSurvey).is_empty());
+    }
+
+    #[test]
+    fn selected_scenarios_must_belong_to_suite() {
+        let selected = selected_scenarios(
+            ProfileBenchmarkSuiteKind::RealWorld,
+            &[
+                ProfileScenarioKind::ShellRecovery,
+                ProfileScenarioKind::PrecisePatch,
+                ProfileScenarioKind::MultiFilePatch,
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(selected.len(), 3);
+        assert!(
+            selected_scenarios(
+                ProfileBenchmarkSuiteKind::Editing,
+                &[ProfileScenarioKind::ShellRecovery]
+            )
+            .is_err()
+        );
     }
 }

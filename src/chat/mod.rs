@@ -2,7 +2,10 @@ use anyhow::Result;
 use std::io::Write;
 use std::path::PathBuf;
 
-use crate::{agent, chat_tui, sessions, skill_commands, tools};
+pub(crate) mod markdown;
+pub(crate) mod tui;
+
+use crate::{agent, session, skill, tools};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SlashCommand {
@@ -99,7 +102,7 @@ pub(crate) async fn run_interactive_chat(
     session_name: Option<String>,
     cwd: PathBuf,
 ) -> Result<()> {
-    chat_tui::run(runner, session_name, cwd).await
+    tui::run(runner, session_name, cwd).await
 }
 
 #[allow(dead_code)]
@@ -130,22 +133,22 @@ pub(crate) async fn run_line_interactive_chat(
         }
 
         if let Some(command) = command_args(input, "/session") {
-            sessions::handle_session_command(runner, &mut session_name, command.trim())?;
+            session::handle_session_command(runner, &mut session_name, command.trim())?;
             continue;
         }
 
         if let Some(command) = command_args(input, "/new") {
-            sessions::handle_new_session_command(runner, &mut session_name, command.trim())?;
+            session::handle_new_session_command(runner, &mut session_name, command.trim())?;
             continue;
         }
 
         if input == "/skills" {
-            skill_commands::handle_skill_command(runner, &cwd, "list").await?;
+            skill::commands::handle_skill_command(runner, &cwd, "list").await?;
             continue;
         }
 
         if let Some(command) = command_args(input, "/skill") {
-            skill_commands::handle_skill_command(runner, &cwd, command.trim()).await?;
+            skill::commands::handle_skill_command(runner, &cwd, command.trim()).await?;
             if let Some(name) = &session_name {
                 runner.save_session_named(name)?;
             }
@@ -278,7 +281,7 @@ pub(crate) async fn run_line_interactive_chat(
         }
 
         let mut save_after_run = false;
-        if let Err(error) = skill_commands::load_skill_mentions(runner, &cwd, input).await {
+        if let Err(error) = skill::commands::load_skill_mentions(runner, &cwd, input).await {
             eprintln!("error: {error:#}");
         } else {
             if let Err(error) = runner.run(input).await {

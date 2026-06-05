@@ -1,6 +1,14 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
+const POST_COMPACTION_NOTICE_START: &str = "[spark post-compaction verification]";
+const POST_COMPACTION_NOTICE_END: &str = "[/spark post-compaction verification]";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::agent) struct PostCompactionVerificationNotice {
+    pub(in crate::agent) required_actions: usize,
+}
+
 pub(in crate::agent) fn compact_input_locally(
     input: &mut Vec<Value>,
     max_chars: usize,
@@ -91,6 +99,94 @@ pub(in crate::agent) fn compact_input_locally(
         "compacted_messages": compacted_messages,
         "threshold_chars": max_chars,
     })))
+}
+
+pub(in crate::agent) fn append_post_compaction_verification_notice(
+    input: &mut Vec<Value>,
+    prompt_input: &[Value],
+) -> Option<PostCompactionVerificationNotice> {
+    let actions = retained_action_lines_for_input(prompt_input);
+    let has_user_context = prompt_input
+        .iter()
+        .any(|item| is_real_user_message(item) && !is_post_compaction_notice_item(item));
+    if !has_user_context {
+        return None;
+    }
+
+    input.retain(|item| !is_post_compaction_notice_item(item));
+    input.push(post_compaction_verification_message(&actions));
+    Some(PostCompactionVerificationNotice {
+        required_actions: actions.len(),
+    })
+}
+
+#[cfg(test)]
+pub(in crate::agent) fn post_compaction_verification_text(
+    prompt_input: &[Value],
+) -> Option<String> {
+    let actions = retained_action_lines_for_input(prompt_input);
+    let has_user_context = prompt_input
+        .iter()
+        .any(|item| is_real_user_message(item) && !is_post_compaction_notice_item(item));
+    has_user_context.then(|| post_compaction_verification_text_from_actions(&actions))
+}
+
+fn post_compaction_verification_message(actions: &[String]) -> Value {
+    json!({
+        "role": "user",
+        "content": [{
+            "type": "input_text",
+            "text": post_compaction_verification_text_from_actions(actions),
+        }]
+    })
+}
+
+fn post_compaction_verification_text_from_actions(actions: &[String]) -> String {
+    let mut text = format!(
+        "{POST_COMPACTION_NOTICE_START}\n\
+         A compaction just occurred. Treat compacted summaries as memory hints, not proof.\n\
+         Before the final answer, if the task involves exact files, commands, or state, run the smallest fresh confirmation tool call instead of answering from the compacted summary.\n\
+         If no exact confirmation is needed, continue normally.\n\
+         required_actions={}\n",
+        actions.len()
+    );
+    for (index, action) in actions.iter().enumerate() {
+        text.push_str(&format!("action_{}={action}\n", index + 1));
+    }
+    if !actions.is_empty() {
+        text.push_str(
+            "Use the listed actions as confirmation candidates; execute the relevant one(s) after this notice before finalizing.\n",
+        );
+    }
+    text.push_str(POST_COMPACTION_NOTICE_END);
+    text
+}
+
+fn retained_action_lines_for_input(input: &[Value]) -> Vec<String> {
+    let mut actions = Vec::new();
+    for item in input {
+        if is_post_compaction_notice_item(item) {
+            continue;
+        }
+        let raw = message_text_from_value(item);
+        if raw.trim().is_empty() {
+            continue;
+        }
+        for line in retained_intent_lines(&raw, 16) {
+            if let Some(action) = parse_native_tool_action(&line) {
+                actions.push(action);
+            }
+        }
+    }
+    actions.sort();
+    actions.dedup();
+    actions
+}
+
+fn is_post_compaction_notice_item(item: &Value) -> bool {
+    message_text_from_value(item)
+        .trim_start()
+        .starts_with(POST_COMPACTION_NOTICE_START)
 }
 
 pub(in crate::agent) fn trim_codex_generated_tail_to_fit(

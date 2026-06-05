@@ -11,7 +11,8 @@ use crate::tools::builtin_tools;
 pub(in crate::agent) mod retention;
 
 use retention::{
-    compact_input_locally, install_remote_compaction_history, trim_codex_generated_tail_to_fit,
+    append_post_compaction_verification_notice, compact_input_locally,
+    install_remote_compaction_history, trim_codex_generated_tail_to_fit,
 };
 
 impl AgentRunner {
@@ -53,11 +54,13 @@ impl AgentRunner {
         match self.client.responses_compact(&compact_input, tools).await {
             Ok((remote_output, raw)) => {
                 let duration_ms = compaction_started.elapsed().as_millis() as u64;
-                let (replacement, pressure_report) = compact_remote_history_to_threshold(
+                let (mut replacement, pressure_report) = compact_remote_history_to_threshold(
                     &compact_input,
                     remote_output,
                     self.compact_after_chars,
                 )?;
+                let verification_notice =
+                    append_post_compaction_verification_notice(&mut replacement, &compact_input);
                 let after = serde_json::to_string(&replacement)?.len();
                 self.input = replacement;
                 Ok(Some(json!({
@@ -70,6 +73,10 @@ impl AgentRunner {
                     "after_chars": after,
                     "threshold_chars": self.compact_after_chars,
                     "local_pressure": pressure_report,
+                    "post_compaction_verification_notice": verification_notice.is_some(),
+                    "post_compaction_required_actions": verification_notice
+                        .map(|notice| notice.required_actions)
+                        .unwrap_or(0),
                     "raw": raw,
                 })))
             }
@@ -77,12 +84,20 @@ impl AgentRunner {
                 let duration_ms = compaction_started.elapsed().as_millis() as u64;
                 let fallback = compact_input_locally(&mut self.input, self.compact_after_chars)?;
                 if let Some(report) = fallback {
+                    let verification_notice =
+                        append_post_compaction_verification_notice(&mut self.input, &compact_input);
+                    let after = serde_json::to_string(&self.input)?.len();
                     Ok(Some(json!({
                         "method": "local_fallback",
                         "forced": force,
                         "trigger": trigger,
                         "duration_ms": duration_ms,
                         "remote_error": error.to_string(),
+                        "after_chars": after,
+                        "post_compaction_verification_notice": verification_notice.is_some(),
+                        "post_compaction_required_actions": verification_notice
+                            .map(|notice| notice.required_actions)
+                            .unwrap_or(0),
                         "fallback": report,
                     })))
                 } else {

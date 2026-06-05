@@ -1,5 +1,5 @@
 use crate::cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind};
-use crate::profile_scenarios::{
+use crate::profile::scenarios::{
     benchmark_profile_prompts, benchmark_task_prompt, codex_cli_benchmark_prompt,
     prepare_profile_scenario, profile_scenario_expected_skills,
     profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
@@ -476,7 +476,7 @@ fn benchmark_design_survey_targets_existing_scenario_taxonomy() {
     assert!(prompt.contains("three concrete new task prompts"));
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.search"]]);
     assert_eq!(calls.len(), 4);
-    assert_eq!(calls[0]["path"], "src/profile_scenarios.rs");
+    assert_eq!(calls[0]["path"], "src/profile/scenarios.rs");
     assert_eq!(calls[1]["path"], "src/profiler/analyze/expectations.rs");
     assert_eq!(calls[2]["path"], "README.md");
     assert_eq!(calls[3]["path"], "src");

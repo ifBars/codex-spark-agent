@@ -7,7 +7,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
-use crate::{cli::ProfileScenarioKind, profile_scenarios};
+use crate::{cli::ProfileScenarioKind, profile::scenarios};
 
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(180);
 const VALIDATION_ARTIFACT: &str = "scenario-validation.json";
@@ -58,7 +58,7 @@ pub(crate) async fn run_and_write_scenario_validation(
     artifact_dir: &Path,
     scenario: ProfileScenarioKind,
 ) -> Result<Option<ScenarioValidationResult>> {
-    let Some(spec) = profile_scenarios::profile_scenario_validation_command(scenario) else {
+    let Some(spec) = scenarios::profile_scenario_validation_command(scenario) else {
         return Ok(None);
     };
 

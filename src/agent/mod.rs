@@ -10,7 +10,7 @@ use crate::auth::{self, AuthTokens};
 use crate::client::SparkClient;
 use crate::config;
 use crate::profiler::AgentProfiler;
-use crate::session_store::SessionStore;
+use crate::session::store::SessionStore;
 use crate::tools::AgentMode;
 
 pub(in crate::agent) mod cache;
@@ -240,7 +240,7 @@ impl AgentRunner {
     pub(crate) fn emit_assistant_message(&mut self, text: &str) {
         match &mut self.display {
             AgentDisplay::Plain => println!("{text}"),
-            AgentDisplay::Markdown => crate::chat_markdown::print_assistant_message(text),
+            AgentDisplay::Markdown => crate::chat::markdown::print_assistant_message(text),
             AgentDisplay::Buffered(events) => {
                 events.push(AgentDisplayEvent::Assistant(text.to_string()));
             }

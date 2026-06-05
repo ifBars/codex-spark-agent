@@ -1,8 +1,9 @@
 use super::*;
 use crate::agent::compaction::retention::{
-    compact_input_locally, compact_message_item, install_remote_compaction_history,
-    message_text_from_value, parse_native_tool_action, process_remote_compaction_output,
-    retained_intent_block, retained_intent_lines,
+    append_post_compaction_verification_notice, compact_input_locally, compact_message_item,
+    install_remote_compaction_history, message_text_from_value, parse_native_tool_action,
+    post_compaction_verification_text, process_remote_compaction_output, retained_intent_block,
+    retained_intent_lines,
 };
 use crate::agent::compaction::{
     compact_remote_history_to_threshold, compaction_trigger_for_turn, format_compaction_notice,
@@ -256,6 +257,59 @@ fn compact_message_item_is_idempotent_for_local_handoff() {
 
     assert_eq!(once, twice);
     assert!(once.contains("preview_chars="));
+}
+
+#[test]
+fn post_compaction_notice_tells_agent_to_reconfirm_exact_state() {
+    let prompt_input = vec![json!({
+        "role": "user",
+        "content": [{
+            "type": "input_text",
+            "text": "After any compaction, use fs.list on src with recursive=false, then answer.\nNext, use fs.read on README.md.\nrow 00001: filler"
+        }]
+    })];
+
+    let notice = post_compaction_verification_text(&prompt_input).expect("post-compaction notice");
+
+    assert!(notice.contains("[spark post-compaction verification]"));
+    assert!(notice.contains("Treat compacted summaries as memory hints, not proof."));
+    assert!(notice.contains("run the smallest fresh confirmation tool call"));
+    assert!(notice.contains("required_actions=2"));
+    assert!(notice.contains("action_1=tool=fs.list path=src recursive=false"));
+    assert!(notice.contains("action_2=tool=fs.read path=README.md"));
+    assert!(!notice.contains("row 00001"));
+}
+
+#[test]
+fn post_compaction_notice_is_appended_once_after_retained_history() {
+    let prompt_input = vec![json!({
+        "role": "user",
+        "content": [{
+            "type": "input_text",
+            "text": "After any compaction, use fs.list on src with recursive=false, then answer."
+        }]
+    })];
+    let mut compacted = vec![json!({
+        "type": "compaction",
+        "encrypted_content": "encrypted-summary"
+    })];
+
+    let first = append_post_compaction_verification_notice(&mut compacted, &prompt_input)
+        .expect("first notice");
+    let second = append_post_compaction_verification_notice(&mut compacted, &prompt_input)
+        .expect("second notice");
+    let notices = compacted
+        .iter()
+        .filter(|item| {
+            message_text_from_value(item).contains("[spark post-compaction verification]")
+        })
+        .count();
+
+    assert_eq!(first.required_actions, 1);
+    assert_eq!(second.required_actions, 1);
+    assert_eq!(notices, 1);
+    assert_eq!(compacted.len(), 2);
+    assert_eq!(compacted[0]["type"], "compaction");
 }
 
 #[test]

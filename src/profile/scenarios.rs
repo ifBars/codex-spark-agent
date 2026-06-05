@@ -523,7 +523,7 @@ pub(crate) fn profile_scenario_prompts(
              Survey the existing profiling scenarios and propose benchmark coverage gaps grounded in this repo.\n\
              Use targeted native tools and bounded reads; do not run benchmarks.\n\
              Required evidence path:\n\
-             1. Use fs.read on src/profile_scenarios.rs.\n\
+             1. Use fs.read on src/profile/scenarios.rs.\n\
              2. Use fs.read on src/profiler/analyze/expectations.rs.\n\
              3. Use fs.search under README.md for profile-scenario.\n\
              4. Use fs.search under src for expected_tool_calls.\n\
@@ -737,7 +737,7 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Survey the existing profiling scenarios and propose benchmark coverage gaps grounded in this repo.\n\
              Do not run benchmarks.\n\
              Required evidence path:\n\
-             1. Read src/profile_scenarios.rs.\n\
+             1. Read src/profile/scenarios.rs.\n\
              2. Read src/profiler/analyze/expectations.rs.\n\
              3. Search README.md for profile-scenario.\n\
              4. Search src for expected_tool_calls.\n\
@@ -1308,7 +1308,7 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::BenchmarkDesignSurvey => vec![
             json!({
                 "tool": "fs.read",
-                "path": "src/profile_scenarios.rs",
+                "path": "src/profile/scenarios.rs",
             }),
             json!({
                 "tool": "fs.read",

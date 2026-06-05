@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{
     DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS, DEFAULT_MODEL, DEFAULT_SCENARIO_TARGET_TOKENS,
-    benchmark_judge::DEFAULT_JUDGE_MODEL, tools,
+    benchmark::judge::DEFAULT_JUDGE_MODEL, tools,
 };
 
 #[derive(Debug, Parser)]

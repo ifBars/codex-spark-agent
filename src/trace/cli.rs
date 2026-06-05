@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::json;
 
 use crate::cli::TraceSort;
-use crate::{profiler, trace_commands};
+use crate::{profiler, trace::commands};
 
 pub(crate) fn handle_traces(
     limit: usize,
@@ -38,8 +38,8 @@ pub(crate) fn handle_traces(
         || min_compaction_regrowth_chars.is_some()
         || json
         || jsonl;
-    for run in trace_commands::list_trace_dirs(&trace_commands::trace_runs_root(&cwd), limit)? {
-        let display = trace_commands::display_trace_dir(&cwd, &run);
+    for run in commands::list_trace_dirs(&commands::trace_runs_root(&cwd), limit)? {
+        let display = commands::display_trace_dir(&cwd, &run);
         let trace_summary = if analyze {
             Some(profiler::analyze_trace(&run)?)
         } else {
@@ -54,14 +54,14 @@ pub(crate) fn handle_traces(
             continue;
         }
         if !diagnostics.is_empty()
-            && !trace_commands::trace_has_all_diagnostics(
+            && !commands::trace_has_all_diagnostics(
                 trace_summary.as_ref().expect("summary loaded"),
                 &diagnostics,
             )
         {
             continue;
         }
-        if !trace_commands::trace_matches_metric_filters(
+        if !commands::trace_matches_metric_filters(
             trace_summary.as_ref().expect("summary loaded"),
             min_tool_only_streak,
             min_overrun_turns,
@@ -73,13 +73,13 @@ pub(crate) fn handle_traces(
         if let Some(trace_summary) = &trace_summary {
             matching_summaries.push(trace_summary.clone());
         }
-        matching_records.push(trace_commands::TraceListRecord {
+        matching_records.push(commands::TraceListRecord {
             run,
             display,
             summary: trace_summary,
         });
     }
-    trace_commands::sort_trace_records(&mut matching_records, sort);
+    commands::sort_trace_records(&mut matching_records, sort);
     print_trace_records(
         &cwd,
         summary,
@@ -113,11 +113,11 @@ fn print_trace_records(
     json: bool,
     jsonl: bool,
     json_records: &mut Vec<serde_json::Value>,
-    matching_records: &[trace_commands::TraceListRecord],
+    matching_records: &[commands::TraceListRecord],
 ) -> Result<()> {
     for record in matching_records {
         if json || jsonl {
-            let record = trace_commands::trace_export_record(
+            let record = commands::trace_export_record(
                 cwd,
                 &record.run,
                 &record.display,
@@ -171,7 +171,7 @@ fn print_trace_aggregate(
                 "scenario": filter.scenario,
                 "diagnostics": filter.diagnostics,
                 "limit": filter.limit,
-                "sort": trace_commands::trace_sort_name(filter.sort),
+                "sort": commands::trace_sort_name(filter.sort),
                 "min_tool_only_streak": filter.min_tool_only_streak,
                 "min_overrun_turns": filter.min_overrun_turns,
                 "min_overrun_context_chars": filter.min_overrun_context_chars,
@@ -211,7 +211,7 @@ fn print_trace_aggregate(
 }
 
 fn trace_filter_label(filter: &TraceOutputFilter) -> String {
-    trace_commands::trace_filter_label(
+    commands::trace_filter_label(
         filter.scenario.as_deref(),
         &filter.diagnostics,
         filter.min_tool_only_streak,

@@ -1,27 +1,16 @@
 mod agent;
 mod auth;
-mod benchmark_judge;
-mod benchmark_results;
-mod benchmark_workspace;
+mod benchmark;
 mod chat;
-mod chat_markdown;
-mod chat_tui;
 mod cli;
 mod client;
-mod codex_cli_benchmark;
 mod config;
-mod opencode_benchmark;
-mod profile_runner;
-mod profile_scenarios;
+mod profile;
 mod profiler;
-mod scenario_validation;
-mod session_store;
-mod sessions;
-mod skill_commands;
-mod skills;
+mod session;
+mod skill;
 mod tools;
-mod trace_cli;
-mod trace_commands;
+mod trace;
 
 #[cfg(test)]
 mod tests;
@@ -97,13 +86,13 @@ async fn main() -> Result<()> {
             };
             let cwd = std::fs::canonicalize(&cwd)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
-            let compact_after_chars = trace_commands::resolve_char_threshold(
+            let compact_after_chars = trace::commands::resolve_char_threshold(
                 "compact-after",
                 compact_after_chars,
                 compact_after_tokens,
                 DEFAULT_COMPACT_AFTER_CHARS,
             )?;
-            let max_input_chars = trace_commands::resolve_char_threshold(
+            let max_input_chars = trace::commands::resolve_char_threshold(
                 "max-input",
                 max_input_chars,
                 max_input_tokens,
@@ -111,9 +100,9 @@ async fn main() -> Result<()> {
             )?;
             let explicit_session = session.is_some();
             let session_name =
-                session.or_else(|| interactive.then(sessions::timestamp_session_name));
+                session.or_else(|| interactive.then(session::timestamp_session_name));
             let start_new_session = new_session || (interactive && !explicit_session);
-            sessions::prepare_default_session_store(session_name.as_deref())?;
+            session::prepare_default_session_store(session_name.as_deref())?;
             let auth = config::load_auth()?;
             let mut runner = agent::AgentRunner::new(
                 auth,
@@ -140,7 +129,7 @@ async fn main() -> Result<()> {
                 }
             }
             for skill_name in requested_skills {
-                skill_commands::load_skill_into_runner(&mut runner, &cwd, &skill_name, false)
+                skill::commands::load_skill_into_runner(&mut runner, &cwd, &skill_name, false)
                     .await?;
             }
             if interactive {
@@ -150,7 +139,7 @@ async fn main() -> Result<()> {
                 if prompt.trim().is_empty() {
                     anyhow::bail!("prompt is required");
                 }
-                skill_commands::load_skill_mentions(&mut runner, &cwd, &prompt).await?;
+                skill::commands::load_skill_mentions(&mut runner, &cwd, &prompt).await?;
                 runner.run(&prompt).await?;
                 if let Some(name) = &session_name {
                     runner.save_session_named(name)?;
@@ -162,8 +151,8 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&tools::builtin_tools())?);
         }
         Command::Sessions => {
-            sessions::prepare_default_session_store(None)?;
-            for session in session_store::SessionStore::open_default()?.list_names()? {
+            session::prepare_default_session_store(None)?;
+            for session in session::store::SessionStore::open_default()?.list_names()? {
                 println!("{session}");
             }
         }
@@ -187,9 +176,9 @@ async fn main() -> Result<()> {
                     None,
                     tools::AgentMode::Work,
                 )?;
-                for source in skills::discover_sources(&cwd)? {
+                for source in skill::registry::discover_sources(&cwd)? {
                     let skill =
-                        skill_commands::compile_skill_cached(&runner, &cwd, &source.name, true)
+                        skill::commands::compile_skill_cached(&runner, &cwd, &source.name, true)
                             .await?;
                     println!(
                         "{} - {} ({}, {} chars)",
@@ -197,7 +186,7 @@ async fn main() -> Result<()> {
                     );
                 }
             } else {
-                for skill in skills::list_status(&cwd)? {
+                for skill in skill::registry::list_status(&cwd)? {
                     println!(
                         "{} [{}] - {} ({})",
                         skill.name, skill.cache_status, skill.description, skill.source_path
@@ -219,7 +208,7 @@ async fn main() -> Result<()> {
             json,
             jsonl,
         } => {
-            trace_cli::handle_traces(
+            trace::cli::handle_traces(
                 limit,
                 summary,
                 scenario,
@@ -245,7 +234,7 @@ async fn main() -> Result<()> {
             let cwd = std::fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from("."));
             let dir = match dir {
                 Some(dir) => dir,
-                None => trace_commands::latest_trace_dir(&trace_commands::trace_runs_root(&cwd))?,
+                None => trace::commands::latest_trace_dir(&trace::commands::trace_runs_root(&cwd))?,
             };
             let summary = profiler::analyze_trace(&dir)?;
             if timeline {
@@ -272,21 +261,21 @@ async fn main() -> Result<()> {
         } => {
             let cwd = std::fs::canonicalize(&cwd)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
-            let compact_after_chars = trace_commands::resolve_char_threshold(
+            let compact_after_chars = trace::commands::resolve_char_threshold(
                 "compact-after",
                 compact_after_chars,
                 compact_after_tokens,
                 DEFAULT_COMPACT_AFTER_CHARS,
             )?;
-            let max_input_chars = trace_commands::resolve_char_threshold(
+            let max_input_chars = trace::commands::resolve_char_threshold(
                 "max-input",
                 max_input_chars,
                 max_input_tokens,
                 DEFAULT_MAX_INPUT_CHARS,
             )?;
-            profile_runner::run_profile_scenarios(
+            profile::runner::run_profile_scenarios(
                 &[scenario],
-                profile_runner::ProfileRunOptions {
+                profile::runner::ProfileRunOptions {
                     cwd,
                     model,
                     reasoning_effort: reasoning_effort.wire_value().to_string(),
@@ -322,22 +311,22 @@ async fn main() -> Result<()> {
         } => {
             let cwd = std::fs::canonicalize(&cwd)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
-            let compact_after_chars = trace_commands::resolve_char_threshold(
+            let compact_after_chars = trace::commands::resolve_char_threshold(
                 "compact-after",
                 compact_after_chars,
                 compact_after_tokens,
                 DEFAULT_COMPACT_AFTER_CHARS,
             )?;
-            let max_input_chars = trace_commands::resolve_char_threshold(
+            let max_input_chars = trace::commands::resolve_char_threshold(
                 "max-input",
                 max_input_chars,
                 max_input_tokens,
                 DEFAULT_MAX_INPUT_CHARS,
             )?;
             let scenarios = selected_benchmark_scenarios(suite, &scenarios)?;
-            profile_runner::run_profile_scenarios(
+            profile::runner::run_profile_scenarios(
                 &scenarios,
-                profile_runner::ProfileRunOptions {
+                profile::runner::ProfileRunOptions {
                     cwd,
                     model,
                     reasoning_effort: reasoning_effort.wire_value().to_string(),
@@ -368,8 +357,8 @@ async fn main() -> Result<()> {
             } else {
                 cwd.join(output_dir)
             };
-            let report = benchmark_results::write_benchmark_report(
-                benchmark_results::BenchmarkReportOptions {
+            let report = benchmark::results::write_benchmark_report(
+                benchmark::results::BenchmarkReportOptions {
                     cwd,
                     suite,
                     limit,
@@ -421,8 +410,8 @@ async fn main() -> Result<()> {
             } else {
                 cwd.join(output_dir)
             };
-            let report = codex_cli_benchmark::run_codex_cli_benchmark(
-                codex_cli_benchmark::CodexCliBenchmarkOptions {
+            let report = benchmark::codex_cli::run_codex_cli_benchmark(
+                benchmark::codex_cli::CodexCliBenchmarkOptions {
                     cwd,
                     suite,
                     model,
@@ -468,8 +457,8 @@ async fn main() -> Result<()> {
             } else {
                 cwd.join(output_dir)
             };
-            let report = opencode_benchmark::run_opencode_benchmark(
-                opencode_benchmark::OpencodeBenchmarkOptions {
+            let report = benchmark::opencode::run_opencode_benchmark(
+                benchmark::opencode::OpencodeBenchmarkOptions {
                     cwd,
                     suite,
                     model,
@@ -513,8 +502,8 @@ async fn main() -> Result<()> {
             } else {
                 cwd.join(output_dir)
             };
-            let report = benchmark_results::write_benchmark_comparison(
-                benchmark_results::BenchmarkComparisonOptions {
+            let report = benchmark::results::write_benchmark_comparison(
+                benchmark::results::BenchmarkComparisonOptions {
                     cwd,
                     suite,
                     limit,
@@ -561,7 +550,7 @@ async fn main() -> Result<()> {
                 cwd.join(output_dir)
             };
             let report =
-                benchmark_judge::write_llm_judge_report(benchmark_judge::BenchmarkJudgeOptions {
+                benchmark::judge::write_llm_judge_report(benchmark::judge::BenchmarkJudgeOptions {
                     cwd,
                     comparison_report,
                     model,

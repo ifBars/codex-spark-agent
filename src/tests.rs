@@ -7,10 +7,10 @@ mod profile_scenarios;
 use crate::DEFAULT_COMPACT_AFTER_CHARS;
 use crate::cli::TraceSort;
 use crate::client::output_text_delta;
-use crate::profile_scenarios::validate_scenario_repeat;
-use crate::sessions::{is_active_session, timestamp_session_name};
-use crate::skill_commands::{contains_skill_mention, mentioned_skill_names};
-use crate::trace_commands::{
+use crate::profile::scenarios::validate_scenario_repeat;
+use crate::session::{is_active_session, timestamp_session_name};
+use crate::skill::commands::{contains_skill_mention, mentioned_skill_names};
+use crate::trace::commands::{
     TraceListRecord, latest_trace_dir, list_trace_dirs, resolve_char_threshold, sort_trace_records,
     trace_export_record, trace_filter_label, trace_has_all_diagnostics,
     trace_matches_metric_filters, trace_runs_root, trace_sort_metric, trace_sort_name,

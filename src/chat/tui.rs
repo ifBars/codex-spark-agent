@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::agent::{
     AgentDisplayEvent, AgentRunner, SharedDisplayEvents, take_shared_display_events,
 };
-use crate::{chat, sessions, skill_commands, tools};
+use crate::{chat, session, skill, tools};
 
 mod markdown;
 
@@ -283,7 +283,7 @@ impl ChatTui {
         let events = runner.use_shared_display();
 
         let run_result = if let Err(error) =
-            skill_commands::load_skill_mentions(runner, &self.cwd, &input).await
+            skill::commands::load_skill_mentions(runner, &self.cwd, &input).await
         {
             Err(error)
         } else {
@@ -369,21 +369,21 @@ impl ChatTui {
 
     async fn handle_command(&mut self, runner: &mut AgentRunner, input: &str) -> Result<bool> {
         if let Some(command) = chat::command_args(input, "/session") {
-            sessions::handle_session_command(runner, &mut self.session_name, command.trim())?;
+            session::handle_session_command(runner, &mut self.session_name, command.trim())?;
             self.sync_runner_settings(runner);
             return Ok(true);
         }
         if let Some(command) = chat::command_args(input, "/new") {
-            sessions::handle_new_session_command(runner, &mut self.session_name, command.trim())?;
+            session::handle_new_session_command(runner, &mut self.session_name, command.trim())?;
             self.sync_runner_settings(runner);
             return Ok(true);
         }
         if input == "/skills" {
-            skill_commands::handle_skill_command(runner, &self.cwd, "list").await?;
+            skill::commands::handle_skill_command(runner, &self.cwd, "list").await?;
             return Ok(true);
         }
         if let Some(command) = chat::command_args(input, "/skill") {
-            skill_commands::handle_skill_command(runner, &self.cwd, command.trim()).await?;
+            skill::commands::handle_skill_command(runner, &self.cwd, command.trim()).await?;
             if let Some(name) = &self.session_name {
                 runner.save_session_named(name)?;
             }
@@ -916,7 +916,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                     plain_lines(&message.body)
                 }
             };
-            for line in body_lines {
+            for line in terminal_safe_lines(body_lines) {
                 lines.push(indent_line(line));
             }
             lines.push(Line::from(""));
@@ -1661,6 +1661,58 @@ fn plain_lines(text: &str) -> Vec<Line<'static>> {
         .collect()
 }
 
+fn terminal_safe_lines(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .map(|line| {
+            Line::from(
+                line.spans
+                    .into_iter()
+                    .map(|span| Span::styled(terminal_safe_text(span.content.as_ref()), span.style))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect()
+}
+
+fn terminal_safe_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\u{fe0e}' | '\u{fe0f}' | '\u{200d}' => {}
+            '✅' | '☑' | '✔' | '✓' => out.push_str("[ok]"),
+            '❌' | '✖' | '✗' => out.push_str("[x]"),
+            '⚠' => out.push_str("[!]"),
+            '🚨' => out.push_str("[alert]"),
+            '🔥' => out.push_str("[hot]"),
+            '⭐' | '🌟' => out.push('*'),
+            '💡' => out.push_str("[idea]"),
+            '📌' => out.push_str("[pin]"),
+            '📁' | '📂' => out.push_str("[dir]"),
+            '📄' | '📝' => out.push_str("[file]"),
+            '🔧' | '🛠' => out.push_str("[tool]"),
+            '🔍' => out.push_str("[search]"),
+            '•' | '‣' | '◦' => out.push('-'),
+            '→' | '⇒' | '➜' | '➡' => out.push_str("->"),
+            '←' | '⇐' | '⬅' => out.push_str("<-"),
+            '↑' | '⬆' => out.push('^'),
+            '↓' | '⬇' => out.push('v'),
+            ch if is_terminal_unstable_emoji(ch) => out.push('?'),
+            ch => out.push(ch),
+        }
+    }
+    out
+}
+
+fn is_terminal_unstable_emoji(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1F000..=0x1FAFF
+            | 0x2600..=0x26FF
+            | 0x2700..=0x27BF
+    )
+}
+
 fn format_tool_args(name: &str, args: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(args) else {
         return compact_inline(args, 180);
@@ -1747,12 +1799,8 @@ fn wrapped_line_count(lines: &[Line<'static>], width: usize) -> usize {
     lines
         .iter()
         .map(|line| {
-            let chars = line
-                .spans
-                .iter()
-                .map(|span| span.content.chars().count())
-                .sum::<usize>();
-            chars.max(1).div_ceil(width)
+            let display_width = line.width();
+            display_width.max(1).div_ceil(width)
         })
         .sum()
 }
@@ -2009,7 +2057,7 @@ mod tests {
             AgentDisplayEvent::ToolBatchStart { count: 1 },
             AgentDisplayEvent::ToolCall {
                 name: "fs.read".to_string(),
-                args: r#"{"path":"src/chat_tui.rs","offset":1,"limit":20}"#.to_string(),
+                args: r#"{"path":"src/chat/tui.rs","offset":1,"limit":20}"#.to_string(),
             },
             AgentDisplayEvent::ToolResult {
                 name: "fs.read".to_string(),
@@ -2214,11 +2262,57 @@ mod tests {
     }
 
     #[test]
+    fn transcript_replaces_emoji_checklist_markers_for_stable_terminal_rendering() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        tui.push_assistant(
+            "- ✅ Clear module split\n- ⚠️ No obvious test project\n- 🚨 Critical issue\n- 📁 src → tests",
+        );
+
+        let rendered = flatten_lines(&tui.render_transcript_lines());
+
+        assert!(rendered.contains("- [ok] Clear module split"));
+        assert!(rendered.contains("- [!] No obvious test project"));
+        assert!(rendered.contains("- [alert] Critical issue"));
+        assert!(rendered.contains("- [dir] src -> tests"));
+        assert!(!rendered.contains('✅'));
+        assert!(!rendered.contains('⚠'));
+        assert!(!rendered.contains('\u{fe0f}'));
+        assert!(!rendered.contains('🚨'));
+    }
+
+    #[test]
+    fn draw_sanitizes_wide_emoji_before_buffer_rendering() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        tui.push_assistant(
+            "- ✅ Clear module split\n- ⚠️ No obvious test project\nA few caution points before finalizing.",
+        );
+
+        let backend = TestBackend::new(72, 16);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| tui.draw(frame)).expect("draw");
+
+        let rendered = buffer_to_string(terminal.backend().buffer());
+        assert!(rendered.contains("[ok] Clear module split"));
+        assert!(rendered.contains("[!] No obvious test project"));
+        assert!(!rendered.contains('✅'));
+        assert!(!rendered.contains('⚠'));
+        assert!(!rendered.contains('\u{fe0f}'));
+    }
+
+    #[test]
     fn wrapped_line_count_accounts_for_terminal_width() {
         let lines = vec![ratatui::text::Line::from("abcdefghij")];
 
         assert_eq!(wrapped_line_count(&lines, 10), 1);
         assert_eq!(wrapped_line_count(&lines, 4), 3);
+    }
+
+    #[test]
+    fn wrapped_line_count_uses_display_width_not_char_count() {
+        let lines = vec![ratatui::text::Line::from("你好")];
+
+        assert_eq!(wrapped_line_count(&lines, 4), 1);
+        assert_eq!(wrapped_line_count(&lines, 3), 2);
     }
 
     fn flatten_lines(lines: &[Line<'static>]) -> String {

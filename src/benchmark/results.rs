@@ -10,10 +10,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    benchmark_judge::BenchmarkJudgeReport,
+    benchmark::{codex_cli::CodexCliBenchmarkRow, judge::BenchmarkJudgeReport},
     cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind},
-    codex_cli_benchmark::CodexCliBenchmarkRow,
-    profiler, scenario_validation, trace_commands,
+    profile::validation,
+    profiler,
+    trace::commands,
 };
 
 #[derive(Debug, Clone)]
@@ -168,7 +169,7 @@ pub(crate) fn write_benchmark_report(
         anyhow::bail!(
             "no traces found for benchmark suite '{}' under {}",
             options.suite.name(),
-            trace_commands::trace_runs_root(&options.cwd).display()
+            commands::trace_runs_root(&options.cwd).display()
         );
     }
 
@@ -228,7 +229,7 @@ pub(crate) fn write_benchmark_comparison(
         anyhow::bail!(
             "no harness traces found for benchmark suite '{}' under {}",
             options.suite.name(),
-            trace_commands::trace_runs_root(&options.cwd).display()
+            commands::trace_runs_root(&options.cwd).display()
         );
     }
     let codex_rows =
@@ -361,10 +362,7 @@ fn collect_benchmark_rows(options: &BenchmarkReportOptions) -> Result<Vec<Benchm
 
     let mut rows = Vec::new();
     let mut seen_scenarios = BTreeSet::new();
-    for run in trace_commands::list_trace_dirs(
-        &trace_commands::trace_runs_root(&options.cwd),
-        options.limit,
-    )? {
+    for run in commands::list_trace_dirs(&commands::trace_runs_root(&options.cwd), options.limit)? {
         let summary = profiler::analyze_trace(&run)?;
         if benchmark_suite(&summary) != Some(options.suite.name()) {
             continue;
@@ -462,9 +460,7 @@ fn resolve_manifest_trace_dir(cwd: &Path, trace_dir: &str) -> PathBuf {
 }
 
 fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow {
-    let trace_dir = trace_commands::display_trace_dir(cwd, run)
-        .display()
-        .to_string();
+    let trace_dir = commands::display_trace_dir(cwd, run).display().to_string();
     let run_id = run
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -482,7 +478,7 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
     let recovered_failures = value_u64(summary, "/tool_failure_recovery/recovered_failures");
     let unrecovered_failures = value_u64(summary, "/tool_failure_recovery/unrecovered_failures");
     let diagnostics = diagnostic_kinds(summary);
-    let validation = scenario_validation::read_scenario_validation(run);
+    let validation = validation::read_scenario_validation(run);
     let validation_present = validation.is_some();
     let validation_exit_code = validation.as_ref().and_then(|result| result.exit_code);
     let validation_timed_out = validation.as_ref().is_some_and(|result| result.timed_out);
@@ -3621,9 +3617,9 @@ mod tests {
             suite: "real-world".to_string(),
             comparison_report: "comparison.json".to_string(),
             generated_at_unix_ms: 1,
-            rows: vec![crate::benchmark_judge::BenchmarkJudgeScenario {
+            rows: vec![crate::benchmark::judge::BenchmarkJudgeScenario {
                 scenario: "matched".to_string(),
-                scores: vec![crate::benchmark_judge::BenchmarkJudgeRunnerScore {
+                scores: vec![crate::benchmark::judge::BenchmarkJudgeRunnerScore {
                     runner: "spark-harness".to_string(),
                     solution_score: 60.0,
                     process_score: 40.0,

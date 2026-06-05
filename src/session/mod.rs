@@ -1,13 +1,15 @@
 use anyhow::Result;
 
-use crate::{agent, session_store};
+pub(crate) mod store;
+
+use crate::agent;
 
 pub(crate) fn handle_session_command(
     runner: &mut agent::AgentRunner,
     session_name: &mut Option<String>,
     command: &str,
 ) -> Result<()> {
-    let store = session_store::SessionStore::open_default()?;
+    let store = store::SessionStore::open_default()?;
     let mut parts = command.split_whitespace();
     let action = parts.next();
     match action {
@@ -101,7 +103,7 @@ fn rename_session(
     first: &str,
     second: Option<&str>,
 ) -> Result<()> {
-    let store = session_store::SessionStore::open_default()?;
+    let store = store::SessionStore::open_default()?;
     let (source, new_name) = match second {
         Some(new_name) => (first.to_string(), new_name),
         None => {
@@ -130,7 +132,7 @@ fn delete_session(
     if is_active_session(session_name, name) {
         anyhow::bail!("cannot delete the active session; switch or start /new first");
     }
-    session_store::SessionStore::open_default()?.delete(name)?;
+    store::SessionStore::open_default()?.delete(name)?;
     runner.emit_system_message(format!("deleted session: {name}"));
     Ok(())
 }
@@ -182,5 +184,5 @@ pub(crate) fn timestamp_session_name() -> String {
 }
 
 pub(crate) fn prepare_default_session_store(protected_session_name: Option<&str>) -> Result<()> {
-    session_store::prepare_default_store(protected_session_name)
+    store::prepare_default_store(protected_session_name)
 }

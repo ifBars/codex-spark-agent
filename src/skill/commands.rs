@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::{agent, skills};
+use crate::{agent, skill::registry};
 
 pub(crate) async fn handle_skill_command(
     runner: &mut agent::AgentRunner,
@@ -12,7 +12,7 @@ pub(crate) async fn handle_skill_command(
     let mut parts = command.split_whitespace();
     match parts.next() {
         None | Some("list") => {
-            for skill in skills::list_status(cwd)? {
+            for skill in registry::list_status(cwd)? {
                 let loaded = if runner.loaded_skills().contains(&skill.name) {
                     " loaded"
                 } else {
@@ -26,7 +26,7 @@ pub(crate) async fn handle_skill_command(
         }
         Some("refresh") => {
             let mut refreshed = 0usize;
-            for source in skills::discover_sources(cwd)? {
+            for source in registry::discover_sources(cwd)? {
                 compile_skill_cached(runner, cwd, &source.name, true).await?;
                 refreshed += 1;
             }
@@ -78,7 +78,7 @@ pub(crate) async fn load_skill_mentions(
 
 pub(crate) fn mentioned_skill_names(cwd: &PathBuf, text: &str) -> Result<Vec<String>> {
     let mut names = Vec::new();
-    for source in skills::discover_sources(cwd)? {
+    for source in registry::discover_sources(cwd)? {
         let mention = format!("@{}", source.name);
         if contains_skill_mention(text, &mention) {
             names.push(source.name);
@@ -123,19 +123,19 @@ pub(crate) async fn compile_skill_cached(
     cwd: &PathBuf,
     name: &str,
     refresh: bool,
-) -> Result<skills::CompiledSkill> {
-    if !refresh && let Some(cached) = skills::load_cached_if_fresh(cwd, name)? {
+) -> Result<registry::CompiledSkill> {
+    if !refresh && let Some(cached) = registry::load_cached_if_fresh(cwd, name)? {
         return Ok(cached);
     }
 
-    let (_, raw) = skills::source_text(cwd, name)?;
+    let (_, raw) = registry::source_text(cwd, name)?;
     match runner.compile_skill_summary(name, &raw).await {
-        Ok(summary) => skills::compile_or_load_with_summary(cwd, name, true, Some(summary)),
+        Ok(summary) => registry::compile_or_load_with_summary(cwd, name, true, Some(summary)),
         Err(error) => {
             eprintln!(
                 "warning: Spark skill compile failed for `{name}`; using local fallback: {error:#}"
             );
-            skills::compile_or_load(cwd, name, true)
+            registry::compile_or_load(cwd, name, true)
         }
     }
 }

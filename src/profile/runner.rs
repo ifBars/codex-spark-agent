@@ -4,9 +4,15 @@ use anyhow::Result;
 use serde_json::json;
 
 use crate::{
-    APPROX_CHARS_PER_TOKEN, benchmark_results, benchmark_workspace, cli::ProfileScenarioKind,
-    config, profile_scenarios, profiler, scenario_validation, skill_commands, tools,
-    trace_commands,
+    APPROX_CHARS_PER_TOKEN,
+    benchmark::{results, workspace},
+    cli::ProfileScenarioKind,
+    config,
+    profile::{scenarios, validation},
+    profiler,
+    skill::commands as skill_commands,
+    tools,
+    trace::commands as trace_commands,
 };
 
 pub(crate) struct ProfileRunOptions {
@@ -28,7 +34,7 @@ pub(crate) async fn run_profile_scenarios(
     scenarios: &[ProfileScenarioKind],
     options: ProfileRunOptions,
 ) -> Result<()> {
-    profile_scenarios::validate_scenario_repeat(options.repeat)?;
+    scenarios::validate_scenario_repeat(options.repeat)?;
     if scenarios.is_empty() {
         anyhow::bail!("benchmark suite must include at least one scenario");
     }
@@ -50,9 +56,9 @@ pub(crate) async fn run_profile_scenarios(
     let mut benchmark_traces = Vec::new();
     for scenario in scenarios {
         let prompts = if options.benchmark_suite.is_some() {
-            profile_scenarios::benchmark_profile_prompts(*scenario, options.target_tokens)?
+            scenarios::benchmark_profile_prompts(*scenario, options.target_tokens)?
         } else {
-            profile_scenarios::profile_scenario_prompts(*scenario, options.target_tokens)?
+            scenarios::profile_scenario_prompts(*scenario, options.target_tokens)?
         };
         let total_prompt_chars = prompts.iter().map(String::len).sum::<usize>();
         println!(
@@ -71,7 +77,7 @@ pub(crate) async fn run_profile_scenarios(
         let mut run_result = Ok(());
         for repeat_index in 1..=options.repeat {
             let scenario_cwd = if let Some(suite) = &options.benchmark_suite {
-                let workspace = benchmark_workspace::create_benchmark_workspace(
+                let workspace = workspace::create_benchmark_workspace(
                     &options.cwd,
                     suite,
                     *scenario,
@@ -86,9 +92,9 @@ pub(crate) async fn run_profile_scenarios(
             } else {
                 options.cwd.clone()
             };
-            profile_scenarios::prepare_profile_scenario(&scenario_cwd, *scenario)?;
+            scenarios::prepare_profile_scenario(&scenario_cwd, *scenario)?;
             let read_roots = if options.benchmark_suite.is_some() {
-                benchmark_workspace::benchmark_read_roots(&options.cwd, &scenario_cwd)
+                workspace::benchmark_read_roots(&options.cwd, &scenario_cwd)
             } else {
                 Vec::new()
             };
@@ -120,9 +126,9 @@ pub(crate) async fn run_profile_scenarios(
                         "repeat_index": repeat_index,
                         "repeat_count": options.repeat,
                         "reasoning_effort": options.reasoning_effort.as_str(),
-                        "expected_tool_groups": profile_scenarios::profile_scenario_expected_tool_groups(*scenario),
-                        "expected_tool_calls": profile_scenarios::profile_scenario_expected_tool_calls(*scenario),
-                        "expected_skills": profile_scenarios::profile_scenario_expected_skills(*scenario),
+                        "expected_tool_groups": scenarios::profile_scenario_expected_tool_groups(*scenario),
+                        "expected_tool_calls": scenarios::profile_scenario_expected_tool_calls(*scenario),
+                        "expected_skills": scenarios::profile_scenario_expected_skills(*scenario),
                     }
                 })),
                 tools::AgentMode::Work,
@@ -163,7 +169,7 @@ pub(crate) async fn run_profile_scenarios(
                     &scenario_cwd,
                 )) {
                     Ok(mut latest) => {
-                        if let Err(error) = scenario_validation::run_and_write_scenario_validation(
+                        if let Err(error) = validation::run_and_write_scenario_validation(
                             &scenario_cwd,
                             &latest,
                             *scenario,
@@ -173,9 +179,8 @@ pub(crate) async fn run_profile_scenarios(
                             eprintln!("warning: failed to run scenario validation: {error:#}");
                         }
                         if options.benchmark_suite.is_some() {
-                            latest =
-                                benchmark_workspace::mirror_trace_to_source(&options.cwd, &latest)?;
-                            benchmark_traces.push(benchmark_results::BenchmarkRunManifestTrace {
+                            latest = workspace::mirror_trace_to_source(&options.cwd, &latest)?;
+                            benchmark_traces.push(results::BenchmarkRunManifestTrace {
                                 scenario: scenario.name().to_string(),
                                 repeat_index,
                                 workspace: scenario_cwd.display().to_string(),
@@ -240,7 +245,7 @@ pub(crate) async fn run_profile_scenarios(
     if !options.no_trace
         && let Some(suite) = &options.benchmark_suite
     {
-        let manifest_path = benchmark_results::write_benchmark_run_manifest(
+        let manifest_path = results::write_benchmark_run_manifest(
             &options.cwd,
             suite,
             scenarios,
