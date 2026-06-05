@@ -50,6 +50,29 @@ Run through Cargo:
 cargo run --bin spark -- --help
 ```
 
+## First-run setup
+
+The setup command walks through the first local configuration pass:
+
+```powershell
+cargo run --bin spark -- setup
+```
+
+It creates Spark's app/session storage, signs in with device-code auth, can migrate existing skills into the current repo's `.agents/skills`, and can refresh the local skill cache.
+
+For unattended setup, use defaults and skip prompts:
+
+```powershell
+cargo run --bin spark -- setup --non-interactive
+```
+
+Useful setup flags:
+
+- `--skip-login` creates local storage without authenticating.
+- `--skip-skill-migration` leaves `.agents/skills` untouched.
+- `--skill-source C:\path\to\skills` migrates skills from a specific directory.
+- `--cwd C:\path\to\repo` chooses the repo that receives migrated skills.
+
 ## Login
 
 Browser login:
@@ -64,7 +87,7 @@ Device-code login:
 cargo run --bin spark -- login --device
 ```
 
-Auth tokens are stored under `~/.spark-codex/auth.json`. Do not commit that file.
+Auth tokens are stored under Spark's local app data directory. Existing installs continue to use `~/.spark-codex/auth.json`; new installs use the platform data directory selected by the OS. Do not commit auth files.
 
 ## Basic use
 
@@ -116,7 +139,7 @@ Inside `spark chat`, these are the commands I use most:
 - `/skills`, `/skill load <name>`, and `/skill refresh` manage repo skills.
 - `/new`, `/save`, `/clear`, and `/exit` do what they say.
 
-Interactive chat starts a fresh timestamped session unless you pass `--session <name>`. Named sessions live in `~/.spark-codex/sessions.sqlite3`.
+Interactive chat starts a fresh timestamped session unless you pass `--session <name>`. Named sessions live in Spark's local app data directory.
 
 ## Skills
 
