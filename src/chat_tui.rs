@@ -30,6 +30,11 @@ const DOUBLE_ESCAPE_STOP_WINDOW: Duration = Duration::from_millis(700);
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
 const SOFT_TEXT: Color = Color::Gray;
+const USER_COLOR: Color = Color::Green;
+const TOOL_COLOR: Color = Color::LightBlue;
+const REASONING_COLOR: Color = Color::Magenta;
+const CONTEXT_COLOR: Color = Color::Yellow;
+const WARNING_COLOR: Color = Color::Red;
 
 pub(crate) async fn run(
     runner: &mut AgentRunner,
@@ -534,60 +539,42 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
 
     fn draw(&self, frame: &mut ratatui::Frame<'_>) {
         let command_menu_lines = self.command_menu_lines();
+        let command_menu_visible = command_menu_lines.is_some();
+        let activity_line = self.activity_line(command_menu_visible);
+        let activity_visible = activity_line.is_some();
         let command_menu_height = command_menu_lines
             .as_ref()
             .map(|lines| (lines.len() as u16 + 2).min(8))
             .unwrap_or(0);
-        let chunks = if command_menu_lines.is_some() {
-            Layout::vertical([
-                Constraint::Length(1),
-                Constraint::Min(5),
-                Constraint::Length(command_menu_height),
-                Constraint::Length(3),
-                Constraint::Length(1),
-            ])
-            .split(frame.area())
+        let constraints =
+            layout_constraints(command_menu_visible, activity_visible, command_menu_height);
+        let chunks = Layout::vertical(constraints).split(frame.area());
+        let mut chunk_index = 0;
+        let header = chunks[chunk_index];
+        chunk_index += 1;
+        let activity = if activity_visible {
+            let area = chunks[chunk_index];
+            chunk_index += 1;
+            Some(area)
         } else {
-            Layout::vertical([
-                Constraint::Length(1),
-                Constraint::Min(5),
-                Constraint::Length(3),
-                Constraint::Length(1),
-            ])
-            .split(frame.area())
+            None
         };
-        let header = chunks[0];
-        let transcript = chunks[1];
-        let (command_menu, composer, footer) = if command_menu_lines.is_some() {
-            (Some(chunks[2]), chunks[3], chunks[4])
+        let transcript = chunks[chunk_index];
+        chunk_index += 1;
+        let command_menu = if command_menu_visible {
+            let area = chunks[chunk_index];
+            chunk_index += 1;
+            Some(area)
         } else {
-            (None, chunks[2], chunks[3])
+            None
         };
+        let composer = chunks[chunk_index];
+        let footer = chunks[chunk_index + 1];
 
-        let session = self
-            .session_name
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| "no session".to_string());
-        let state = if self.running { "running" } else { "ready" };
-        let header_line = Line::from(vec![
-            Span::styled("▌", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
-            Span::raw(" "),
-            Span::styled(
-                "SPARK",
-                Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            muted_span("  "),
-            Span::styled(
-                state,
-                Style::new().fg(if self.running { ACCENT } else { Color::Green }),
-            ),
-            muted_span(" / "),
-            Span::styled(self.activity.header_label(), self.activity.header_style()),
-            muted_span("  ·  "),
-            Span::styled(session, Style::new().fg(MUTED)),
-        ]);
-        frame.render_widget(header_line, header);
+        frame.render_widget(self.header_line(), header);
+        if let (Some(area), Some(line)) = (activity, activity_line) {
+            frame.render_widget(line, area);
+        }
 
         let transcript_lines = self.render_transcript_lines();
         let transcript_height = transcript.height.saturating_sub(1) as usize;
@@ -600,11 +587,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             .block(
                 Block::new()
                     .borders(Borders::LEFT)
-                    .border_style(Style::new().fg(MUTED))
-                    .title(Span::styled(
-                        " timeline ",
-                        Style::new().fg(MUTED).add_modifier(Modifier::BOLD),
-                    )),
+                    .border_style(Style::new().fg(Color::Rgb(34, 42, 48))),
             )
             .wrap(Wrap { trim: false })
             .scroll((scroll, 0));
@@ -627,7 +610,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
 
         let composer_text = if self.input.is_empty() {
             Text::from(Line::from(Span::styled(
-                "Type a task, or / for commands",
+                "Ask Spark, or type / for commands",
                 Style::new().fg(MUTED),
             )))
         } else {
@@ -639,55 +622,139 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                     .borders(Borders::LEFT)
                     .border_style(Style::new().fg(if self.running { MUTED } else { ACCENT }))
                     .title(Span::styled(
-                        " prompt ",
+                        " message ",
                         Style::new().fg(MUTED).add_modifier(Modifier::BOLD),
                     )),
             )
             .wrap(Wrap { trim: false });
         frame.render_widget(composer_widget, composer);
 
-        let footer_line = if self.running {
-            Line::from(vec![
+        frame.render_widget(self.footer_line(command_menu_visible), footer);
+    }
+
+    fn header_line(&self) -> Line<'static> {
+        let session = self
+            .session_name
+            .as_deref()
+            .unwrap_or("workspace")
+            .to_string();
+        let cwd = self
+            .cwd
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(".")
+            .to_string();
+        let state = if self.running { "running" } else { "ready" };
+        let state_color = if self.running { ACCENT } else { USER_COLOR };
+
+        Line::from(vec![
+            Span::styled("▌", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::raw(" "),
+            Span::styled(
+                "Spark",
+                Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+            muted_span(" "),
+            status_span(state, state_color),
+            muted_span("  /  "),
+            Span::styled(self.activity.phase_label(), self.activity.header_style()),
+            muted_span("  ·  session "),
+            Span::styled(session, Style::new().fg(SOFT_TEXT)),
+            muted_span("  ·  cwd "),
+            Span::styled(cwd, Style::new().fg(SOFT_TEXT)),
+        ])
+    }
+
+    fn activity_line(&self, command_menu_visible: bool) -> Option<Line<'static>> {
+        if command_menu_visible {
+            return Some(Line::from(vec![
+                muted_span("  mode "),
+                Span::styled("command palette", Style::new().fg(ACCENT)),
+                muted_span(" · "),
+                Span::styled(
+                    "type to filter, Enter to run, Esc to clear",
+                    Style::new().fg(SOFT_TEXT),
+                ),
+            ]));
+        }
+
+        if matches!(self.activity.phase, ActivityPhase::Idle) {
+            return None;
+        }
+
+        Some(Line::from(vec![
+            muted_span("  activity "),
+            Span::styled(
+                self.activity.live_label(),
+                self.activity.header_style().add_modifier(Modifier::BOLD),
+            ),
+            muted_span(" · "),
+            Span::styled(self.activity.detail.clone(), Style::new().fg(SOFT_TEXT)),
+            self.activity
+                .turn
+                .map(|turn| muted_owned(format!(" · turn {turn}")))
+                .unwrap_or_else(|| muted_span("")),
+            self.activity
+                .input_chars
+                .map(|chars| muted_owned(format!(" · {}", format_chars(chars))))
+                .unwrap_or_else(|| muted_span("")),
+        ]))
+    }
+
+    fn footer_line(&self, command_menu_visible: bool) -> Line<'static> {
+        if self.running {
+            return Line::from(vec![
+                key_span("Esc Esc"),
+                Span::raw(" interrupt"),
+                muted_span("  ·  "),
+                key_span("Ctrl+T"),
+                Span::raw(if self.activity_details_expanded {
+                    " collapse details"
+                } else {
+                    " expand details"
+                }),
+                muted_span("  ·  "),
                 key_span("PgUp/PgDn"),
-                Span::raw(" scroll"),
+                Span::raw(" transcript"),
                 muted_span("  ·  "),
                 key_span("Ctrl+C"),
                 Span::raw(" exit"),
-                muted_span("  ·  "),
-                key_span("Ctrl+T"),
-                Span::raw(if self.activity_details_expanded {
-                    " collapse tools"
-                } else {
-                    " expand tools"
-                }),
-                muted_span("  ·  "),
-                key_span("Esc Esc"),
-                Span::raw(" stop"),
-                muted_span("  ·  agent active"),
-            ])
-        } else {
-            Line::from(vec![
+            ]);
+        }
+
+        if command_menu_visible {
+            return Line::from(vec![
                 key_span("Enter"),
-                Span::raw(" send"),
+                Span::raw(" run command"),
                 muted_span("  ·  "),
                 key_span("Esc"),
-                Span::raw(" clear"),
+                Span::raw(" clear palette"),
                 muted_span("  ·  "),
                 key_span("PgUp/PgDn"),
-                Span::raw(" scroll"),
-                muted_span("  ·  "),
-                key_span("Ctrl+T"),
-                Span::raw(if self.activity_details_expanded {
-                    " collapse"
-                } else {
-                    " expand"
-                }),
-                muted_span("  ·  "),
-                key_span("/help"),
-                Span::raw(" commands"),
-            ])
-        };
-        frame.render_widget(footer_line, footer);
+                Span::raw(" transcript"),
+            ]);
+        }
+
+        Line::from(vec![
+            key_span("Enter"),
+            Span::raw(" send"),
+            muted_span("  ·  "),
+            key_span("/"),
+            Span::raw(" commands"),
+            muted_span("  ·  "),
+            key_span("Ctrl+T"),
+            Span::raw(if self.activity_details_expanded {
+                " collapse details"
+            } else {
+                " expand details"
+            }),
+            muted_span("  ·  "),
+            key_span("PgUp/PgDn"),
+            Span::raw(" transcript"),
+            muted_span("  ·  "),
+            key_span("Ctrl+C"),
+            Span::raw(" exit"),
+        ])
     }
 
     fn command_menu_lines(&self) -> Option<Vec<Line<'static>>> {
@@ -1102,15 +1169,34 @@ impl ActivityState {
         self.finished_tools = 0;
     }
 
-    fn header_label(&self) -> String {
+    fn phase_label(&self) -> &'static str {
+        match self.phase {
+            ActivityPhase::Idle => "idle",
+            ActivityPhase::Thinking => "thinking",
+            ActivityPhase::Receiving => "receiving",
+            ActivityPhase::Compacting => "compacting",
+            ActivityPhase::Tools => "tools",
+        }
+    }
+
+    fn live_label(&self) -> String {
         match self.phase {
             ActivityPhase::Idle => "idle".to_string(),
-            ActivityPhase::Thinking => format!("{} thinking {}", self.spinner(), self.detail),
-            ActivityPhase::Receiving => format!("{} receiving {}", self.spinner(), self.detail),
-            ActivityPhase::Compacting => {
-                format!("{} compacting {}", self.spinner(), self.detail)
+            ActivityPhase::Thinking => format!("{} thinking", self.spinner()),
+            ActivityPhase::Receiving => format!("{} receiving", self.spinner()),
+            ActivityPhase::Compacting => format!("{} compacting", self.spinner()),
+            ActivityPhase::Tools => {
+                if self.total_tools == 0 {
+                    format!("{} tools", self.spinner())
+                } else {
+                    format!(
+                        "{} tools {}/{}",
+                        self.spinner(),
+                        self.finished_tools.min(self.total_tools),
+                        self.total_tools
+                    )
+                }
             }
-            ActivityPhase::Tools => format!("{} tools {}", self.spinner(), self.detail),
         }
     }
 
@@ -1143,32 +1229,60 @@ fn compact_inline(text: &str, max_chars: usize) -> String {
     trimmed
 }
 
+fn layout_constraints(
+    command_menu_visible: bool,
+    activity_visible: bool,
+    command_menu_height: u16,
+) -> Vec<Constraint> {
+    let mut constraints = vec![Constraint::Length(1)];
+    if activity_visible {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Min(5));
+    if command_menu_visible {
+        constraints.push(Constraint::Length(command_menu_height));
+    }
+    constraints.push(Constraint::Length(3));
+    constraints.push(Constraint::Length(1));
+    constraints
+}
+
 fn key_span(text: &'static str) -> Span<'static> {
     Span::styled(text, Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))
+}
+
+fn status_span(text: &'static str, color: Color) -> Span<'static> {
+    Span::styled(text, Style::new().fg(color).add_modifier(Modifier::BOLD))
 }
 
 fn muted_span(text: &'static str) -> Span<'static> {
     Span::styled(text, Style::new().fg(MUTED))
 }
 
+fn muted_owned(text: String) -> Span<'static> {
+    Span::styled(text, Style::new().fg(MUTED))
+}
+
 fn role_line(role: MessageRole) -> Line<'static> {
-    let (label, color) = match role {
-        MessageRole::User => ("you", Color::Green),
-        MessageRole::Assistant => ("spark", ACCENT),
-        MessageRole::System => ("system", Color::Yellow),
-        MessageRole::Tool => ("tools", Color::Blue),
-        MessageRole::Reasoning => ("reasoning", Color::Magenta),
-        MessageRole::Compaction => ("context", Color::Yellow),
-        MessageRole::Warning => ("warning", Color::Red),
-        MessageRole::Profile => ("profile", Color::Blue),
+    let (label, color, marker) = match role {
+        MessageRole::User => ("you", USER_COLOR, "●"),
+        MessageRole::Assistant => ("spark", ACCENT, "◆"),
+        MessageRole::System => ("system", CONTEXT_COLOR, "·"),
+        MessageRole::Tool => ("tools", TOOL_COLOR, "▣"),
+        MessageRole::Reasoning => ("thinking", REASONING_COLOR, "◇"),
+        MessageRole::Compaction => ("context", CONTEXT_COLOR, "◈"),
+        MessageRole::Warning => ("warning", WARNING_COLOR, "!"),
+        MessageRole::Profile => ("profile", TOOL_COLOR, "■"),
     };
     Line::from(vec![
-        Span::styled("● ", Style::new().fg(color)),
+        Span::styled(
+            format!("{marker} "),
+            Style::new().fg(color).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(
             label.to_string(),
             Style::new().fg(color).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" ─", Style::new().fg(MUTED)),
     ])
 }
 
@@ -1604,6 +1718,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::text::Line;
 
     use crate::agent::AgentDisplayEvent;
@@ -1669,7 +1786,7 @@ mod tests {
 
         tui.apply_agent_events(vec![AgentDisplayEvent::ReasoningStart]);
         let rendered = flatten_lines(&tui.render_transcript_lines());
-        assert!(rendered.contains("reasoning"));
+        assert!(rendered.contains("thinking"));
         assert!(rendered.contains("thinking through the next step"));
         assert!(matches!(tui.activity.phase, ActivityPhase::Thinking));
 
@@ -1707,6 +1824,79 @@ mod tests {
         let rendered = flatten_lines(&tui.command_menu_lines().expect("unknown menu"));
         assert!(rendered.contains("is not a Spark command"));
         assert!(rendered.contains("/wat"));
+    }
+
+    #[test]
+    fn activity_rail_reflects_command_palette_and_running_state() {
+        let mut tui = ChatTui::new(
+            Some("design-pass".to_string()),
+            std::path::PathBuf::from("C:/workspace/spark"),
+        );
+
+        let ready = flatten_lines(&[tui.header_line()]);
+        assert!(ready.contains("Spark"));
+        assert!(ready.contains("ready"));
+        assert!(ready.contains("session design-pass"));
+        assert!(ready.contains("cwd spark"));
+        assert!(tui.activity_line(false).is_none());
+
+        tui.input = "/sta".to_string();
+        let palette = flatten_lines(&[
+            tui.activity_line(true).expect("palette line"),
+            tui.footer_line(true),
+        ]);
+        assert!(palette.contains("command palette"));
+        assert!(palette.contains("Enter run command"));
+
+        tui.running = true;
+        tui.activity.start_tools(3);
+        tui.activity.start_tool("fs.read");
+        let running = flatten_lines(&[
+            tui.activity_line(false).expect("running line"),
+            tui.footer_line(false),
+        ]);
+        assert!(running.contains("tools 0/3"));
+        assert!(running.contains("running fs.read"));
+        assert!(running.contains("Esc Esc interrupt"));
+    }
+
+    #[test]
+    fn draw_renders_agent_console_rails() {
+        let mut tui = ChatTui::new(
+            Some("visual-test".to_string()),
+            std::path::PathBuf::from("C:/workspace/spark"),
+        );
+        tui.push_system("Type /help for commands.");
+        tui.push_user("Polish the TUI");
+        tui.apply_agent_events(vec![
+            AgentDisplayEvent::ReasoningStart,
+            AgentDisplayEvent::ReasoningSummary("Checking Ratatui references.".to_string()),
+            AgentDisplayEvent::ReasoningFinish,
+            AgentDisplayEvent::ToolBatchStart { count: 1 },
+            AgentDisplayEvent::ToolCall {
+                name: "fs.read".to_string(),
+                args: r#"{"path":"src/chat_tui.rs","offset":1,"limit":20}"#.to_string(),
+            },
+            AgentDisplayEvent::ToolResult {
+                name: "fs.read".to_string(),
+                ok: true,
+                duration_ms: 5,
+                output_chars: 900,
+                error: None,
+            },
+        ]);
+
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| tui.draw(frame)).expect("draw");
+
+        let rendered = buffer_to_string(terminal.backend().buffer());
+        assert!(rendered.contains("Spark"));
+        assert!(rendered.contains("session visual-test"));
+        assert!(rendered.contains("thinking"));
+        assert!(rendered.contains("1 batch, 1 call, 1 ok"));
+        assert!(rendered.contains("Enter send"));
+        assert!(rendered.contains("/ commands"));
     }
 
     #[test]
@@ -1903,6 +2093,18 @@ mod tests {
                 line.spans
                     .iter()
                     .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn buffer_to_string(buffer: &Buffer) -> String {
+        let area = buffer.area();
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .map(|x| buffer[(x, y)].symbol())
                     .collect::<String>()
             })
             .collect::<Vec<_>>()
