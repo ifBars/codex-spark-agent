@@ -34,6 +34,39 @@ pub(super) fn resolve_under(cwd: &Path, raw: &str) -> Result<PathBuf> {
     Ok(resolved)
 }
 
+pub(super) fn resolve_read_path(cwd: &Path, read_roots: &[PathBuf], raw: &str) -> Result<PathBuf> {
+    let raw_path = Path::new(raw);
+    if !raw_path.is_absolute()
+        && cwd.join(raw_path).exists()
+        && let Ok(path) = resolve_under(cwd, raw)
+    {
+        return Ok(path);
+    }
+
+    if raw_path.is_absolute() {
+        let resolved = std::fs::canonicalize(raw_path)
+            .with_context(|| format!("failed to resolve path {}", raw_path.display()))?;
+        if read_roots.iter().any(|root| resolved.starts_with(root)) {
+            return Ok(resolved);
+        }
+        anyhow::bail!("path escapes workspace: {}", raw);
+    }
+
+    for root in read_roots {
+        let candidate = root.join(raw_path);
+        if !candidate.exists() {
+            continue;
+        }
+        let resolved = std::fs::canonicalize(&candidate)
+            .with_context(|| format!("failed to resolve path {}", candidate.display()))?;
+        if resolved.starts_with(root) {
+            return Ok(resolved);
+        }
+    }
+
+    resolve_under(cwd, raw)
+}
+
 pub(super) fn resolve_under_for_write(cwd: &Path, raw: &str) -> Result<PathBuf> {
     let cwd = std::fs::canonicalize(cwd)
         .with_context(|| format!("failed to resolve workspace {}", cwd.display()))?;

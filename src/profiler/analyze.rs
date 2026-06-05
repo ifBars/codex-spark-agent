@@ -47,11 +47,14 @@ struct RequiredAction {
     from: Option<String>,
     to: Option<String>,
     recursive: Option<bool>,
+    command: Option<String>,
+    ok: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
 struct ObservedToolCall {
     turn: usize,
+    call_id: Option<String>,
     tool_name: String,
     args: Value,
 }
@@ -59,7 +62,9 @@ struct ObservedToolCall {
 #[derive(Debug, Clone)]
 struct ObservedToolResult {
     turn: usize,
+    call_id: Option<String>,
     tool_name: String,
+    args: Value,
     ok: bool,
 }
 
@@ -134,10 +139,13 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 timeline_turn(&mut timeline, turn)
                     .insert("request_duration_ms".to_string(), json!(duration_ms));
             }
-            for (tool_name, args) in function_calls_from_trace_response(&value) {
+            for call in function_calls_from_trace_response(&value) {
+                let tool_name = call.tool_name;
+                let args = call.args;
                 profiler.record_tool_call(turn, &tool_name, &args);
                 observed_tool_calls.push(ObservedToolCall {
                     turn,
+                    call_id: call.call_id,
                     tool_name: tool_name.clone(),
                     args: args.clone(),
                 });
@@ -160,7 +168,9 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             if let Some(result) = tool_result_from_trace(&value)? {
                 observed_tool_results.push(ObservedToolResult {
                     turn,
+                    call_id: result.call_id,
                     tool_name: result.tool_name.clone(),
+                    args: result.args.clone(),
                     ok: result.ok,
                 });
                 profiler.record_tool_result(
@@ -230,6 +240,8 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
             .then_with(|| left.from.cmp(&right.from))
             .then_with(|| left.to.cmp(&right.to))
             .then_with(|| left.recursive.cmp(&right.recursive))
+            .then_with(|| left.command.cmp(&right.command))
+            .then_with(|| left.ok.cmp(&right.ok))
     });
     retained_required_actions.dedup();
 
@@ -241,6 +253,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let scenario_call_expectation_report = scenario_tool_call_expectation_report(
         trace_metadata.as_ref(),
         &observed_tool_calls,
+        &observed_tool_results,
         &timeline,
     );
     let scenario_skill_expectation_report =

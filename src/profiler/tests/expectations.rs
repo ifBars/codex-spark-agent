@@ -253,3 +253,174 @@ fn analyze_trace_reports_extra_calls_after_expected_calls_satisfied() {
             .contains("scenario_calls=2/2 extra_calls=1 extra_turns=1")
     );
 }
+
+#[test]
+fn analyze_trace_satisfies_expected_calls_on_matching_result_status() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_trace_metadata_with_expected_tool_calls(
+        dir.path(),
+        json!([{
+            "tool": "cmd.exec",
+            "command": "bun test"
+        }]),
+    );
+
+    write_function_call_trace(
+        dir.path(),
+        1,
+        "call_failed",
+        "cmd_exec",
+        "{\"command\":\"bun test\",\"workdir\":\"C:\\\\bad\"}",
+    );
+    write_tool_result_trace(
+        dir.path(),
+        1,
+        "call_failed",
+        "cmd.exec",
+        json!({"command": "bun test", "workdir": "C:\\bad"}),
+        false,
+    );
+    write_function_call_trace(
+        dir.path(),
+        2,
+        "call_install",
+        "cmd_exec",
+        "{\"command\":\"bun install\",\"workdir\":\".spark-scenarios/react-calculator\"}",
+    );
+    write_tool_result_trace(
+        dir.path(),
+        2,
+        "call_install",
+        "cmd.exec",
+        json!({"command": "bun install", "workdir": ".spark-scenarios/react-calculator"}),
+        true,
+    );
+    write_function_call_trace(
+        dir.path(),
+        3,
+        "call_ok",
+        "cmd_exec",
+        "{\"command\":\"bun test\",\"workdir\":\".spark-scenarios/react-calculator\"}",
+    );
+    write_tool_result_trace(
+        dir.path(),
+        3,
+        "call_ok",
+        "cmd.exec",
+        json!({"command": "bun test", "workdir": ".spark-scenarios/react-calculator"}),
+        true,
+    );
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["satisfied_calls"],
+        1
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["first_satisfied_call_index"],
+        2
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["first_satisfied_turn"],
+        3
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["extra_calls_after_satisfied"],
+        0
+    );
+}
+
+#[test]
+fn analyze_trace_allows_expected_failing_probe_when_declared() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_trace_metadata_with_expected_tool_calls(
+        dir.path(),
+        json!([{
+            "tool": "fs.read",
+            "path": ".spark-scenarios/tool-recovery/source/missing-note.md",
+            "ok": false
+        }]),
+    );
+
+    write_function_call_trace(
+        dir.path(),
+        1,
+        "call_missing",
+        "fs_read",
+        "{\"path\":\".spark-scenarios/tool-recovery/source/missing-note.md\"}",
+    );
+    write_tool_result_trace(
+        dir.path(),
+        1,
+        "call_missing",
+        "fs.read",
+        json!({"path": ".spark-scenarios/tool-recovery/source/missing-note.md"}),
+        false,
+    );
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["satisfied_calls"],
+        1
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["missing_calls"],
+        json!([])
+    );
+}
+
+fn write_function_call_trace(
+    dir: &std::path::Path,
+    turn: usize,
+    call_id: &str,
+    name: &str,
+    arguments: &str,
+) {
+    std::fs::write(
+        dir.join(format!("{turn:03}-response.json")),
+        serde_json::to_vec_pretty(&json!({
+            "raw": {
+                "events": [{
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": arguments
+                    }
+                }]
+            }
+        }))
+        .expect("serialize response"),
+    )
+    .expect("write response");
+}
+
+fn write_tool_result_trace(
+    dir: &std::path::Path,
+    turn: usize,
+    call_id: &str,
+    tool: &str,
+    args: serde_json::Value,
+    ok: bool,
+) {
+    std::fs::write(
+        dir.join(format!("{turn:03}-tool-result.json")),
+        serde_json::to_vec_pretty(&json!({
+            "tool": tool,
+            "call_id": call_id,
+            "args": args,
+            "duration_ms": 1,
+            "result": {
+                "ok": ok,
+                "error": if ok { serde_json::Value::Null } else { json!("failed") },
+                "data": {}
+            }
+        }))
+        .expect("serialize tool result"),
+    )
+    .expect("write tool result");
+}

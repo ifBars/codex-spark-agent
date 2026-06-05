@@ -26,8 +26,15 @@ pub(crate) fn create_benchmark_workspace(
             workspace.display()
         )
     })?;
-    copy_clean_repo(source_cwd, &workspace)?;
     Ok(workspace)
+}
+
+pub(crate) fn benchmark_read_roots(source_cwd: &Path, scenario_cwd: &Path) -> Vec<PathBuf> {
+    if same_path(source_cwd, scenario_cwd) {
+        Vec::new()
+    } else {
+        vec![source_cwd.to_path_buf()]
+    }
 }
 
 pub(crate) fn mirror_trace_to_source(source_cwd: &Path, trace_dir: &Path) -> Result<PathBuf> {
@@ -45,27 +52,6 @@ pub(crate) fn mirror_trace_to_source(source_cwd: &Path, trace_dir: &Path) -> Res
     }
     copy_dir(trace_dir, &target)?;
     Ok(target)
-}
-
-fn copy_clean_repo(source: &Path, target: &Path) -> Result<()> {
-    for entry in std::fs::read_dir(source)
-        .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", source.display()))?
-    {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if excluded_entry(&name) {
-            continue;
-        }
-        let from = entry.path();
-        let to = target.join(name.as_ref());
-        if from.is_dir() {
-            copy_dir(&from, &to)?;
-        } else {
-            copy_file(&from, &to)?;
-        }
-    }
-    Ok(())
 }
 
 fn copy_dir(source: &Path, target: &Path) -> Result<()> {
@@ -91,7 +77,7 @@ fn copy_dir(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn copy_file(source: &Path, target: &Path) -> Result<()> {
+pub(crate) fn copy_file(source: &Path, target: &Path) -> Result<()> {
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| anyhow::anyhow!("failed to create {}: {error}", parent.display()))?;
@@ -121,9 +107,55 @@ fn excluded_entry(name: &str) -> bool {
     )
 }
 
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
 fn unix_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::cli::ProfileScenarioKind;
+
+    use super::*;
+
+    #[test]
+    fn benchmark_workspace_does_not_copy_source_repo() {
+        let source = tempfile::tempdir().expect("source");
+        std::fs::create_dir_all(source.path().join("src")).expect("src");
+        std::fs::write(source.path().join("src").join("main.rs"), "fn main() {}\n")
+            .expect("write source");
+        std::fs::write(source.path().join("Cargo.toml"), "[package]\nname='x'\n")
+            .expect("write cargo");
+
+        let workspace = create_benchmark_workspace(
+            source.path(),
+            "real-world",
+            ProfileScenarioKind::RepoSurvey,
+            1,
+        )
+        .expect("workspace");
+
+        assert!(workspace.exists());
+        assert!(!workspace.join("src").exists());
+        assert!(!workspace.join("Cargo.toml").exists());
+    }
+
+    #[test]
+    fn benchmark_read_roots_include_source_for_isolated_workspace() {
+        let source = tempfile::tempdir().expect("source");
+        let workspace = tempfile::tempdir().expect("workspace");
+
+        let roots = benchmark_read_roots(source.path(), workspace.path());
+
+        assert_eq!(roots, vec![source.path().to_path_buf()]);
+    }
 }

@@ -185,7 +185,15 @@ fn judge_prompt(
 Scenario: {scenario}
 
 Rubric:
-- solution_score is 0-100 and should answer whether the runner solved the task with production-quality output.
+- solution_score answers this generic real-world quality question: "Did the model provide a real solution to the prompted request/problem/task?"
+- Score solution_score only from the delivered answer, files, artifacts, and validation evidence for the original prompt. Do not include speed, token usage, request counts, turn counts, or how hard the run seemed to work.
+- solution_score bands:
+  - 0-19: no usable task solution, empty output, irrelevant output, or failed run with no recoverable result.
+  - 20-39: recognizes the task but mostly diagnoses, plans, or produces fragments instead of a working solution.
+  - 40-59: partial solution with important missing requirements, broken artifacts, or weak evidence that it works.
+  - 60-79: plausible real solution but incomplete, under-validated, over-broad, or risky for production use.
+  - 80-94: real solution that satisfies the prompt with minor gaps or limited validation.
+  - 95-100: complete production-quality solution with clear evidence, correct scope, and no material missing requirements.
 - process_score is 0-100 and should heavily consider whether the runner self-tested, inspected failures, recovered cleanly, avoided irrelevant exploration, and stopped after completion.
 - External validation is important evidence, but do not blindly trust a single automated score when artifact evidence or final messages contradict it.
 - A fast broken solution must score below a slower complete solution.
@@ -453,6 +461,18 @@ fn unix_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn judge_prompt_scores_real_world_task_solution() {
+        let prompt =
+            judge_prompt(Path::new("."), "repo-survey", &BTreeMap::new()).expect("build prompt");
+
+        assert!(prompt.contains(
+            r#"Did the model provide a real solution to the prompted request/problem/task?"#
+        ));
+        assert!(prompt.contains("Do not include speed"));
+        assert!(prompt.contains("95-100: complete production-quality solution"));
+    }
 
     #[test]
     fn parse_judge_response_clamps_scores() {

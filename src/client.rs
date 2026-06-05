@@ -7,12 +7,14 @@ use crate::tools::ToolDescriptor;
 
 const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_COMPACT_URL: &str = "https://chatgpt.com/backend-api/codex/responses/compact";
+pub(crate) const DEFAULT_SPARK_AGENT_REASONING_EFFORT: &str = "medium";
 
 #[derive(Debug, Clone)]
 pub struct SparkClient {
     http: reqwest::Client,
     pub auth: AuthTokens,
     model: String,
+    reasoning_effort: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,11 +62,28 @@ pub enum MessageContent {
 
 impl SparkClient {
     pub fn new(auth: AuthTokens, model: String) -> Self {
+        Self::new_with_reasoning_effort(auth, model, DEFAULT_SPARK_AGENT_REASONING_EFFORT)
+    }
+
+    pub(crate) fn new_with_reasoning_effort(
+        auth: AuthTokens,
+        model: String,
+        reasoning_effort: impl Into<String>,
+    ) -> Self {
         Self {
             http: reqwest::Client::new(),
             auth,
             model,
+            reasoning_effort: reasoning_effort.into(),
         }
+    }
+
+    pub(crate) fn reasoning_effort(&self) -> &str {
+        &self.reasoning_effort
+    }
+
+    pub(crate) fn set_reasoning_effort(&mut self, reasoning_effort: impl Into<String>) {
+        self.reasoning_effort = reasoning_effort.into();
     }
 
     pub async fn responses_create_with_event_handler(
@@ -80,6 +99,9 @@ impl SparkClient {
             "tools": tools.iter().map(tool_to_wire).collect::<Vec<_>>(),
             "tool_choice": "auto",
             "parallel_tool_calls": true,
+            "reasoning": {
+                "effort": self.reasoning_effort.as_str(),
+            },
             "store": false,
             "stream": true,
         });
@@ -242,6 +264,9 @@ SKILL.md:
             "input": input,
             "tools": tools.iter().map(tool_to_wire).collect::<Vec<_>>(),
             "parallel_tool_calls": true,
+            "reasoning": {
+                "effort": self.reasoning_effort.as_str(),
+            },
         });
 
         let mut request = self
@@ -480,6 +505,7 @@ fn minimal_carry_forward_item(item: &Value) -> Option<Value> {
             "name": item.get("name")?.clone(),
             "arguments": item.get("arguments").cloned().unwrap_or_else(|| json!("{}")),
         })),
+        "web_search_call" => Some(item.clone()),
         "message" => {
             let role = item
                 .get("role")
@@ -517,6 +543,15 @@ fn message_text_from_value(item: &Value) -> String {
 }
 
 fn tool_to_wire(tool: &ToolDescriptor) -> Value {
+    if let Some(hosted_type) = &tool.hosted_type {
+        let mut object = tool
+            .hosted_config
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        object.insert("type".to_string(), Value::String(hosted_type.clone()));
+        return Value::Object(object);
+    }
     json!({
         "type": "function",
         "name": local_tool_name_to_wire(&tool.name),
@@ -600,13 +635,48 @@ fn function_arguments_to_value(arguments: &Value) -> Value {
 fn spark_system_prompt() -> &'static str {
     r#"You are GPT-5.3-Codex-Spark running inside a compact coding agent harness.
 
-Use the available native tools when they help. Answer directly when they do not.
-When a user names a project, library, or repo ambiguously, first take a small look at the current workspace before assuming they mean a public product or SDK.
-When a user gives explicit paths, files, or a narrow workspace scope, start there instead of listing the repository root.
-Batch independent tool calls in the same turn when possible, especially reads, searches, and writes for a known set of files.
-After required evidence is gathered and validation passes, stop calling tools and provide the final answer.
-When validation fails, inspect the first concrete failure, make a targeted code or config change, and do not rerun the same failing command again unless something relevant changed.
-When finished, provide the final answer as a normal assistant message."#
+Use the available native and hosted tools when they help. Answer directly when tools do not help.
+
+# How you work
+
+Persist until the task is handled end-to-end within the current turn whenever feasible. Do not stop at analysis or partial fixes when the user asked for implementation. Carry changes through focused verification and a clear final answer unless the user explicitly pauses or redirects you.
+
+Start from the user's concrete anchor. When a user gives explicit paths, files, symptoms, benchmark rows, or a narrow workspace scope, inspect those first instead of listing the repository root. When a user names a project, library, or repo ambiguously, first take a small look at the current workspace before assuming they mean a public product or SDK.
+
+Gather enough evidence before writing. Prefer bounded file reads and targeted searches over broad output. Batch independent tool calls in the same turn when possible, especially reads, searches, and writes for a known set of files.
+
+Use hosted web search for current external facts when local files are insufficient, and cite sources when web search informs the answer.
+
+# Quality bar
+
+For nontrivial work, spend a small bounded extra pass before finalizing: confirm the relevant files or facts, check the artifact against the user's stated requirements, and run or name the most focused validation that applies. Do not stop at the first plausible answer when one more targeted read, search, or command would materially improve confidence.
+
+Adapt effort to quality risk:
+- Low-risk tasks are exact-path reads, simple recovery probes, narrow answers, or mechanical edits with explicit requirements. Complete the required evidence path, do one direct verification if needed, then stop. Do not add unrelated probes just to look thorough.
+- High-risk tasks are scaffolding runnable projects, multi-file edits, migrations, bug fixes, issue triage, reports, essays, architecture surveys, ambiguous repo questions, or any task where missing one requirement can make the final answer wrong. For these, spend extra effort before finalizing: make a compact requirement checklist, inspect the relevant files or data, verify created artifacts by reading or running them, and run focused tests or validation when available.
+
+Prefer correctness and completeness over being maximally fast. It is acceptable to spend a little more time gathering evidence, checking edge cases, or verifying output when that reduces the chance of a wrong or shallow answer. Keep this bounded: avoid broad repo sweeps, repeated equivalent reads, or validation loops that do not follow from new evidence.
+
+When you write files, do not assume the write is correct. For high-risk tasks, re-open or otherwise verify the important outputs and check exact required strings, schemas, command results, or browser-runnable entrypoints before finalizing.
+
+For data reports, compute from source rows instead of intuition. Treat headers correctly, show the formula or ranking rule you used, and when identifying highest risk prefer explicit risk signals such as severity, open status, and age over simple volume counts.
+
+# Repository instructions
+
+Repos may contain AGENTS.md files. These files give project instructions such as coding conventions, structure, and test commands.
+- The scope of an AGENTS.md file is the directory tree rooted at the folder containing it.
+- For every file you touch, obey any AGENTS.md file whose scope includes that file.
+- More deeply nested AGENTS.md files take precedence over parent AGENTS.md files.
+- Direct system, developer, and user instructions take precedence over AGENTS.md instructions.
+- AGENTS.md content included in the current input is already available; do not reread it unless the task needs a fresh file check or a subdirectory may have additional instructions.
+
+# Editing and validation
+
+Keep edits focused on the requested behavior. Do not revert or overwrite changes you did not make unless the user explicitly asks.
+
+When validation is relevant, run the narrowest meaningful check first, then broader checks if the change has wider blast radius. When validation fails, inspect the first concrete failure, make a targeted code or config change, and do not rerun the same failing command again unless something relevant changed.
+
+After required evidence is gathered and validation passes, stop calling tools and provide the final answer. When finished, provide the final answer as a normal assistant message."#
 }
 
 fn judge_system_prompt() -> &'static str {
@@ -623,21 +693,98 @@ Produce compact operational guidance, not a prose summary. Preserve source-groun
 mod tests {
     use serde_json::json;
 
+    use crate::auth::AuthTokens;
+
     use super::{
-        ReasoningDisplayUpdate, Response, reasoning_display_update, response_from_stream,
-        response_text, spark_system_prompt,
+        DEFAULT_SPARK_AGENT_REASONING_EFFORT, ReasoningDisplayUpdate, Response, SparkClient,
+        output_items_for_next_input, reasoning_display_update, response_from_stream, response_text,
+        spark_system_prompt, tool_to_wire,
     };
+
+    fn test_auth_tokens() -> AuthTokens {
+        AuthTokens {
+            id_token: "id".to_string(),
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            expires_at: i64::MAX,
+            account_id: None,
+        }
+    }
+
+    #[test]
+    fn spark_client_tracks_default_and_custom_reasoning_effort() {
+        let default_client = SparkClient::new(test_auth_tokens(), "model".to_string());
+        assert_eq!(
+            default_client.reasoning_effort(),
+            DEFAULT_SPARK_AGENT_REASONING_EFFORT
+        );
+
+        let mut custom_client =
+            SparkClient::new_with_reasoning_effort(test_auth_tokens(), "model".to_string(), "high");
+        assert_eq!(custom_client.reasoning_effort(), "high");
+
+        custom_client.set_reasoning_effort("low");
+        assert_eq!(custom_client.reasoning_effort(), "low");
+    }
 
     #[test]
     fn spark_system_prompt_prefers_workspace_peek_for_ambiguous_repo_names() {
         let prompt = spark_system_prompt();
 
+        assert!(prompt.contains("Persist until the task is handled end-to-end"));
         assert!(prompt.contains("first take a small look at the current workspace"));
         assert!(prompt.contains("before assuming they mean a public product or SDK"));
-        assert!(prompt.contains("explicit paths, files, or a narrow workspace scope"));
+        assert!(prompt.contains("explicit paths, files, symptoms, benchmark rows"));
         assert!(prompt.contains("instead of listing the repository root"));
+        assert!(prompt.contains("Repos may contain AGENTS.md files"));
+        assert!(prompt.contains("More deeply nested AGENTS.md files take precedence"));
+        assert!(prompt.contains("AGENTS.md content included in the current input"));
+        assert!(prompt.contains("Keep edits focused on the requested behavior"));
+        assert!(prompt.contains("Adapt effort to quality risk"));
+        assert!(prompt.contains("High-risk tasks are scaffolding runnable projects"));
+        assert!(prompt.contains("Low-risk tasks are exact-path reads"));
+        assert!(prompt.contains("do not assume the write is correct"));
+        assert!(prompt.contains("when identifying highest risk prefer explicit risk signals"));
         assert!(prompt.contains("Batch independent tool calls in the same turn"));
         assert!(prompt.contains("After required evidence is gathered and validation passes"));
+        assert!(prompt.contains("Use hosted web search for current external facts"));
+        assert!(prompt.contains("cite sources when web search informs the answer"));
+    }
+
+    #[test]
+    fn hosted_web_search_tool_serializes_as_responses_tool() {
+        let tool = crate::tools::builtin_tools()
+            .into_iter()
+            .find(|tool| tool.name == "web.search")
+            .expect("web search tool should be advertised");
+
+        let wire = tool_to_wire(&tool);
+
+        assert_eq!(wire["type"], "web_search");
+        assert_eq!(wire["search_context_size"], "medium");
+        assert!(wire.get("name").is_none());
+        assert!(wire.get("parameters").is_none());
+    }
+
+    #[test]
+    fn web_search_calls_are_carried_forward_for_next_input() {
+        let items = output_items_for_next_input(&json!({
+            "output": [
+                {
+                    "type": "web_search_call",
+                    "id": "ws_test",
+                    "status": "completed",
+                    "action": {
+                        "type": "search",
+                        "queries": ["current rust release"]
+                    }
+                }
+            ]
+        }));
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["type"], "web_search_call");
+        assert_eq!(items[0]["id"], "ws_test");
     }
 
     #[test]

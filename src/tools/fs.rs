@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::ToolResult;
 use super::paths::{
-    display_rel, missing_parent_dirs, required_str, required_u64, resolve_under,
+    display_rel, missing_parent_dirs, required_str, required_u64, resolve_read_path, resolve_under,
     resolve_under_for_write, should_skip_discovery_dir,
 };
 
@@ -23,9 +23,18 @@ const FS_SEARCH_DEFAULT_LIMIT: usize = 50;
 const FS_SEARCH_MAX_LIMIT: usize = 100;
 const FS_SEARCH_MAX_SNIPPET_CHARS: usize = 600;
 
+#[cfg(test)]
 pub(super) fn fs_read(cwd: &Path, args: Value) -> Result<ToolResult> {
+    fs_read_with_read_roots(cwd, &[], args)
+}
+
+pub(super) fn fs_read_with_read_roots(
+    cwd: &Path,
+    read_roots: &[PathBuf],
+    args: Value,
+) -> Result<ToolResult> {
     let path = required_str(&args, "path")?;
-    let full = resolve_under(cwd, path)?;
+    let full = resolve_read_path(cwd, read_roots, path)?;
     let offset = args
         .get("offset")
         .and_then(Value::as_u64)
@@ -107,7 +116,16 @@ fn bounded_read_window<'a>(
     (selected.join("\n"), returned_lines, content_truncated)
 }
 
+#[cfg(test)]
 pub(super) fn fs_list(cwd: &Path, args: Value) -> Result<ToolResult> {
+    fs_list_with_read_roots(cwd, &[], args)
+}
+
+pub(super) fn fs_list_with_read_roots(
+    cwd: &Path,
+    read_roots: &[PathBuf],
+    args: Value,
+) -> Result<ToolResult> {
     let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
     let recursive = args
         .get("recursive")
@@ -120,7 +138,7 @@ pub(super) fn fs_list(cwd: &Path, args: Value) -> Result<ToolResult> {
         .map(|value| value as usize)
         .unwrap_or(FS_LIST_DEFAULT_LIMIT)
         .clamp(1, FS_LIST_MAX_LIMIT);
-    let root = resolve_under(cwd, path)?;
+    let root = resolve_read_path(cwd, read_roots, path)?;
     let mut stack = vec![(root.clone(), 0_usize)];
     let mut entries = Vec::new();
     let mut truncated = false;
@@ -182,10 +200,21 @@ fn truncate_entries_to_budget(entries: &mut Vec<Value>, max_chars: usize) -> Res
     Ok(truncated)
 }
 
+#[cfg(test)]
 pub(super) fn fs_stat(cwd: &Path, args: Value) -> Result<ToolResult> {
+    fs_stat_with_read_roots(cwd, &[], args)
+}
+
+pub(super) fn fs_stat_with_read_roots(
+    cwd: &Path,
+    read_roots: &[PathBuf],
+    args: Value,
+) -> Result<ToolResult> {
     let path = required_str(&args, "path")?;
     let full = if cwd.join(path).exists() {
         resolve_under(cwd, path)?
+    } else if let Ok(path) = resolve_read_path(cwd, read_roots, path) {
+        path
     } else {
         resolve_under_for_write(cwd, path)?
     };
@@ -240,9 +269,18 @@ pub(super) fn fs_write(cwd: &Path, args: Value) -> Result<ToolResult> {
     })
 }
 
+#[cfg(test)]
 pub(super) fn fs_search(cwd: &Path, args: Value) -> Result<ToolResult> {
+    fs_search_with_read_roots(cwd, &[], args)
+}
+
+pub(super) fn fs_search_with_read_roots(
+    cwd: &Path,
+    read_roots: &[PathBuf],
+    args: Value,
+) -> Result<ToolResult> {
     let query = required_str(&args, "query")?;
-    let options = SearchOptions::from_args(cwd, &args, query)?;
+    let options = SearchOptions::from_args(cwd, read_roots, &args, query)?;
     match fs_search_with_ripgrep(cwd, &options) {
         Ok(Some(result)) => Ok(result),
         Ok(None) => fs_search_in_process(cwd, &options),
@@ -261,9 +299,14 @@ struct SearchOptions<'a> {
 }
 
 impl<'a> SearchOptions<'a> {
-    fn from_args(cwd: &Path, args: &'a Value, query: &'a str) -> Result<Self> {
+    fn from_args(
+        cwd: &Path,
+        read_roots: &[PathBuf],
+        args: &'a Value,
+        query: &'a str,
+    ) -> Result<Self> {
         let path = args.get("path").and_then(Value::as_str).unwrap_or(".");
-        let root = resolve_under(cwd, path)?;
+        let root = resolve_read_path(cwd, read_roots, path)?;
         Ok(Self {
             query,
             root,

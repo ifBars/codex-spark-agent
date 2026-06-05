@@ -93,6 +93,8 @@ struct ChatTui {
     tool_batch_seq: usize,
     tool_call_seq: usize,
     reasoning_index: Option<usize>,
+    reasoning_effort: String,
+    pending_reasoning_effort: Option<String>,
     activity_details_expanded: bool,
     last_running_escape: Option<Instant>,
 }
@@ -153,9 +155,45 @@ impl ChatTui {
             tool_batch_seq: 0,
             tool_call_seq: 0,
             reasoning_index: None,
+            reasoning_effort: crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT.to_string(),
+            pending_reasoning_effort: None,
             activity_details_expanded: false,
             last_running_escape: None,
         }
+    }
+
+    fn sync_runner_settings(&mut self, runner: &AgentRunner) {
+        if self.pending_reasoning_effort.is_some() {
+            return;
+        }
+        self.reasoning_effort = runner.reasoning_effort().to_string();
+    }
+
+    fn cycle_reasoning_effort(&mut self, runner: &mut AgentRunner) -> Result<()> {
+        let next = next_reasoning_effort(runner.reasoning_effort());
+        runner.set_reasoning_effort(next);
+        self.pending_reasoning_effort = None;
+        self.sync_runner_settings(runner);
+        if let Some(name) = &self.session_name {
+            runner.save_session_named(name)?;
+        }
+        self.push_system(format!("reasoning: {}", runner.reasoning_effort()));
+        Ok(())
+    }
+
+    fn cycle_pending_reasoning_effort(&mut self) {
+        let next = next_reasoning_effort(&self.reasoning_effort);
+        self.reasoning_effort = next.to_string();
+        self.pending_reasoning_effort = Some(self.reasoning_effort.clone());
+        self.push_system(format!("reasoning: {} next turn", self.reasoning_effort));
+    }
+
+    fn apply_pending_reasoning_effort(&mut self, runner: &mut AgentRunner) {
+        let Some(reasoning_effort) = self.pending_reasoning_effort.take() else {
+            return;
+        };
+        runner.set_reasoning_effort(reasoning_effort);
+        self.sync_runner_settings(runner);
     }
 
     async fn run(
@@ -163,6 +201,7 @@ impl ChatTui {
         runner: &mut AgentRunner,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     ) -> Result<()> {
+        self.sync_runner_settings(runner);
         while !self.should_quit {
             terminal.draw(|frame| self.draw(frame))?;
             self.tick_activity();
@@ -191,6 +230,10 @@ impl ChatTui {
     ) -> Result<()> {
         if is_toggle_activity_details_key(key) {
             self.toggle_activity_details();
+            return Ok(());
+        }
+        if is_cycle_reasoning_effort_key(key) {
+            self.cycle_reasoning_effort(runner)?;
             return Ok(());
         }
 
@@ -253,6 +296,7 @@ impl ChatTui {
         self.drain_shared_agent_events(&events);
         self.activity.finish();
         self.tool_group_index = None;
+        self.apply_pending_reasoning_effort(runner);
         match run_result {
             Ok(true) => self.push_warning("agent stopped by double Escape"),
             Ok(false) => {}
@@ -312,6 +356,7 @@ impl ChatTui {
                     self.push_warning("press Escape again to stop the running agent");
                 }
                 _ if is_toggle_activity_details_key(key) => self.toggle_activity_details(),
+                _ if is_cycle_reasoning_effort_key(key) => self.cycle_pending_reasoning_effort(),
                 KeyCode::PageUp => self.scroll_by(-8),
                 KeyCode::PageDown => self.scroll_by(8),
                 KeyCode::Up => self.scroll_by(-1),
@@ -325,10 +370,12 @@ impl ChatTui {
     async fn handle_command(&mut self, runner: &mut AgentRunner, input: &str) -> Result<bool> {
         if let Some(command) = chat::command_args(input, "/session") {
             sessions::handle_session_command(runner, &mut self.session_name, command.trim())?;
+            self.sync_runner_settings(runner);
             return Ok(true);
         }
         if let Some(command) = chat::command_args(input, "/new") {
             sessions::handle_new_session_command(runner, &mut self.session_name, command.trim())?;
+            self.sync_runner_settings(runner);
             return Ok(true);
         }
         if input == "/skills" {
@@ -355,6 +402,26 @@ impl ChatTui {
             }
             return Ok(true);
         }
+        if let Some(command) = chat::command_args(input, "/reasoning") {
+            let command = command.trim();
+            if command.is_empty() {
+                self.sync_runner_settings(runner);
+                self.push_system(format!("reasoning: {}", runner.reasoning_effort()));
+                return Ok(true);
+            }
+            match chat::parse_reasoning_effort(command) {
+                Some(reasoning_effort) => {
+                    runner.set_reasoning_effort(reasoning_effort);
+                    self.sync_runner_settings(runner);
+                    if let Some(name) = &self.session_name {
+                        runner.save_session_named(name)?;
+                    }
+                    self.push_system(format!("reasoning: {}", runner.reasoning_effort()));
+                }
+                None => self.push_warning("usage: /reasoning low|medium|high|xhigh"),
+            }
+            return Ok(true);
+        }
 
         match input {
             "/exit" | "/quit" => {
@@ -363,7 +430,7 @@ impl ChatTui {
             }
             "/help" => {
                 self.push_system(
-                    "Commands: /help, /status, /mode, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /save, /clear, /exit\n\
+                    "Commands: /help, /status, /mode, /reasoning, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /save, /clear, /exit\n\
 Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>\n\
 Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc clears the composer, double Esc stops a running agent, Ctrl+C exits.",
                 );
@@ -379,6 +446,11 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             }
             "/mode" => {
                 self.push_system(format!("mode: {}", runner.mode().name()));
+                Ok(true)
+            }
+            "/reasoning" => {
+                self.sync_runner_settings(runner);
+                self.push_system(format!("reasoning: {}", runner.reasoning_effort()));
                 Ok(true)
             }
             "/ask" => {
@@ -660,6 +732,8 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             Span::styled(self.activity.phase_label(), self.activity.header_style()),
             muted_span("  ·  session "),
             Span::styled(session, Style::new().fg(SOFT_TEXT)),
+            muted_span("  |  reasoning "),
+            Span::styled(self.reasoning_effort.clone(), Style::new().fg(SOFT_TEXT)),
             muted_span("  ·  cwd "),
             Span::styled(cwd, Style::new().fg(SOFT_TEXT)),
         ])
@@ -714,6 +788,9 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                     " expand details"
                 }),
                 muted_span("  ·  "),
+                key_span("Ctrl+R"),
+                Span::raw(" reasoning"),
+                muted_span("  |  "),
                 key_span("PgUp/PgDn"),
                 Span::raw(" transcript"),
                 muted_span("  ·  "),
@@ -749,6 +826,9 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                 " expand details"
             }),
             muted_span("  ·  "),
+            key_span("Ctrl+R"),
+            Span::raw(" reasoning"),
+            muted_span("  |  "),
             key_span("PgUp/PgDn"),
             Span::raw(" transcript"),
             muted_span("  ·  "),
@@ -1697,6 +1777,21 @@ fn is_toggle_activity_details_key(key: KeyEvent) -> bool {
         && key.modifiers.contains(KeyModifiers::CONTROL)
 }
 
+fn is_cycle_reasoning_effort_key(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R'))
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
+fn next_reasoning_effort(current: &str) -> &'static str {
+    match current {
+        "low" => "medium",
+        "medium" => "high",
+        "high" => "xhigh",
+        "xhigh" => "low",
+        _ => crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT,
+    }
+}
+
 fn adjust_removed_index(value: Option<usize>, removed: usize) -> Option<usize> {
     match value {
         Some(index) if index == removed => None,
@@ -1726,7 +1821,8 @@ mod tests {
     use crate::agent::AgentDisplayEvent;
 
     use super::{
-        ActivityPhase, ChatTui, MessageRole, compact_inline, format_tool_args, register_escape_tap,
+        ActivityPhase, ChatTui, MessageRole, compact_inline, format_tool_args,
+        is_cycle_reasoning_effort_key, next_reasoning_effort, register_escape_tap,
         should_handle_key_event, wrapped_line_count,
     };
 
@@ -1766,6 +1862,34 @@ mod tests {
             &mut last_escape,
             start + Duration::from_secs(2)
         ));
+    }
+
+    #[test]
+    fn reasoning_effort_cycle_matches_slash_command_values() {
+        assert_eq!(next_reasoning_effort("low"), "medium");
+        assert_eq!(next_reasoning_effort("medium"), "high");
+        assert_eq!(next_reasoning_effort("high"), "xhigh");
+        assert_eq!(next_reasoning_effort("xhigh"), "low");
+        assert_eq!(
+            next_reasoning_effort("unknown"),
+            crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT
+        );
+    }
+
+    #[test]
+    fn ctrl_r_is_a_reasoning_shortcut_not_composer_text() {
+        assert!(is_cycle_reasoning_effort_key(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(is_cycle_reasoning_effort_key(KeyEvent::new(
+            KeyCode::Char('R'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(!is_cycle_reasoning_effort_key(KeyEvent::new(
+            KeyCode::Char('r'),
+            KeyModifiers::NONE
+        )));
     }
 
     #[test]
@@ -1820,6 +1944,11 @@ mod tests {
         assert!(rendered.contains("/skill"));
         assert!(rendered.contains("/skills"));
 
+        tui.input = "/rea".to_string();
+        let rendered = flatten_lines(&tui.command_menu_lines().expect("menu"));
+        assert!(rendered.contains("/reasoning"));
+        assert!(rendered.contains("Show or change reasoning effort"));
+
         tui.input = "/wat".to_string();
         let rendered = flatten_lines(&tui.command_menu_lines().expect("unknown menu"));
         assert!(rendered.contains("is not a Spark command"));
@@ -1837,6 +1966,7 @@ mod tests {
         assert!(ready.contains("Spark"));
         assert!(ready.contains("ready"));
         assert!(ready.contains("session design-pass"));
+        assert!(ready.contains("reasoning medium"));
         assert!(ready.contains("cwd spark"));
         assert!(tui.activity_line(false).is_none());
 
@@ -1858,6 +1988,10 @@ mod tests {
         assert!(running.contains("tools 0/3"));
         assert!(running.contains("running fs.read"));
         assert!(running.contains("Esc Esc interrupt"));
+
+        tui.running = false;
+        let footer = flatten_lines(&[tui.footer_line(false)]);
+        assert!(footer.contains("Ctrl+R reasoning"));
     }
 
     #[test]
@@ -1893,6 +2027,7 @@ mod tests {
         let rendered = buffer_to_string(terminal.backend().buffer());
         assert!(rendered.contains("Spark"));
         assert!(rendered.contains("session visual-test"));
+        assert!(rendered.contains("reasoning medium"));
         assert!(rendered.contains("thinking"));
         assert!(rendered.contains("1 batch, 1 call, 1 ok"));
         assert!(rendered.contains("Enter send"));

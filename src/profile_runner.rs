@@ -12,6 +12,7 @@ use crate::{
 pub(crate) struct ProfileRunOptions {
     pub(crate) cwd: PathBuf,
     pub(crate) model: String,
+    pub(crate) reasoning_effort: String,
     pub(crate) max_turns: Option<usize>,
     pub(crate) target_tokens: usize,
     pub(crate) repeat: usize,
@@ -39,8 +40,8 @@ pub(crate) async fn run_profile_scenarios(
             .collect::<Vec<_>>()
             .join(",");
         println!(
-            "benchmark_suite={suite} scenarios={} repeat={}",
-            scenario_names, options.repeat
+            "benchmark_suite={suite} scenarios={} repeat={} reasoning_effort={}",
+            scenario_names, options.repeat, options.reasoning_effort
         );
     }
 
@@ -86,13 +87,19 @@ pub(crate) async fn run_profile_scenarios(
                 options.cwd.clone()
             };
             profile_scenarios::prepare_profile_scenario(&scenario_cwd, *scenario)?;
+            let read_roots = if options.benchmark_suite.is_some() {
+                benchmark_workspace::benchmark_read_roots(&options.cwd, &scenario_cwd)
+            } else {
+                Vec::new()
+            };
             if options.repeat > 1 {
                 println!("scenario_repeat={repeat_index}/{}", options.repeat);
             }
-            let mut runner = crate::agent::AgentRunner::new(
+            let mut runner = crate::agent::AgentRunner::new_with_reasoning_effort(
                 auth.clone(),
                 scenario_cwd.clone(),
                 options.model.clone(),
+                options.reasoning_effort.clone(),
                 options.max_turns,
                 !options.no_trace,
                 !options.no_profile,
@@ -112,6 +119,7 @@ pub(crate) async fn run_profile_scenarios(
                         "approx_prompt_tokens": total_prompt_chars / APPROX_CHARS_PER_TOKEN,
                         "repeat_index": repeat_index,
                         "repeat_count": options.repeat,
+                        "reasoning_effort": options.reasoning_effort.as_str(),
                         "expected_tool_groups": profile_scenarios::profile_scenario_expected_tool_groups(*scenario),
                         "expected_tool_calls": profile_scenarios::profile_scenario_expected_tool_calls(*scenario),
                         "expected_skills": profile_scenarios::profile_scenario_expected_skills(*scenario),
@@ -119,8 +127,9 @@ pub(crate) async fn run_profile_scenarios(
                 })),
                 tools::AgentMode::Work,
             )?;
+            runner.set_read_roots(read_roots.clone());
             let startup_context = if options.benchmark_suite.is_some() {
-                benchmark_startup_context(&scenario_cwd)?
+                benchmark_startup_context(&options.cwd, &scenario_cwd, &read_roots, *scenario)?
             } else {
                 None
             };
@@ -248,14 +257,77 @@ pub(crate) async fn run_profile_scenarios(
     Ok(())
 }
 
-fn benchmark_startup_context(cwd: &std::path::Path) -> Result<Option<String>> {
-    let Some(agents) = agents_context_message(cwd)? else {
-        return Ok(None);
+fn benchmark_startup_context(
+    source_cwd: &std::path::Path,
+    cwd: &std::path::Path,
+    read_roots: &[PathBuf],
+    scenario: ProfileScenarioKind,
+) -> Result<Option<String>> {
+    let reference_context = benchmark_reference_context(read_roots);
+    let environment = format!(
+        "<environment_context>\n  <cwd>{}</cwd>{}\n</environment_context>\n\n<benchmark_quality_context>\n{}\n</benchmark_quality_context>",
+        cwd.display(),
+        reference_context,
+        benchmark_quality_context(scenario)
+    );
+    let Some(agents) = agents_context_message(source_cwd)? else {
+        return Ok(Some(environment));
     };
-    Ok(Some(format!(
-        "{agents}\n\n<environment_context>\n  <cwd>{}</cwd>\n</environment_context>",
-        cwd.display()
-    )))
+    Ok(Some(format!("{agents}\n\n{environment}")))
+}
+
+fn benchmark_reference_context(read_roots: &[PathBuf]) -> String {
+    if read_roots.is_empty() {
+        String::new()
+    } else {
+        let roots = read_roots
+            .iter()
+            .map(|root| {
+                format!(
+                    "\n  <read_only_reference_root>{}</read_only_reference_root>",
+                    root.display()
+                )
+            })
+            .collect::<String>();
+        format!(
+            "\n  <note>Native read-only tools may read source evidence from the reference root, but writes and shell commands remain scoped to cwd.</note>{roots}"
+        )
+    }
+}
+
+fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
+    match scenario {
+        ProfileScenarioKind::ToolRecovery | ProfileScenarioKind::ShellRecovery => {
+            "Comparison evidence: Spark already completes recovery tasks quickly; quality losses came from missing exact expected probes or adding extra calls after the required path. Follow the required failing probe and recovery path exactly, verify the requested success condition once, and stop without unrelated exploration."
+        }
+        ProfileScenarioKind::ReactCalculatorScaffold
+        | ProfileScenarioKind::RustLogAnalyzerScaffold => {
+            "Comparison evidence: Spark lost scaffold quality when browser/runtime validation failed, tool output was truncated, or retries drifted. Spend extra effort here: read the brief, create every required file, keep commands scoped to the fixture, run the requested test, and verify the app or CLI entrypoint satisfies the harness smoke check before finalizing."
+        }
+        ProfileScenarioKind::TechnicalEssay => {
+            "Comparison evidence: Spark lost essay quality on validation failure and incomplete brief coverage. Spend extra effort here: read every local source note, build the essay from those notes only, verify title/headings/word count/citations [S1], [S2], and [S3], then report the checks."
+        }
+        ProfileScenarioKind::OpsReport => {
+            "Comparison evidence: Spark lost report quality on validation failure despite moving quickly, and a later smoke run picked the highest-risk team by ticket volume instead of severity/age. Spend extra effort here: start by reading only the brief and CSV, compute metrics from the CSV header-aware data, rank highest-risk team by open P1 severity and age before simple volume, write both required outputs, re-read metrics.json and report.md, and verify every requested metric and risk claim before finalizing."
+        }
+        ProfileScenarioKind::ConfigMigration => {
+            "Comparison evidence: Spark completed migration tasks but lost process quality through repeated/extra calls and incomplete proof. Spend extra effort here only on targeted verification: read each required file, patch the three required artifacts, validate JSON, search for stale names, and stop after the migration evidence is complete."
+        }
+        ProfileScenarioKind::GithubIssueBugfix | ProfileScenarioKind::GithubIssueTriage => {
+            "Comparison evidence: Codex/OpenCode improved quality by grounding issue work in source and validation evidence. Spend extra effort here: read the issue first, inspect only relevant local code/logs/tests, produce the required fix or triage artifact, run or perform the focused validation, and cite the concrete evidence in the final answer."
+        }
+        ProfileScenarioKind::RepoSurvey
+        | ProfileScenarioKind::RepoArchitectureSurvey
+        | ProfileScenarioKind::BenchmarkDesignSurvey => {
+            "Comparison evidence: Spark lost survey quality from missing expected evidence, context pressure, repeated calls, and truncated outputs. Spend extra effort here by being precise, not broad: follow the required evidence path, use bounded reads/searches, summarize only after the named files/symbols were checked, and avoid broad recursive output that causes truncation. For repo-survey specifically, do not recursively list src, do not search from the repository root, and do not read more than four src files unless a search result is ambiguous."
+        }
+        ProfileScenarioKind::PrecisePatch | ProfileScenarioKind::MultiFilePatch => {
+            "Comparison evidence: Spark succeeds on patch tasks but loses quality when it over-calls tools or under-proves the final state. Spend extra effort here on precise verification: inspect the target files, make the smallest scoped edit, run the focused validation when available, re-check the changed lines, and avoid unrelated refactors."
+        }
+        _ => {
+            "Comparison evidence: Codex/OpenCode generally scored higher by spending more time on evidence and validation, while Spark won speed. Complete the scenario's required evidence path, use one focused self-check near the end, verify required files/searches/commands are present, then stop without broad repo sweeps or repeated equivalent reads."
+        }
+    }
 }
 
 fn agents_context_message(cwd: &std::path::Path) -> Result<Option<String>> {
@@ -322,7 +394,9 @@ fn project_root(cwd: &std::path::Path) -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{agents_context_message, benchmark_startup_context};
+    use crate::cli::ProfileScenarioKind;
+
+    use super::{agents_context_message, benchmark_quality_context, benchmark_startup_context};
 
     #[test]
     fn agents_context_message_matches_codex_project_instruction_shape() {
@@ -375,12 +449,66 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("AGENTS.md"), "Use bun.").expect("write agents");
 
-        let context = benchmark_startup_context(dir.path())
-            .expect("startup context")
-            .expect("context should exist");
+        let context =
+            benchmark_startup_context(dir.path(), dir.path(), &[], ProfileScenarioKind::RepoSurvey)
+                .expect("startup context")
+                .expect("context should exist");
 
         assert!(context.contains("# AGENTS.md instructions for "));
         assert!(context.contains("<environment_context>"));
         assert!(context.contains("<cwd>"));
+    }
+
+    #[test]
+    fn benchmark_startup_context_includes_environment_without_agents_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let context =
+            benchmark_startup_context(dir.path(), dir.path(), &[], ProfileScenarioKind::RepoSurvey)
+                .expect("startup context")
+                .expect("environment context should exist");
+
+        assert!(!context.contains("# AGENTS.md instructions for "));
+        assert!(context.contains("<environment_context>"));
+        assert!(context.contains("<cwd>"));
+        assert!(context.contains(&dir.path().display().to_string()));
+    }
+
+    #[test]
+    fn benchmark_startup_context_includes_reference_root() {
+        let source = tempfile::tempdir().expect("source");
+        let scenario = tempfile::tempdir().expect("scenario");
+
+        let context = benchmark_startup_context(
+            source.path(),
+            scenario.path(),
+            &[source.path().to_path_buf()],
+            ProfileScenarioKind::RepoSurvey,
+        )
+        .expect("startup context")
+        .expect("environment context should exist");
+
+        assert!(context.contains("<read_only_reference_root>"));
+        assert!(context.contains(&source.path().display().to_string()));
+        assert!(context.contains("writes and shell commands remain scoped to cwd"));
+    }
+
+    #[test]
+    fn benchmark_quality_context_uses_real_comparison_lessons_by_task_risk() {
+        let scaffold = benchmark_quality_context(ProfileScenarioKind::ReactCalculatorScaffold);
+        assert!(scaffold.contains("browser/runtime validation failed"));
+        assert!(scaffold.contains("verify the app or CLI entrypoint"));
+
+        let recovery = benchmark_quality_context(ProfileScenarioKind::ToolRecovery);
+        assert!(recovery.contains("Follow the required failing probe"));
+        assert!(recovery.contains("stop without unrelated exploration"));
+
+        let report = benchmark_quality_context(ProfileScenarioKind::OpsReport);
+        assert!(report.contains("re-read metrics.json and report.md"));
+        assert!(report.contains("open P1 severity and age"));
+
+        let survey = benchmark_quality_context(ProfileScenarioKind::RepoSurvey);
+        assert!(survey.contains("do not recursively list src"));
+        assert!(survey.contains("do not read more than four src files"));
     }
 }

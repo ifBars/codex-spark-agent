@@ -28,6 +28,11 @@ pub(crate) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show or change tool mode",
     },
     SlashCommand {
+        name: "/reasoning",
+        usage: "/reasoning [low|medium|high|xhigh]",
+        description: "Show or change reasoning effort",
+    },
+    SlashCommand {
         name: "/ask",
         usage: "/ask",
         description: "Switch to read-only mode",
@@ -151,7 +156,7 @@ pub(crate) async fn run_line_interactive_chat(
             "/exit" | "/quit" => return Ok(()),
             "/help" => {
                 println!(
-                    "Commands: /help, /status, /mode, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /save, /clear, /exit"
+                    "Commands: /help, /status, /mode, /reasoning, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /save, /clear, /exit"
                 );
                 println!(
                     "Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>"
@@ -168,6 +173,10 @@ pub(crate) async fn run_line_interactive_chat(
             }
             "/mode" => {
                 println!("mode: {}", runner.mode().name());
+                continue;
+            }
+            "/reasoning" => {
+                println!("reasoning: {}", runner.reasoning_effort());
                 continue;
             }
             "/ask" => {
@@ -247,6 +256,22 @@ pub(crate) async fn run_line_interactive_chat(
             continue;
         }
 
+        if let Some(command) = command_args(input, "/reasoning") {
+            match parse_reasoning_effort(command.trim()) {
+                Some(reasoning_effort) => {
+                    runner.set_reasoning_effort(reasoning_effort);
+                    println!("reasoning: {}", runner.reasoning_effort());
+                    if let Some(name) = &session_name {
+                        runner.save_session_named(name)?;
+                    }
+                }
+                None => {
+                    eprintln!("usage: /reasoning low|medium|high|xhigh");
+                }
+            }
+            continue;
+        }
+
         if input.starts_with('/') {
             eprintln!("{}", unknown_slash_command_warning(input));
             continue;
@@ -307,6 +332,16 @@ pub(crate) fn parse_mode(input: &str) -> Option<tools::AgentMode> {
     match input {
         "ask" => Some(tools::AgentMode::Ask),
         "work" | "agent" => Some(tools::AgentMode::Work),
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_reasoning_effort(input: &str) -> Option<&'static str> {
+    match input {
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
         _ => None,
     }
 }

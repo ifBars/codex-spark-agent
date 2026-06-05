@@ -197,6 +197,7 @@ fn tool_recovery_scenario_declares_expected_exact_tool_calls() {
         calls[0]["path"],
         ".spark-scenarios/tool-recovery/source/missing-note.md"
     );
+    assert_eq!(calls[0]["ok"], false);
     assert_eq!(calls[1]["tool"], "fs.read");
     assert_eq!(
         calls[1]["path"],
@@ -225,6 +226,7 @@ fn shell_recovery_scenario_exercises_terminal_error_recovery() {
     );
     assert_eq!(calls.len(), 3);
     assert_eq!(calls[0]["tool"], "cmd.exec");
+    assert_eq!(calls[0]["ok"], false);
     assert_eq!(calls[1]["tool"], "cmd.exec");
     assert_eq!(
         calls[2]["path"],
@@ -497,6 +499,8 @@ fn react_calculator_scaffold_prepares_gitignored_project_brief() {
 
     assert!(brief.contains("React + TypeScript calculator"));
     assert!(brief.contains("Use bun"));
+    assert!(brief.contains("harness-owned Playwright browser smoke check"));
+    assert!(brief.contains("do not install Playwright"));
 }
 
 #[test]
@@ -511,7 +515,9 @@ fn react_calculator_scaffold_declares_project_file_expectations() {
     assert!(prompt.contains("Profile scenario: react-calculator-scaffold"));
     assert!(prompt.contains("Use bun for JavaScript package management"));
     assert!(prompt.contains("Do not create files outside this ignored fixture folder"));
-    assert!(prompt.contains("Playwright browser smoke check"));
+    assert!(prompt.contains("harness-owned Playwright browser smoke check"));
+    assert!(prompt.contains("Do not install Playwright"));
+    assert!(prompt.contains("the harness will run that browser smoke check externally"));
     assert_eq!(
         groups,
         vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
@@ -546,6 +552,7 @@ fn react_calculator_scaffold_declares_project_file_expectations() {
         ".spark-scenarios/react-calculator/src/styles.css"
     );
     assert_eq!(calls[7]["tool"], "cmd.exec");
+    assert_eq!(calls[7]["command"], "bun test");
 }
 
 #[test]
@@ -556,6 +563,8 @@ fn codex_cli_prompt_uses_cli_neutral_actions_for_scaffolding() {
     assert!(prompt.contains("Use bun for JavaScript package management"));
     assert!(prompt.contains("Create .spark-scenarios/react-calculator/index.html"));
     assert!(prompt.contains("Create .spark-scenarios/react-calculator/src/App.tsx"));
+    assert!(prompt.contains("Do not install Playwright"));
+    assert!(prompt.contains("the harness owns that browser smoke check"));
     assert!(!prompt.contains("fs.write"));
     assert!(!prompt.contains("cmd.exec"));
 }
@@ -630,6 +639,7 @@ fn rust_log_analyzer_scaffold_declares_project_file_expectations() {
         ".spark-scenarios/rust-log-analyzer/src/main.rs"
     );
     assert_eq!(calls[5]["tool"], "cmd.exec");
+    assert_eq!(calls[5]["command"], "cargo test");
 }
 
 #[test]
@@ -735,6 +745,17 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
             content.contains(expected),
             "{scenario:?} fixture missing {expected}"
         );
+        if scenario == ProfileScenarioKind::OpsReport {
+            assert!(
+                content.contains("Treat the first CSV line as the header, not a ticket")
+                    || std::fs::read_to_string(
+                        dir.path().join(".spark-scenarios/ops-report/brief.md")
+                    )
+                    .expect("ops brief")
+                    .contains("Treat the first CSV line as the header, not a ticket"),
+                "ops-report fixture should make header handling explicit"
+            );
+        }
         assert!(
             profile_scenario_validation_command(scenario).is_some(),
             "{scenario:?} should have deterministic validation"

@@ -153,7 +153,7 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
         ProfileScenarioKind::ReactCalculatorScaffold => {
             std::fs::write(
                 dir.join("brief.md"),
-                "# React Calculator Brief\n\nBuild a small React + TypeScript calculator app in this folder. It should support digits, decimal input, clear, backspace, the four basic operators, equals, keyboard input, and a visible calculation history. Use bun for JavaScript package management and keep all generated app files inside this ignored fixture folder. The validation commands are `bun test` plus a Playwright browser smoke check that runs the app through Vite, screenshots it, and clicks 1 + 2 =. Include a browser-runnable Vite entrypoint such as index.html and package setup. Either keep tests compatible with Bun's default test runtime or add the package/config setup required for DOM-based React tests before using React Testing Library.\n",
+                "# React Calculator Brief\n\nBuild a small React + TypeScript calculator app in this folder. It should support digits, decimal input, clear, backspace, the four basic operators, equals, keyboard input, and a visible calculation history. Use bun for JavaScript package management and keep all generated app files inside this ignored fixture folder. The validation commands are `bun test` plus a harness-owned Playwright browser smoke check that runs the app through Vite, screenshots it, and clicks 1 + 2 = after your run finishes. Include a browser-runnable Vite entrypoint such as index.html and package setup, but do not install Playwright, launch browsers, or start a long-lived dev server yourself. Either keep tests compatible with Bun's default test runtime or add the package/config setup required for DOM-based React tests before using React Testing Library.\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
         }
@@ -273,7 +273,7 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 .map_err(|error| anyhow::anyhow!("failed to create data fixture: {error}"))?;
             std::fs::write(
                 dir.join("brief.md"),
-                "# Ops Report Brief\n\nAnalyze `data/tickets.csv`. Write `report.md` with the operational readout and `metrics.json` with exactly these numeric keys: `totalTickets`, `openTickets`, `p1Open`, and `averageOpenMinutes`. Round `averageOpenMinutes` to one decimal place. Mention the highest-risk team in the report and explain why.\n",
+                "# Ops Report Brief\n\nAnalyze `data/tickets.csv`. Treat the first CSV line as the header, not a ticket. Write `report.md` with the operational readout and `metrics.json` with exactly these numeric keys: `totalTickets`, `openTickets`, `p1Open`, and `averageOpenMinutes`. Count ticket rows only for `totalTickets`; round `averageOpenMinutes` for open tickets to one decimal place. Mention the highest-risk team in the report and explain why.\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
             std::fs::write(
@@ -306,8 +306,9 @@ pub(crate) fn profile_scenario_prompts(
              Inspect this repository like a coding agent. Use targeted native tools, not broad command output.\n\
              1. List the repository root.\n\
              2. Read Cargo.toml and README.md with bounded windows.\n\
-             3. Search src for tool and compaction surfaces.\n\
-             4. Finish with a concise harness-risk summary and one next profiling recommendation."
+             3. Search src for tool and compaction surfaces using narrow search terms.\n\
+             4. Do not recursively list src, do not search from the repository root, and do not read more than four src files unless a search result is ambiguous.\n\
+             5. Finish with a concise harness-risk summary and one next profiling recommendation."
                 .to_string(),
         ]),
         ProfileScenarioKind::FileEdit => Ok(vec![
@@ -444,7 +445,7 @@ pub(crate) fn profile_scenario_prompts(
             "Profile scenario: react-calculator-scaffold.\n\
              Build a brand new React + TypeScript calculator app only under .spark-scenarios/react-calculator.\n\
              Use bun for JavaScript package management. Do not create files outside this ignored fixture folder.\n\
-             The finished app will be checked by bun test and a Playwright browser smoke check, so it must be runnable through Vite in a real browser.\n\
+             The finished app will be checked by bun test and a harness-owned Playwright browser smoke check after your run finishes, so it must be runnable through Vite in a real browser.\n\
              Required actions:\n\
              1. Use fs.read on .spark-scenarios/react-calculator/brief.md.\n\
              2. Use fs.write to create .spark-scenarios/react-calculator/package.json.\n\
@@ -454,7 +455,7 @@ pub(crate) fn profile_scenario_prompts(
              6. Use fs.write to create .spark-scenarios/react-calculator/src/App.test.tsx.\n\
              7. Use fs.write to create .spark-scenarios/react-calculator/src/styles.css.\n\
              8. Use cmd.exec from .spark-scenarios/react-calculator to run bun test when possible; if tests need a DOM, configure it before using DOM-based test helpers.\n\
-             9. Self-test the running app in a browser with Playwright or another available browser smoke check when possible. At minimum, verify the Vite app starts and 1 + 2 = renders 3 before finishing.\n\
+             9. Do not install Playwright, launch browsers, or start a long-lived Vite dev server yourself; the harness will run that browser smoke check externally.\n\
              Finish with the app files created, validation result, and any harness behavior that made project scaffolding easier or harder."
                 .to_string(),
         ]),
@@ -495,7 +496,7 @@ pub(crate) fn profile_scenario_prompts(
              2. Read .spark-scenarios/github-issue-triage/src/cachePolicy.ts.\n\
              3. Read .spark-scenarios/github-issue-triage/logs/warehouse-import.log.\n\
              4. Write .spark-scenarios/github-issue-triage/triage.md with likely root cause, evidence, reproduction steps, and fix plan.\n\
-             5. Read triage.md to verify it names /api/items, Cache-Control, max-age=300, and stale-while-revalidate=30.\n\
+             5. Read triage.md to verify it names /api/items, src/cachePolicy.ts, Cache-Control, max-age=300, and stale-while-revalidate=30.\n\
              Finish with a concise triage summary and confidence level."
                 .to_string(),
         ]),
@@ -530,7 +531,7 @@ pub(crate) fn profile_scenario_prompts(
              Required actions:\n\
              1. Read .spark-scenarios/ops-report/brief.md.\n\
              2. Read .spark-scenarios/ops-report/data/tickets.csv.\n\
-             3. Compute total tickets, open tickets, open P1 tickets, and average minutes for open tickets.\n\
+             3. Compute total ticket rows excluding the CSV header, open tickets, open P1 tickets, and average minutes for open tickets.\n\
              4. Write .spark-scenarios/ops-report/metrics.json with totalTickets, openTickets, p1Open, and averageOpenMinutes.\n\
              5. Write .spark-scenarios/ops-report/report.md with a concise operational readout and the highest-risk team.\n\
              6. Read both outputs to verify the numbers and narrative.\n\
@@ -580,10 +581,13 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
         ProfileScenarioKind::RepoSurvey => {
             "Benchmark scenario: repo-survey.\n\
              Inspect this repository like a coding agent. Use bounded file reads and targeted searches rather than broad output.\n\
+             Keep this survey lean: complete the required evidence path, inspect only the top search hits needed to ground the answer, then stop.\n\
              1. List the repository root.\n\
              2. Read Cargo.toml and README.md.\n\
-             3. Search src for tool and compaction surfaces.\n\
-             4. Finish with a concise harness-risk summary and one next profiling recommendation."
+             3. Search src for tool surfaces with a narrow query such as \"builtin_tools\" or \"ToolDescriptor\".\n\
+             4. Search src for compaction surfaces with a narrow query such as \"responses_compact\" or \"maybe_compact\".\n\
+             5. Do not recursively list src, do not search from the repository root, and do not read more than four src files unless a search result is ambiguous.\n\
+             6. Finish with a concise harness-risk summary and one next profiling recommendation."
                 .to_string()
         }
         ProfileScenarioKind::RepoArchitectureSurvey => {
@@ -615,7 +619,8 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Build a brand new React + TypeScript calculator app only under .spark-scenarios/react-calculator.\n\
              Use bun for JavaScript package management. Do not create files outside this ignored fixture folder.\n\
              This is a scoped fixture task: start with the listed brief and do not survey unrelated repository files unless a concrete blocker requires it.\n\
-             The finished app will be checked by bun test and a Playwright browser smoke check, so it must be runnable through Vite in a real browser.\n\
+             The finished app will be checked by bun test and a harness-owned Playwright browser smoke check after your run finishes, so it must be runnable through Vite in a real browser.\n\
+             Do not install Playwright, launch browsers, or start a long-lived Vite dev server yourself; the harness owns that browser smoke check.\n\
              On Windows, run validation commands separately rather than chaining them with &&.\n\
              Required actions:\n\
              1. Read .spark-scenarios/react-calculator/brief.md.\n\
@@ -626,7 +631,7 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              6. Create .spark-scenarios/react-calculator/src/App.test.tsx.\n\
              7. Create .spark-scenarios/react-calculator/src/styles.css.\n\
              8. Run bun test if possible; if tests need a DOM, configure it before using DOM-based test helpers.\n\
-             9. Self-test the running app in a browser with Playwright or another available browser smoke check when possible. At minimum, verify the Vite app starts and 1 + 2 = renders 3 before finishing.\n\
+             9. Ensure the Vite entrypoint is browser-runnable so the harness smoke check can click 1 + 2 = and observe 3.\n\
              Finish with the app files created, validation result, and any agent behavior that made project scaffolding easier or harder."
                 .to_string()
         }
@@ -667,7 +672,7 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              1. Read .spark-scenarios/github-issue-triage/issue.md.\n\
              2. Inspect the local source and log evidence under .spark-scenarios/github-issue-triage.\n\
              3. Write .spark-scenarios/github-issue-triage/triage.md with likely root cause, evidence, reproduction steps, and fix plan.\n\
-             4. Verify triage.md names /api/items, Cache-Control, max-age=300, and stale-while-revalidate=30.\n\
+             4. Verify triage.md names /api/items, src/cachePolicy.ts, Cache-Control, max-age=300, and stale-while-revalidate=30.\n\
              Finish with a concise triage summary and confidence level."
                 .to_string()
         }
@@ -696,7 +701,7 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
         ProfileScenarioKind::OpsReport => {
             "Benchmark scenario: ops-report.\n\
              Work only under .spark-scenarios/ops-report.\n\
-             Analyze data/tickets.csv and produce both machine-checkable metrics and a concise narrative.\n\
+             Analyze data/tickets.csv and produce both machine-checkable metrics and a concise narrative. Treat the first CSV line as the header, not a ticket.\n\
              Required actions:\n\
              1. Read .spark-scenarios/ops-report/brief.md.\n\
              2. Read .spark-scenarios/ops-report/data/tickets.csv.\n\
@@ -977,6 +982,7 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.read",
                 "path": ".spark-scenarios/tool-recovery/source/missing-note.md",
+                "ok": false,
             }),
             json!({
                 "tool": "fs.read",
@@ -986,6 +992,7 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::ShellRecovery => vec![
             json!({
                 "tool": "cmd.exec",
+                "ok": false,
             }),
             json!({
                 "tool": "cmd.exec",
@@ -1140,6 +1147,7 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tool": "cmd.exec",
+                "command": "bun test",
             }),
         ],
         ProfileScenarioKind::RustLogAnalyzerScaffold => vec![
@@ -1165,6 +1173,7 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tool": "cmd.exec",
+                "command": "cargo test",
             }),
         ],
         ProfileScenarioKind::GithubIssueBugfix => vec![
@@ -1182,6 +1191,7 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tool": "cmd.exec",
+                "command": "bun test",
             }),
         ],
         ProfileScenarioKind::GithubIssueTriage => vec![
@@ -1245,6 +1255,14 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tool": "fs.write",
+                "path": ".spark-scenarios/ops-report/report.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/ops-report/metrics.json",
+            }),
+            json!({
+                "tool": "fs.read",
                 "path": ".spark-scenarios/ops-report/report.md",
             }),
         ],

@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use crate::agent::AgentRunner;
 use crate::profiler::tool_signature;
-use crate::tools::{ToolResult, invoke, is_readonly_tool};
+use crate::tools::{ToolResult, invoke_with_read_roots, is_readonly_tool};
 
 #[derive(Debug, Clone)]
 pub(super) struct CachedToolObservation {
@@ -23,7 +23,8 @@ impl AgentRunner {
             return cached_readonly_result(tool_name, &args, cached);
         }
 
-        let result = invoke(&self.cwd, self.mode, tool_name, args).await;
+        let result =
+            invoke_with_read_roots(&self.cwd, &self.read_roots, self.mode, tool_name, args).await;
         if is_cacheable_readonly_tool(tool_name) && should_cache_readonly_result(&result) {
             self.readonly_tool_cache.insert(
                 signature,

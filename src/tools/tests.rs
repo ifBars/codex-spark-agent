@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::command::bounded_text;
+use super::fs::{fs_list, fs_read, fs_search, fs_stat};
 use super::*;
 
 #[test]
@@ -10,11 +11,12 @@ fn builtin_tools_do_not_include_synthetic_completion_tool() {
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
 
-    assert_eq!(names.len(), 9);
+    assert_eq!(names.len(), 10);
     assert!(!names.iter().any(|name| name == "agent.complete"));
     assert!(names.iter().any(|name| name == "fs.stat"));
     assert!(names.iter().any(|name| name == "fs.rename"));
     assert!(names.iter().any(|name| name == "cmd.exec"));
+    assert!(names.iter().any(|name| name == "web.search"));
 }
 
 #[test]
@@ -24,7 +26,10 @@ fn ask_mode_advertises_only_readonly_tools() {
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
 
-    assert_eq!(names, vec!["fs.read", "fs.list", "fs.stat", "fs.search"]);
+    assert_eq!(
+        names,
+        vec!["fs.read", "fs.list", "fs.stat", "fs.search", "web.search"]
+    );
 }
 
 #[tokio::test]
@@ -91,6 +96,46 @@ async fn invoke_blocks_mutating_tools_in_ask_mode() {
     assert!(!result.ok);
     assert!(result.error.as_deref().expect("error").contains("ask mode"));
     assert!(!dir.path().join("sample.txt").exists());
+}
+
+#[tokio::test]
+async fn invoke_readonly_tools_can_use_reference_roots_but_writes_stay_local() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let source = tempfile::tempdir().expect("source");
+    std::fs::create_dir_all(source.path().join("src")).expect("src");
+    std::fs::write(
+        source.path().join("src").join("lib.rs"),
+        "pub fn reference_marker() {}\n",
+    )
+    .expect("write source");
+
+    let read = invoke_with_read_roots(
+        workspace.path(),
+        &[source.path().to_path_buf()],
+        AgentMode::Work,
+        "fs.read",
+        json!({"path": "src/lib.rs", "limit": 10}),
+    )
+    .await;
+    assert!(read.ok);
+    assert!(
+        read.data["content"]
+            .as_str()
+            .expect("content")
+            .contains("reference_marker")
+    );
+
+    let write = invoke_with_read_roots(
+        workspace.path(),
+        &[source.path().to_path_buf()],
+        AgentMode::Work,
+        "fs.write",
+        json!({"path": "src/generated.rs", "content": "local only\n"}),
+    )
+    .await;
+    assert!(write.ok);
+    assert!(workspace.path().join("src/generated.rs").exists());
+    assert!(!source.path().join("src/generated.rs").exists());
 }
 
 #[test]

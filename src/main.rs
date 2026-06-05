@@ -10,6 +10,7 @@ mod cli;
 mod client;
 mod codex_cli_benchmark;
 mod config;
+mod opencode_benchmark;
 mod profile_runner;
 mod profile_scenarios;
 mod profiler;
@@ -257,6 +258,7 @@ async fn main() -> Result<()> {
             scenario,
             cwd,
             model,
+            reasoning_effort,
             max_turns,
             target_tokens,
             repeat,
@@ -287,6 +289,7 @@ async fn main() -> Result<()> {
                 profile_runner::ProfileRunOptions {
                     cwd,
                     model,
+                    reasoning_effort: reasoning_effort.wire_value().to_string(),
                     max_turns,
                     target_tokens,
                     repeat,
@@ -304,6 +307,7 @@ async fn main() -> Result<()> {
             suite,
             cwd,
             model,
+            reasoning_effort,
             max_turns,
             target_tokens,
             repeat,
@@ -336,6 +340,7 @@ async fn main() -> Result<()> {
                 profile_runner::ProfileRunOptions {
                     cwd,
                     model,
+                    reasoning_effort: reasoning_effort.wire_value().to_string(),
                     max_turns,
                     target_tokens,
                     repeat,
@@ -401,6 +406,7 @@ async fn main() -> Result<()> {
             cwd,
             codex_bin,
             model,
+            reasoning_effort,
             repeat,
             scenarios,
             timeout_seconds,
@@ -420,6 +426,7 @@ async fn main() -> Result<()> {
                     cwd,
                     suite,
                     model,
+                    reasoning_effort: reasoning_effort.wire_value().to_string(),
                     repeat,
                     scenarios,
                     timeout_seconds,
@@ -442,12 +449,59 @@ async fn main() -> Result<()> {
                 report.json_path.display()
             );
         }
+        Command::OpencodeBenchmark {
+            suite,
+            cwd,
+            opencode_bin,
+            model,
+            reasoning_effort,
+            repeat,
+            scenarios,
+            timeout_seconds,
+            pure,
+            output_dir,
+        } => {
+            let cwd = std::fs::canonicalize(&cwd)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
+            let output_dir = if output_dir.is_absolute() {
+                output_dir
+            } else {
+                cwd.join(output_dir)
+            };
+            let report = opencode_benchmark::run_opencode_benchmark(
+                opencode_benchmark::OpencodeBenchmarkOptions {
+                    cwd,
+                    suite,
+                    model,
+                    reasoning_effort: reasoning_effort.wire_value().to_string(),
+                    repeat,
+                    scenarios,
+                    timeout_seconds,
+                    opencode_bin,
+                    pure,
+                    output_dir,
+                },
+            )
+            .await?;
+            println!(
+                "opencode_benchmark suite={} rows={} legacy_avg_score={} json={}",
+                suite.name(),
+                report.rows,
+                report
+                    .aggregate
+                    .get("average_score")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
+                report.json_path.display()
+            );
+        }
         Command::BenchmarkCompare {
             suite,
             cwd,
             limit,
             all_runs,
             codex_cli_report,
+            opencode_report,
             llm_judge_report,
             output_dir,
         } => {
@@ -465,12 +519,13 @@ async fn main() -> Result<()> {
                     limit,
                     all_runs,
                     codex_cli_report,
+                    opencode_report,
                     llm_judge_report,
                     output_dir,
                 },
             )?;
             println!(
-                "benchmark_comparison suite={} rows={} winner={} spark_benchmark_index={} codex_benchmark_index={} json={} csv={} html={}",
+                "benchmark_comparison suite={} rows={} winner={} spark_benchmark_index={} codex_benchmark_index={} opencode_benchmark_index={} json={} csv={} html={}",
                 suite.name(),
                 report.rows,
                 report
@@ -486,6 +541,11 @@ async fn main() -> Result<()> {
                 report
                     .aggregate
                     .pointer("/matched_runner_benchmark_index_averages/codex-cli")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0),
+                report
+                    .aggregate
+                    .pointer("/matched_runner_benchmark_index_averages/opencode")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0),
                 report.json_path.display(),

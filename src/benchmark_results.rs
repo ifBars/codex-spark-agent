@@ -92,6 +92,7 @@ pub(crate) struct BenchmarkComparisonOptions {
     pub(crate) limit: usize,
     pub(crate) all_runs: bool,
     pub(crate) codex_cli_report: PathBuf,
+    pub(crate) opencode_report: Option<PathBuf>,
     pub(crate) llm_judge_report: Option<PathBuf>,
     pub(crate) output_dir: PathBuf,
 }
@@ -127,6 +128,8 @@ struct ComparisonRow {
     runner: String,
     suite: String,
     scenario: String,
+    attempts: usize,
+    successful_attempts: usize,
     model: String,
     completion_score: f64,
     quality_score: f64,
@@ -225,13 +228,22 @@ pub(crate) fn write_benchmark_comparison(
             trace_commands::trace_runs_root(&options.cwd).display()
         );
     }
-    let codex_rows = read_codex_cli_rows(&options.codex_cli_report)?;
+    let codex_rows = read_external_agent_rows(&options.codex_cli_report, "Codex CLI")?;
     if codex_rows.is_empty() {
         anyhow::bail!(
             "no Codex CLI rows found in {}",
             options.codex_cli_report.display()
         );
     }
+    let opencode_rows = if let Some(path) = &options.opencode_report {
+        let rows = read_external_agent_rows(path, "opencode")?;
+        if rows.is_empty() {
+            anyhow::bail!("no opencode rows found in {}", path.display());
+        }
+        rows
+    } else {
+        Vec::new()
+    };
 
     std::fs::create_dir_all(&options.output_dir).map_err(|error| {
         anyhow::anyhow!(
@@ -246,12 +258,19 @@ pub(crate) fn write_benchmark_comparison(
         codex_rows
             .iter()
             .filter(|row| row.suite == options.suite.name())
-            .map(comparison_row_from_codex_cli),
+            .map(comparison_row_from_external_agent),
+    );
+    rows.extend(
+        opencode_rows
+            .iter()
+            .filter(|row| row.suite == options.suite.name())
+            .map(comparison_row_from_external_agent),
     );
     if let Some(path) = &options.llm_judge_report {
         let judge_report = read_llm_judge_report(path)?;
         apply_llm_judge_scores(&mut rows, &judge_report);
     }
+    let mut rows = average_comparison_attempts(rows);
     apply_comparison_indices(&mut rows, "codex-cli");
     rows.sort_by(|left, right| {
         scenario_order(options.suite, &left.scenario)
@@ -691,10 +710,17 @@ fn quality_score(row: &BenchmarkRunRow) -> f64 {
     if row.browser_validation_present && row.browser_screenshot.is_empty() {
         penalty += 8.0;
     }
+    penalty += row.recovered_tool_failures.min(6) as f64 * 1.0;
     if row.source_bytes > 0 {
-        penalty += row.source_bytes.saturating_sub(12_000) as f64 / 1_500.0;
+        penalty += source_quality_penalty(row.source_files, row.source_bytes);
     }
     round1((100.0 - penalty).clamp(0.0, 100.0))
+}
+
+fn source_quality_penalty(source_files: u64, source_bytes: u64) -> f64 {
+    let size_penalty = source_bytes.saturating_sub(8_000) as f64 / 1_500.0;
+    let file_penalty = source_files.saturating_sub(8) as f64 * 1.5;
+    (size_penalty + file_penalty).min(18.0)
 }
 
 fn efficiency_score(duration_ms: u128, source_bytes: u64) -> f64 {
@@ -1107,23 +1133,20 @@ fn pressure_svg(rows: &[BenchmarkRunRow]) -> String {
     svg
 }
 
-fn read_codex_cli_rows(path: &Path) -> Result<Vec<CodexCliBenchmarkRow>> {
+fn read_external_agent_rows(path: &Path, label: &str) -> Result<Vec<CodexCliBenchmarkRow>> {
     let value: Value = serde_json::from_str(&std::fs::read_to_string(path).map_err(|error| {
-        anyhow::anyhow!(
-            "failed to read Codex CLI report {}: {error}",
-            path.display()
-        )
+        anyhow::anyhow!("failed to read {label} report {}: {error}", path.display())
     })?)
     .map_err(|error| {
         anyhow::anyhow!(
-            "failed to parse Codex CLI report JSON {}: {error}",
+            "failed to parse {label} report JSON {}: {error}",
             path.display()
         )
     })?;
     serde_json::from_value(value.get("rows").cloned().unwrap_or_else(|| json!([]))).map_err(
         |error| {
             anyhow::anyhow!(
-                "failed to parse Codex CLI report rows from {}: {error}",
+                "failed to parse {label} report rows from {}: {error}",
                 path.display()
             )
         },
@@ -1160,13 +1183,24 @@ fn apply_llm_judge_scores(rows: &mut [ComparisonRow], report: &BenchmarkJudgeRep
         row.llm_process_score = Some(round1(score.process_score));
         row.llm_confidence = Some(round1(score.confidence));
         row.llm_notes = score.notes.clone();
-        row.quality_score =
-            round1((row.quality_score * 0.25 + score.solution_score * 0.75).clamp(0.0, 100.0));
-        row.process_score =
-            round1((row.process_score * 0.25 + score.process_score * 0.75).clamp(0.0, 100.0));
+        row.quality_score = round1(score.solution_score.clamp(0.0, 100.0));
+        row.process_score = round1(score.process_score.clamp(0.0, 100.0));
         row.task_quality_score = row.quality_score;
         row.harness_pressure_score = row.process_score;
+        row.score = comparison_score_from_components(row);
     }
+}
+
+fn comparison_score_from_components(row: &ComparisonRow) -> f64 {
+    let mut score =
+        row.completion_score * 0.7 + row.quality_score * 0.2 + row.efficiency_score * 0.1;
+    if row.validation_timed_out || row.validation_exit_code.is_some_and(|code| code != 0) {
+        score = score.min(55.0);
+    }
+    if !row.success || row.completion_score < 100.0 {
+        score = score.min(row.completion_score.min(60.0));
+    }
+    round1(score.clamp(0.0, 100.0))
 }
 
 fn comparison_row_from_harness(row: &BenchmarkRunRow) -> ComparisonRow {
@@ -1174,6 +1208,8 @@ fn comparison_row_from_harness(row: &BenchmarkRunRow) -> ComparisonRow {
         runner: "spark-harness".to_string(),
         suite: row.suite.clone(),
         scenario: row.scenario.clone(),
+        attempts: 1,
+        successful_attempts: usize::from(row.success),
         model: row.model.clone(),
         completion_score: row.completion_score,
         quality_score: row.quality_score,
@@ -1202,15 +1238,17 @@ fn comparison_row_from_harness(row: &BenchmarkRunRow) -> ComparisonRow {
     }
 }
 
-fn comparison_row_from_codex_cli(row: &CodexCliBenchmarkRow) -> ComparisonRow {
+fn comparison_row_from_external_agent(row: &CodexCliBenchmarkRow) -> ComparisonRow {
     let completion_score = codex_completion_score(row);
     let quality_score = codex_quality_score(row, completion_score);
     let process_score = codex_process_score(row);
     let efficiency_score = codex_efficiency_score(row);
     ComparisonRow {
-        runner: "codex-cli".to_string(),
+        runner: row.runner.clone(),
         suite: row.suite.clone(),
         scenario: row.scenario.clone(),
+        attempts: 1,
+        successful_attempts: usize::from(row.success),
         model: row.model.clone(),
         completion_score,
         quality_score,
@@ -1237,6 +1275,147 @@ fn comparison_row_from_codex_cli(row: &CodexCliBenchmarkRow) -> ComparisonRow {
         failure_points: row.failure_points.clone(),
         source: row.run_dir.clone(),
     }
+}
+
+fn average_comparison_attempts(rows: Vec<ComparisonRow>) -> Vec<ComparisonRow> {
+    let mut groups = BTreeMap::<(String, String), Vec<ComparisonRow>>::new();
+    for row in rows {
+        groups
+            .entry((row.runner.clone(), row.scenario.clone()))
+            .or_default()
+            .push(row);
+    }
+
+    groups.into_values().map(average_comparison_group).collect()
+}
+
+fn average_comparison_group(rows: Vec<ComparisonRow>) -> ComparisonRow {
+    let attempts = rows.iter().map(|row| row.attempts).sum::<usize>();
+    let successful_attempts = rows
+        .iter()
+        .map(|row| row.successful_attempts)
+        .sum::<usize>();
+    let mut row = rows
+        .first()
+        .expect("comparison group should contain at least one row")
+        .clone();
+    if rows.len() == 1 && row.attempts == 1 {
+        return row;
+    }
+
+    row.attempts = attempts;
+    row.successful_attempts = successful_attempts;
+    row.model = join_unique(rows.iter().map(|row| row.model.as_str()));
+    row.completion_score = average_f64(rows.iter().map(|row| row.completion_score));
+    row.quality_score = average_f64(rows.iter().map(|row| row.quality_score));
+    row.process_score = average_f64(rows.iter().map(|row| row.process_score));
+    row.llm_solution_score =
+        average_option_f64(rows.iter().filter_map(|row| row.llm_solution_score));
+    row.llm_process_score = average_option_f64(rows.iter().filter_map(|row| row.llm_process_score));
+    row.llm_confidence = average_option_f64(rows.iter().filter_map(|row| row.llm_confidence));
+    row.llm_notes = join_unique(
+        rows.iter()
+            .map(|row| row.llm_notes.as_str())
+            .filter(|note| !note.is_empty()),
+    );
+    row.efficiency_index = None;
+    row.benchmark_index = None;
+    row.score = average_f64(rows.iter().map(|row| row.score));
+    row.task_quality_score = average_f64(rows.iter().map(|row| row.task_quality_score));
+    row.efficiency_score = average_f64(rows.iter().map(|row| row.efficiency_score));
+    row.harness_pressure_score = average_f64(rows.iter().map(|row| row.harness_pressure_score));
+    row.success = successful_attempts == attempts;
+    row.validation_exit_code = combined_exit_code(rows.iter().map(|row| row.validation_exit_code));
+    row.validation_timed_out = rows.iter().any(|row| row.validation_timed_out);
+    row.duration_ms = average_u128(rows.iter().map(|row| row.duration_ms));
+    row.tool_or_item_calls = average_u64(rows.iter().map(|row| row.tool_or_item_calls));
+    row.input_tokens = average_u64(rows.iter().map(|row| row.input_tokens));
+    row.output_tokens = average_u64(rows.iter().map(|row| row.output_tokens));
+    row.source_files = average_u64(rows.iter().map(|row| row.source_files));
+    row.source_bytes = average_u64(rows.iter().map(|row| row.source_bytes));
+    row.failure_points = joined_failure_points(&rows, successful_attempts, attempts);
+    row.source = format!(
+        "averaged {} attempts: {}",
+        attempts,
+        join_unique(rows.iter().map(|row| row.source.as_str()))
+    );
+    row
+}
+
+fn average_f64(values: impl Iterator<Item = f64>) -> f64 {
+    round1(values.pipe_average().unwrap_or(0.0))
+}
+
+fn average_option_f64(values: impl Iterator<Item = f64>) -> Option<f64> {
+    values.pipe_average().map(round1)
+}
+
+fn average_u64(values: impl Iterator<Item = u64>) -> u64 {
+    let mut count = 0u128;
+    let mut total = 0u128;
+    for value in values {
+        count += 1;
+        total += value as u128;
+    }
+    if count == 0 {
+        0
+    } else {
+        ((total as f64 / count as f64).round()) as u64
+    }
+}
+
+fn average_u128(values: impl Iterator<Item = u128>) -> u128 {
+    let mut count = 0u128;
+    let mut total = 0u128;
+    for value in values {
+        count += 1;
+        total += value;
+    }
+    if count == 0 {
+        0
+    } else {
+        ((total as f64 / count as f64).round()) as u128
+    }
+}
+
+fn combined_exit_code(values: impl Iterator<Item = Option<i32>>) -> Option<i32> {
+    let mut saw_zero = false;
+    for value in values {
+        match value {
+            Some(0) => saw_zero = true,
+            Some(code) => return Some(code),
+            None => {}
+        }
+    }
+    saw_zero.then_some(0)
+}
+
+fn join_unique<'a>(values: impl Iterator<Item = &'a str>) -> String {
+    values
+        .flat_map(|value| value.split(';'))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+fn joined_failure_points(
+    rows: &[ComparisonRow],
+    successful_attempts: usize,
+    attempts: usize,
+) -> String {
+    let mut points = rows
+        .iter()
+        .flat_map(|row| row.failure_points.split(';'))
+        .map(str::trim)
+        .filter(|point| !point.is_empty())
+        .collect::<BTreeSet<_>>();
+    if successful_attempts < attempts {
+        points.insert("partial_or_failed_attempts");
+    }
+    points.into_iter().collect::<Vec<_>>().join(";")
 }
 
 fn codex_score_from_components(
@@ -1297,8 +1476,15 @@ fn codex_quality_score(row: &CodexCliBenchmarkRow, completion_score: f64) -> f64
     if row.browser_validation_present && row.browser_screenshot.is_empty() {
         penalty += 8.0;
     }
+    penalty += row.actionable_stderr_lines.min(10) as f64 * 1.5;
+    if row.success && row.input_tokens == 0 {
+        penalty += 4.0;
+    }
+    if row.success && row.final_message_chars < 120 {
+        penalty += 4.0;
+    }
     if row.source_bytes > 0 {
-        penalty += row.source_bytes.saturating_sub(12_000) as f64 / 1_500.0;
+        penalty += source_quality_penalty(row.source_files, row.source_bytes);
     }
     round1((100.0 - penalty).clamp(0.0, 100.0))
 }
@@ -1335,7 +1521,6 @@ struct EfficiencyComponents {
 
 #[derive(Debug, Clone, Copy)]
 struct ScenarioBaseline {
-    quality_gate: f64,
     efficiency: EfficiencyComponents,
 }
 
@@ -1348,7 +1533,7 @@ fn apply_comparison_indices(rows: &mut [ComparisonRow], baseline_runner: &str) {
         .filter_map(|(index, row)| {
             let baseline = baselines.get(&row.scenario)?;
             let raw_efficiency = raw_efficiency_index(row, baseline);
-            let raw_benchmark = raw_benchmark_index(row, baseline, raw_efficiency);
+            let raw_benchmark = raw_benchmark_index(row, raw_efficiency);
             Some((index, raw_efficiency, raw_benchmark))
         })
         .collect::<Vec<_>>();
@@ -1389,7 +1574,6 @@ fn scenario_baselines(
             (
                 row.scenario.clone(),
                 ScenarioBaseline {
-                    quality_gate: quality_gate(row).max(1.0),
                     efficiency: efficiency_components(row),
                 },
             )
@@ -1397,15 +1581,10 @@ fn scenario_baselines(
         .collect()
 }
 
-fn raw_benchmark_index(
-    row: &ComparisonRow,
-    baseline: &ScenarioBaseline,
-    raw_efficiency: f64,
-) -> f64 {
-    let quality_ratio = quality_gate(row) / baseline.quality_gate.max(1.0);
-    let quality_points = quality_ratio * 40.0;
-    let pressure_penalty = (100.0 - row.process_score).max(0.0) * 0.25;
-    (quality_points + raw_efficiency - pressure_penalty).max(0.0)
+fn raw_benchmark_index(row: &ComparisonRow, raw_efficiency: f64) -> f64 {
+    let quality_points = quality_gate(row) * 0.8;
+    let efficiency_points = raw_efficiency * 0.35;
+    (quality_points + efficiency_points).max(0.0)
 }
 
 fn raw_efficiency_index(row: &ComparisonRow, baseline: &ScenarioBaseline) -> f64 {
@@ -1961,6 +2140,11 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
         "matched_runner_benchmark_index_averages",
         "codex-cli",
     );
+    let opencode_index = aggregate_metric(
+        aggregate,
+        "matched_runner_benchmark_index_averages",
+        "opencode",
+    );
     let spark_completion = aggregate_metric_with_fallback(
         aggregate,
         "matched_runner_completion_score_averages",
@@ -1972,6 +2156,12 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
         "matched_runner_completion_score_averages",
         "runner_completion_score_averages",
         "codex-cli",
+    );
+    let opencode_completion = aggregate_metric_with_fallback(
+        aggregate,
+        "matched_runner_completion_score_averages",
+        "runner_completion_score_averages",
+        "opencode",
     );
     let spark_duration = aggregate_metric_with_fallback(
         aggregate,
@@ -1985,6 +2175,12 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
         "runner_duration_ms_averages",
         "codex-cli",
     );
+    let opencode_duration = aggregate_metric_with_fallback(
+        aggregate,
+        "matched_runner_duration_ms_averages",
+        "runner_duration_ms_averages",
+        "opencode",
+    );
     let spark_calls = aggregate_metric_with_fallback(
         aggregate,
         "matched_runner_tool_or_item_call_averages",
@@ -1996,6 +2192,12 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
         "matched_runner_tool_or_item_call_averages",
         "runner_tool_or_item_call_averages",
         "codex-cli",
+    );
+    let opencode_calls = aggregate_metric_with_fallback(
+        aggregate,
+        "matched_runner_tool_or_item_call_averages",
+        "runner_tool_or_item_call_averages",
+        "opencode",
     );
     let spark_tokens = aggregate_metric_with_fallback(
         aggregate,
@@ -2009,6 +2211,12 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
         "runner_input_token_averages",
         "codex-cli",
     );
+    let opencode_tokens = aggregate_metric_with_fallback(
+        aggregate,
+        "matched_runner_input_token_averages",
+        "runner_input_token_averages",
+        "opencode",
+    );
     let spark_pressure = aggregate_metric_with_fallback(
         aggregate,
         "matched_runner_process_score_averages",
@@ -2020,6 +2228,12 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
         "matched_runner_process_score_averages",
         "runner_process_score_averages",
         "codex-cli",
+    );
+    let opencode_pressure = aggregate_metric_with_fallback(
+        aggregate,
+        "matched_runner_process_score_averages",
+        "runner_process_score_averages",
+        "opencode",
     );
     let spark_quality = aggregate_metric_with_fallback(
         aggregate,
@@ -2033,19 +2247,20 @@ fn comparison_rows_to_html(suite: &str, rows: &[ComparisonRow], aggregate: &Valu
         "runner_quality_score_averages",
         "codex-cli",
     );
-    let token_ratio = if spark_tokens > 0.0 {
-        codex_tokens / spark_tokens
-    } else {
-        0.0
-    };
+    let opencode_quality = aggregate_metric_with_fallback(
+        aggregate,
+        "matched_runner_quality_score_averages",
+        "runner_quality_score_averages",
+        "opencode",
+    );
     let mut html = format!(
         r#"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Spark Harness vs Codex CLI - {}</title>
+<title>Agent Benchmark Comparison - {}</title>
 <style>
-:root {{ color-scheme: light; --ink: #18212f; --muted: #596579; --line: #d8dee8; --soft: #eef2f6; --spark: #146c78; --codex: #6a527d; --paper: #ffffff; --warn: #9a641d; --bad: #9c3d3d; }}
+:root {{ color-scheme: light; --ink: #18212f; --muted: #596579; --line: #d8dee8; --soft: #eef2f6; --spark: #146c78; --codex: #6a527d; --opencode: #9a641d; --paper: #ffffff; --warn: #9a641d; --bad: #9c3d3d; }}
 * {{ box-sizing: border-box; }}
 body {{ margin: 0; font-family: Segoe UI, Arial, sans-serif; color: var(--ink); background: #f6f7f9; }}
 main {{ max-width: 1240px; margin: 0 auto; padding: 34px 24px 54px; }}
@@ -2069,6 +2284,7 @@ tbody tr:last-child td {{ border-bottom: 0; }}
 td.num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
 .runner-spark-harness {{ border-left: 3px solid var(--spark); }}
 .runner-codex-cli {{ border-left: 3px solid var(--codex); }}
+.runner-opencode {{ border-left: 3px solid var(--opencode); }}
 .pill {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; font-size: 12px; color: var(--muted); white-space: nowrap; }}
 .surface {{ color: var(--ink); font-weight: 650; }}
 .chart {{ background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 16px; overflow-x: auto; }}
@@ -2081,19 +2297,19 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
 <section class="hero">
 <div>
 <div class="eyebrow">Benchmark Comparison</div>
-<h1>Spark Harness vs Codex CLI: {}</h1>
+<h1>Agent Benchmark Comparison: {}</h1>
 </div>
-<p>Verified real-world tasks are gated by completion first, then ranked with a Codex-baselined benchmark index. The verdict uses matched scenarios only; Spark-only new scenarios are shown as coverage expansion.</p>
+<p>Verified real-world tasks are gated by completion first, then ranked with a Codex-baselined benchmark index. The verdict uses matched scenarios only; runner-only new scenarios are shown as coverage expansion.</p>
 </section>
 <section class="verdict">
 <div>Outcome on matched scenarios: <strong>{}</strong> wins this comparison.</div>
 <div>Matched rows: <strong>{}</strong>. New coverage rows outside the shared Codex CLI set: <strong>{}</strong>.</div>
-<div>Spark Benchmark Index: <strong>{:.1}</strong>. Codex CLI baseline: <strong>{:.1}</strong>. Completion: <strong>{:.1}</strong> vs <strong>{:.1}</strong>.</div>
+<div>Spark Benchmark Index: <strong>{:.1}</strong>. Codex CLI baseline: <strong>{:.1}</strong>. OpenCode: <strong>{:.1}</strong>. Completion: <strong>{:.1}</strong> / <strong>{:.1}</strong> / <strong>{:.1}</strong>.</div>
 </section>
 <section class="metric-grid">
 <div class="metric"><strong>{:.1}</strong><span>Spark Benchmark Index on matched scenarios</span></div>
 <div class="metric"><strong>{:.1}</strong><span>Codex CLI baseline index on matched scenarios</span></div>
-<div class="metric"><strong>{:.1}x</strong><span>Codex CLI input-token load versus Spark on matched scenarios</span></div>
+<div class="metric"><strong>{:.1}</strong><span>OpenCode Benchmark Index on matched scenarios</span></div>
 <div class="metric"><strong>{:.1}</strong><span>Spark process score on matched scenarios</span></div>
 </section>
 "#,
@@ -2104,41 +2320,49 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
         unmatched_rows,
         spark_index,
         codex_index,
+        opencode_index,
         spark_completion,
         codex_completion,
+        opencode_completion,
         spark_index,
         codex_index,
-        token_ratio,
+        opencode_index,
         spark_pressure
     );
     let _ = write!(
         html,
-        "<h2>Evidence Ledger</h2><div class=\"ledger\"><table><thead><tr><th>Metric</th><th>Spark Harness</th><th>Codex CLI</th><th>Readout</th></tr></thead><tbody>\
-         <tr><td>Benchmark Index</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Codex CLI matched scenarios normalize to 100; Spark can rank above or below that baseline.</td></tr>\
-         <tr><td>Completion</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Completion is bounded and gates failed runs below successful runs.</td></tr>\
-         <tr><td>Quality</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Quality reflects artifact, validation, and footprint checks available for the scenario.</td></tr>\
-         <tr><td>Average duration</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>\
-         <tr><td>Average tool/items</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td></tr>\
-         <tr><td>Average input tokens</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Codex CLI carried {:.1}x more model-visible input on average.</td></tr>\
-         <tr><td>Process score</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Process penalties are applied after the efficiency index so retries and pressure remain visible.</td></tr>\
+        "<h2>Evidence Ledger</h2><div class=\"ledger\"><table><thead><tr><th>Metric</th><th>Spark Harness</th><th>Codex CLI</th><th>OpenCode</th><th>Readout</th></tr></thead><tbody>\
+         <tr><td>Benchmark Index</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Codex CLI matched scenarios normalize to 100; other runners can rank above or below that baseline.</td></tr>\
+         <tr><td>Completion</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Completion is bounded and gates failed runs below successful runs.</td></tr>\
+         <tr><td>Quality</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Quality reflects artifact, validation, and footprint checks available for the scenario.</td></tr>\
+         <tr><td>Average duration</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>\
+         <tr><td>Average tool/items</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td></tr>\
+         <tr><td>Average input tokens</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Token counts are reported when the runner exposes them.</td></tr>\
+         <tr><td>Process score</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>Process penalties are applied after the efficiency index so retries and pressure remain visible.</td></tr>\
          </tbody></table></div>",
         spark_index,
         codex_index,
+        opencode_index,
         spark_completion,
         codex_completion,
+        opencode_completion,
         spark_quality,
         codex_quality,
+        opencode_quality,
         format_ms(spark_duration),
         format_ms(codex_duration),
+        format_ms(opencode_duration),
         duration_readout(spark_duration, codex_duration),
         spark_calls,
         codex_calls,
+        opencode_calls,
         tool_items_readout(spark_calls, codex_calls),
         spark_tokens,
         codex_tokens,
-        token_ratio,
+        opencode_tokens,
         spark_pressure,
-        codex_pressure
+        codex_pressure,
+        opencode_pressure
     );
     if unmatched_rows > 0 {
         let _ = write!(
@@ -2153,7 +2377,7 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
     html.push_str(
         "<section class=\"readout\"><h2>Professional Readout</h2>\
          <p>Spark performs better when the harness keeps the visible workspace narrow, passes project instructions and environment context in the initial task shape, and validates the produced artifact with real commands or browser checks. The comparison now covers survey/exploration, terminal recovery, precise patching, coordinated multi-file edits, and app scaffolding rather than only broad completion.</p>\
-         <p>Codex CLI still has strong completion discipline, but it can pay a large context and transcript tax before the model works on a small fixture. The harness now exposes pressure details such as failed tool recovery, extra calls after success, and tool-only streaks without letting those diagnostics override verified task completion.</p></section>",
+         <p>Codex CLI and OpenCode are kept as external runner evidence: their rows use command output, artifact validation, and source footprint rather than Spark trace internals. The harness now exposes pressure details such as failed tool recovery, extra calls after success, and tool-only streaks without letting those diagnostics override verified task completion.</p></section>",
     );
     html.push_str("<h2>Task Surface Matrix</h2>");
     html.push_str(&comparison_surface_table(rows));
@@ -2163,7 +2387,7 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
     html.push_str(&comparison_delta_table(rows));
     html.push_str("<h2>Benchmark Index Comparison</h2><div class=\"chart\">");
     html.push_str(&comparison_score_svg(rows));
-    html.push_str("</div><h2>Run Rows</h2><div class=\"ledger\"><table><thead><tr><th>Runner</th><th>Scenario</th><th>Benchmark Index</th><th>Completion</th><th>Quality</th><th>Process</th><th>LLM review</th><th>Legacy score</th><th>Validation</th><th>Success</th><th>Duration</th><th>Source footprint</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
+    html.push_str("</div><h2>Run Rows</h2><div class=\"ledger\"><table><thead><tr><th>Runner</th><th>Scenario</th><th>Attempts</th><th>Benchmark Index</th><th>Completion</th><th>Quality</th><th>Process</th><th>LLM review</th><th>Legacy score</th><th>Validation</th><th>Success</th><th>Duration</th><th>Source footprint</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
     for row in rows {
         let validation = row
             .validation_exit_code
@@ -2177,10 +2401,12 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
             });
         let _ = write!(
             html,
-            "<tr class=\"runner-{}\"><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{} files / {} bytes</td><td class=\"num\">{}</td><td>{}</td></tr>",
+            "<tr class=\"runner-{}\"><td>{}</td><td>{}</td><td class=\"num\">{}/{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{} files / {} bytes</td><td class=\"num\">{}</td><td>{}</td></tr>",
             html_escape(&row.runner),
             html_escape(&row.runner),
             html_escape(&row.scenario),
+            row.successful_attempts,
+            row.attempts,
             optional_metric(row.benchmark_index),
             row.completion_score,
             row.quality_score,
@@ -2274,7 +2500,7 @@ fn comparison_coverage_table(aggregate: &Value) -> String {
         return "<p class=\"note\">No coverage-only scenarios in this comparison.</p>".to_string();
     };
     if unmatched.is_empty() {
-        return "<p class=\"note\">Every scenario in this comparison has both Spark harness and Codex CLI evidence.</p>".to_string();
+        return "<p class=\"note\">Every scenario in this comparison has matching runner evidence.</p>".to_string();
     }
     let mut html = String::from(
         "<div class=\"ledger\"><table><thead><tr><th>Scenario</th><th>Surface</th><th>Runner coverage</th><th>Interpretation</th></tr></thead><tbody>",
@@ -2294,7 +2520,7 @@ fn comparison_coverage_table(aggregate: &Value) -> String {
             .join(", ");
         let _ = write!(
             html,
-            "<tr><td>{}</td><td><span class=\"pill\">{}</span></td><td>{}</td><td>Coverage expansion only; excluded from matched-run verdict until both runners have this scenario.</td></tr>",
+            "<tr><td>{}</td><td><span class=\"pill\">{}</span></td><td>{}</td><td>Coverage expansion only; excluded from matched-run verdict until another runner has this scenario.</td></tr>",
             html_escape(scenario),
             html_escape(scenario_family(scenario)),
             html_escape(&runners)
@@ -2480,45 +2706,152 @@ fn comparison_score_svg(rows: &[ComparisonRow]) -> String {
     if indexed_rows.is_empty() {
         return "<p class=\"note\">No matched benchmark-index rows are available for this comparison.</p>".to_string();
     }
-    let row_height = 30usize;
-    let label_width = 290usize;
-    let chart_width = 690usize;
-    let height = 30 + indexed_rows.len() * row_height;
-    let max_index = rows
-        .iter()
+    let mut scenarios = Vec::<String>::new();
+    let mut rows_by_scenario = BTreeMap::<String, Vec<&ComparisonRow>>::new();
+    for row in indexed_rows {
+        if !rows_by_scenario.contains_key(&row.scenario) {
+            scenarios.push(row.scenario.clone());
+        }
+        rows_by_scenario
+            .entry(row.scenario.clone())
+            .or_default()
+            .push(row);
+    }
+    let label_width = 250usize;
+    let chart_width = 650usize;
+    let right_padding = 96usize;
+    let legend_height = 44usize;
+    let group_height = 78usize;
+    let bar_height = 13usize;
+    let bar_gap = 7usize;
+    let height = legend_height + 28 + scenarios.len() * group_height;
+    let max_index = rows_by_scenario
+        .values()
+        .flatten()
         .filter_map(|row| row.benchmark_index)
         .fold(100.0, f64::max);
+    let axis_max = ((max_index / 25.0).ceil() * 25.0).max(100.0);
     let mut svg = format!(
-        r#"<svg viewBox="0 0 {} {}" role="img" aria-label="Benchmark index comparison">"#,
-        label_width + chart_width + 70,
+        r#"<svg viewBox="0 0 {} {}" role="img" aria-label="Benchmark index comparison grouped by scenario">"#,
+        label_width + chart_width + right_padding,
         height
     );
-    for (index, row) in indexed_rows.iter().enumerate() {
-        let y = 24 + index * row_height;
-        let value = row.benchmark_index.unwrap();
-        let width = (value / max_index.max(1.0) * chart_width as f64).round() as usize;
-        let color = if row.runner == "spark-harness" {
-            "#2f7da1"
-        } else {
-            "#7b6bb7"
-        };
-        let label = format!("{} / {}", row.scenario, row.runner);
+    svg.push_str(
+        r##"<text x="0" y="16" font-size="12" font-weight="700" fill="#344154">Runner</text>"##,
+    );
+    for (index, runner) in ["spark-harness", "codex-cli", "opencode"]
+        .iter()
+        .enumerate()
+    {
+        let x = 74 + index * 142;
         let _ = write!(
             svg,
-            r##"<text x="0" y="{}" font-size="12" fill="#263244">{}</text><rect x="{}" y="{}" width="{}" height="18" rx="3" fill="{}"/><text x="{}" y="{}" font-size="12" fill="#263244">{:.1}</text>"##,
-            y + 13,
-            html_escape(&label),
-            label_width,
-            y,
-            width,
-            color,
-            label_width + width + 8,
-            y + 13,
-            value
+            r##"<rect x="{}" y="5" width="12" height="12" rx="3" fill="{}"/><text x="{}" y="16" font-size="12" fill="#344154">{}</text>"##,
+            x,
+            runner_color(runner),
+            x + 18,
+            runner_label(runner)
         );
+    }
+    for tick in [
+        0.0,
+        axis_max * 0.25,
+        axis_max * 0.5,
+        axis_max * 0.75,
+        axis_max,
+    ] {
+        let x = label_width + (tick / axis_max * chart_width as f64).round() as usize;
+        let _ = write!(
+            svg,
+            r##"<line x1="{x}" y1="30" x2="{x}" y2="{}" stroke="#e4e8ef" stroke-width="1"/><text x="{x}" y="42" font-size="10" text-anchor="middle" fill="#6b7280">{:.0}</text>"##,
+            height - 12,
+            tick
+        );
+    }
+    for (scenario_index, scenario) in scenarios.iter().enumerate() {
+        let group_y = legend_height + scenario_index * group_height;
+        if scenario_index % 2 == 0 {
+            let _ = write!(
+                svg,
+                r##"<rect x="0" y="{}" width="{}" height="{}" rx="4" fill="#f8fafc"/>"##,
+                group_y - 4,
+                label_width + chart_width + right_padding - 4,
+                group_height - 8
+            );
+        }
+        let _ = write!(
+            svg,
+            r##"<text x="0" y="{}" font-size="12" font-weight="700" fill="#263244">{}</text><text x="0" y="{}" font-size="10" fill="#6b7280">{}</text>"##,
+            group_y + 20,
+            html_escape(scenario),
+            group_y + 36,
+            html_escape(scenario_family(scenario))
+        );
+        let Some(scenario_rows) = rows_by_scenario.get(scenario) else {
+            continue;
+        };
+        for (runner_index, runner) in ["spark-harness", "codex-cli", "opencode"]
+            .iter()
+            .enumerate()
+        {
+            let Some(row) = scenario_rows.iter().find(|row| row.runner == *runner) else {
+                continue;
+            };
+            let value = row.benchmark_index.unwrap_or(0.0);
+            let width = (value / axis_max * chart_width as f64).round() as usize;
+            let y = group_y + 8 + runner_index * (bar_height + bar_gap);
+            let label_x = label_width + width + 8;
+            let label_anchor = if label_x + 48 > label_width + chart_width + right_padding {
+                "end"
+            } else {
+                "start"
+            };
+            let label_x = if label_anchor == "end" {
+                label_width + chart_width + 86
+            } else {
+                label_x
+            };
+            let _ = write!(
+                svg,
+                r##"<text x="{}" y="{}" font-size="10" text-anchor="end" fill="#596579">{}</text><rect x="{}" y="{}" width="{}" height="{}" rx="4" fill="{}"><title>{} / {} benchmark index {:.1}</title></rect><text x="{}" y="{}" font-size="11" text-anchor="{}" fill="#263244">{:.1}</text>"##,
+                label_width - 12,
+                y + 10,
+                runner_label(runner),
+                label_width,
+                y,
+                width,
+                bar_height,
+                runner_color(runner),
+                html_escape(scenario),
+                html_escape(runner),
+                value,
+                label_x,
+                y + 10,
+                label_anchor,
+                value
+            );
+        }
     }
     svg.push_str("</svg>");
     svg
+}
+
+fn runner_color(runner: &str) -> &'static str {
+    match runner {
+        "spark-harness" => "#2f7da1",
+        "opencode" => "#b8832f",
+        "codex-cli" => "#7b6bb7",
+        _ => "#697386",
+    }
+}
+
+fn runner_label(runner: &str) -> &'static str {
+    match runner {
+        "spark-harness" => "Spark",
+        "codex-cli" => "Codex CLI",
+        "opencode" => "OpenCode",
+        _ => "Runner",
+    }
 }
 
 fn scenario_order(suite: ProfileBenchmarkSuiteKind, scenario: &str) -> usize {
@@ -2607,6 +2940,8 @@ mod tests {
             runner: runner.to_string(),
             suite: "real-world".to_string(),
             scenario: scenario.to_string(),
+            attempts: 1,
+            successful_attempts: 1,
             model: "spark".to_string(),
             completion_score: 100.0,
             quality_score: 100.0,
@@ -2801,6 +3136,33 @@ mod tests {
     }
 
     #[test]
+    fn codex_cli_scenario_indices_can_vary_while_average_stays_baseline() {
+        let codex_one = comparison_row("codex-cli", "one");
+        let mut codex_two = comparison_row("codex-cli", "two");
+        codex_two.quality_score = 70.0;
+        codex_two.task_quality_score = 70.0;
+
+        let rows = indexed(vec![
+            codex_one,
+            comparison_row("spark-harness", "one"),
+            codex_two,
+            comparison_row("spark-harness", "two"),
+        ]);
+        let aggregate = aggregate_comparison("real-world", &rows);
+        let codex_indices = rows
+            .iter()
+            .filter(|row| row.runner == "codex-cli")
+            .map(|row| row.benchmark_index.expect("index"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            aggregate["matched_runner_benchmark_index_averages"]["codex-cli"],
+            100.0
+        );
+        assert!(codex_indices.iter().any(|index| *index != 100.0));
+    }
+
+    #[test]
     fn spark_can_exceed_100_when_quality_matches_and_efficiency_wins() {
         let codex = comparison_row("codex-cli", "one");
         let mut spark = comparison_row("spark-harness", "one");
@@ -2819,6 +3181,25 @@ mod tests {
                 .unwrap()
                 > 100.0
         );
+    }
+
+    #[test]
+    fn benchmark_index_rewards_faster_equal_quality_even_with_process_pressure() {
+        let codex = comparison_row("codex-cli", "one");
+        let mut spark = comparison_row("spark-harness", "one");
+        spark.duration_ms = 2_500;
+        spark.input_tokens = 4_000;
+        spark.tool_or_item_calls = 6;
+        spark.process_score = 70.0;
+        spark.harness_pressure_score = 70.0;
+
+        let rows = indexed(vec![spark, codex]);
+        let spark = rows
+            .iter()
+            .find(|row| row.runner == "spark-harness")
+            .unwrap();
+
+        assert!(spark.benchmark_index.unwrap() > 100.0);
     }
 
     #[test]
@@ -2898,8 +3279,10 @@ mod tests {
             .expect("spark row");
 
         assert_eq!(spark.llm_solution_score, Some(60.0));
-        assert!(spark.quality_score < 75.0);
-        assert!(spark.process_score < 60.0);
+        assert_eq!(spark.quality_score, 60.0);
+        assert_eq!(spark.task_quality_score, 60.0);
+        assert_eq!(spark.process_score, 40.0);
+        assert_eq!(spark.harness_pressure_score, 40.0);
         assert!(spark.llm_notes.contains("over-edited"));
     }
 
@@ -2913,7 +3296,7 @@ mod tests {
         let completion = completion_score(&row);
         row.completion_score = completion;
         assert_eq!(completion, 30.0);
-        assert_eq!(quality_score(&row), 30.0);
+        assert!(quality_score(&row) <= completion);
     }
 
     #[test]
@@ -2929,6 +3312,23 @@ mod tests {
         row.completion_score = completion;
         assert!(completion < 20.0);
         assert!(quality_score(&row) < 35.0);
+    }
+
+    #[test]
+    fn output_quality_does_not_double_penalize_process_pressure() {
+        let mut clean = benchmark_row();
+        clean.completion_score = 100.0;
+        clean.process_score = 100.0;
+
+        let mut pressured = clean.clone();
+        pressured.process_score = 45.0;
+        pressured.truncated_tool_results = 3;
+        pressured.compactions = 2;
+        pressured.repeated_tool_calls = 4;
+        pressured.max_tool_only_streak = 9;
+
+        assert_eq!(quality_score(&pressured), quality_score(&clean));
+        assert!(process_score(&pressured) < process_score(&clean));
     }
 
     #[test]
@@ -2953,6 +3353,7 @@ mod tests {
         let rows = indexed(vec![
             comparison_row("codex-cli", "one"),
             comparison_row("spark-harness", "one"),
+            comparison_row("opencode", "one"),
             comparison_row("spark-harness", "shell-recovery"),
         ]);
         let aggregate = aggregate_comparison("real-world", &rows);
@@ -2961,11 +3362,79 @@ mod tests {
         assert!(html.contains("Benchmark Index"));
         assert!(html.contains(">Completion<"));
         assert!(html.contains(">Quality<"));
+        assert!(html.contains(">OpenCode<"));
+        assert!(html.contains("runner-opencode"));
         assert!(html.contains("Coverage Expansion"));
         assert!(html.contains("Per-Scenario Deltas"));
         assert!(html.contains("Raw request and turn counts are intentionally excluded"));
         assert!(html.contains("Both runners used about the same number of action items"));
         assert!(!html.contains("Turns/Requests"));
+    }
+
+    #[test]
+    fn process_score_tracks_successful_runs_with_process_pressure() {
+        let mut row = benchmark_row();
+        row.success = true;
+        row.completion_score = 100.0;
+        row.extra_calls_after_satisfied = 4;
+        row.extra_turns_after_satisfied = 2;
+        row.truncated_tool_results = 2;
+        row.compactions = 1;
+        row.max_tool_only_streak = 7;
+        row.total_duration_ms = 55_000;
+
+        let quality = quality_score(&row);
+        let process = process_score(&row);
+
+        assert!(quality > 95.0);
+        assert!(process < 85.0);
+    }
+
+    #[test]
+    fn external_process_tracks_long_noisy_successes() {
+        let row = CodexCliBenchmarkRow {
+            runner: "opencode".to_string(),
+            suite: "real-world".to_string(),
+            scenario: "technical-essay".to_string(),
+            repeat_index: 1,
+            model: "opencode-default".to_string(),
+            score: 0.0,
+            success: true,
+            exit_code: Some(0),
+            timed_out: false,
+            duration_ms: 95_000,
+            json_events: 40,
+            non_json_stdout_lines: 0,
+            stderr_lines: 0,
+            actionable_stderr_lines: 0,
+            turns: 8,
+            completed_items: 40,
+            agent_messages: 5,
+            tool_items: 15,
+            input_tokens: 12_000,
+            cached_input_tokens: 0,
+            output_tokens: 2_000,
+            reasoning_output_tokens: 0,
+            expected_artifacts: 1,
+            present_artifacts: 1,
+            validation_exit_code: Some(0),
+            validation_timed_out: false,
+            browser_validation_present: false,
+            browser_validation_exit_code: None,
+            browser_validation_timed_out: false,
+            browser_screenshot: String::new(),
+            source_files: 1,
+            source_bytes: 500,
+            final_message_chars: 400,
+            run_dir: "run".to_string(),
+            failure_points: String::new(),
+        };
+
+        let quality = codex_quality_score(&row, 100.0);
+        let process = codex_process_score(&row);
+
+        assert!(quality >= 96.0);
+        assert!(process < 100.0);
     }
 
     #[test]
@@ -2977,6 +3446,10 @@ mod tests {
         ]);
         let svg = comparison_score_svg(&rows);
 
+        assert!(svg.contains("Benchmark index comparison grouped by scenario"));
+        assert!(svg.contains(">Spark<"));
+        assert!(svg.contains(">Codex CLI<"));
+        assert!(svg.contains(">OpenCode<"));
         assert!(svg.contains("one / spark-harness"));
         assert!(!svg.contains("shell-recovery / spark-harness"));
     }

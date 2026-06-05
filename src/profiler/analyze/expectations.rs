@@ -175,6 +175,7 @@ pub(super) fn scenario_tool_expectation_report(
 pub(super) fn scenario_tool_call_expectation_report(
     metadata: Option<&Value>,
     calls: &[ObservedToolCall],
+    results: &[ObservedToolResult],
     timeline: &BTreeMap<usize, Map<String, Value>>,
 ) -> Option<Value> {
     let expected_calls = metadata?
@@ -192,7 +193,7 @@ pub(super) fn scenario_tool_call_expectation_report(
     for expected in &expected_calls {
         if calls
             .iter()
-            .any(|call| required_action_matches_call(expected, call))
+            .any(|call| call_satisfies_expected(expected, call, results))
         {
             satisfied.push(expected.clone());
         } else {
@@ -205,7 +206,7 @@ pub(super) fn scenario_tool_call_expectation_report(
                 calls
                     .iter()
                     .take(index + 1)
-                    .any(|call| required_action_matches_call(expected, call))
+                    .any(|call| call_satisfies_expected(expected, call, results))
             })
         })
     } else {
@@ -260,6 +261,37 @@ pub(super) fn scenario_tool_call_expectation_report(
         "context_growth_after_satisfied_chars": context_growth_after_satisfied_chars,
         "extra_tool_calls": extra_calls,
     }))
+}
+
+fn call_satisfies_expected(
+    expected: &super::RequiredAction,
+    call: &ObservedToolCall,
+    results: &[ObservedToolResult],
+) -> bool {
+    if !required_action_matches_call(expected, call) {
+        return false;
+    }
+    let expected_ok = expected.ok.unwrap_or(true);
+    match matching_result(call, results) {
+        Some(result) => result.ok == expected_ok,
+        None => expected.ok.is_none(),
+    }
+}
+
+fn matching_result<'a>(
+    call: &ObservedToolCall,
+    results: &'a [ObservedToolResult],
+) -> Option<&'a ObservedToolResult> {
+    if let Some(call_id) = call.call_id.as_deref()
+        && let Some(result) = results
+            .iter()
+            .find(|result| result.call_id.as_deref() == Some(call_id))
+    {
+        return Some(result);
+    }
+    results.iter().find(|result| {
+        result.turn == call.turn && result.tool_name == call.tool_name && result.args == call.args
+    })
 }
 
 fn request_input_chars_for_turn(

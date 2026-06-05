@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 pub(super) struct TraceToolResult {
+    pub(super) call_id: Option<String>,
     pub(super) tool_name: String,
     pub(super) args: Value,
     pub(super) ok: bool,
@@ -10,6 +11,12 @@ pub(super) struct TraceToolResult {
     pub(super) duration_ms: u64,
     pub(super) error: Option<String>,
     pub(super) cached_observation: bool,
+}
+
+pub(super) struct TraceFunctionCall {
+    pub(super) call_id: Option<String>,
+    pub(super) tool_name: String,
+    pub(super) args: Value,
 }
 
 pub(super) fn tool_result_from_trace(value: &Value) -> Result<Option<TraceToolResult>> {
@@ -36,6 +43,10 @@ pub(super) fn tool_result_from_trace(value: &Value) -> Result<Option<TraceToolRe
         .and_then(Value::as_bool)
         .unwrap_or(false);
     Ok(Some(TraceToolResult {
+        call_id: value
+            .get("call_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         tool_name: tool_name.to_string(),
         args,
         ok,
@@ -47,7 +58,7 @@ pub(super) fn tool_result_from_trace(value: &Value) -> Result<Option<TraceToolRe
     }))
 }
 
-pub(super) fn function_calls_from_trace_response(value: &Value) -> Vec<(String, Value)> {
+pub(super) fn function_calls_from_trace_response(value: &Value) -> Vec<TraceFunctionCall> {
     output_items_from_trace_response(value)
         .into_iter()
         .filter_map(|item| {
@@ -55,6 +66,10 @@ pub(super) fn function_calls_from_trace_response(value: &Value) -> Vec<(String, 
                 return None;
             }
             let name = wire_tool_name_to_local(item.get("name").and_then(Value::as_str)?);
+            let call_id = item
+                .get("call_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             let args = match item.get("arguments") {
                 Some(Value::String(raw)) => {
                     serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone()))
@@ -62,7 +77,11 @@ pub(super) fn function_calls_from_trace_response(value: &Value) -> Vec<(String, 
                 Some(value) => value.clone(),
                 None => Value::Object(Default::default()),
             };
-            Some((name, args))
+            Some(TraceFunctionCall {
+                call_id,
+                tool_name: name,
+                args,
+            })
         })
         .collect()
 }

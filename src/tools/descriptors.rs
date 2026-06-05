@@ -6,6 +6,10 @@ pub struct ToolDescriptor {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosted_config: Option<Value>,
 }
 
 pub fn builtin_tools() -> Vec<ToolDescriptor> {
@@ -24,6 +28,8 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 "required": ["path"],
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
         },
         ToolDescriptor {
             name: "fs.list".to_string(),
@@ -38,6 +44,8 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 },
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
         },
         ToolDescriptor {
             name: "fs.stat".to_string(),
@@ -50,6 +58,8 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 "required": ["path"],
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
         },
         ToolDescriptor {
             name: "fs.write".to_string(),
@@ -63,6 +73,8 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 "required": ["path", "content"],
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
         },
         ToolDescriptor {
             name: "fs.search".to_string(),
@@ -81,6 +93,8 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 "required": ["query"],
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
         },
         ToolDescriptor {
             name: "fs.replace".to_string(),
@@ -96,6 +110,8 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 "required": ["path", "old", "new"],
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
         },
         ToolDescriptor {
             name: "fs.edit".to_string(),
@@ -112,6 +128,8 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 "required": ["path", "start_line", "end_line", "replacement"],
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
         },
         ToolDescriptor {
             name: "fs.rename".to_string(),
@@ -125,6 +143,8 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 "required": ["from", "to"],
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
         },
         ToolDescriptor {
             name: "cmd.exec".to_string(),
@@ -138,6 +158,17 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 },
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
+        },
+        ToolDescriptor {
+            name: "web.search".to_string(),
+            description: "Search the public web through OpenAI's hosted web search tool for current information. Use this when local repo files are insufficient or the user asks for latest/current external facts; cite sources in the final answer.".to_string(),
+            input_schema: json!({}),
+            hosted_type: Some("web_search".to_string()),
+            hosted_config: Some(json!({
+                "search_context_size": "medium"
+            })),
         },
     ]
 }

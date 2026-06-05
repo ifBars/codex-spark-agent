@@ -148,6 +148,9 @@ pub(crate) enum Command {
         /// Model slug to use.
         #[arg(long, default_value = DEFAULT_MODEL)]
         model: String,
+        /// Reasoning effort to request from the model.
+        #[arg(long, value_enum, default_value_t = BenchmarkReasoningEffort::Medium)]
+        reasoning_effort: BenchmarkReasoningEffort,
         /// Maximum agent/tool turns. Omit to let Spark run until it completes.
         #[arg(long)]
         max_turns: Option<usize>,
@@ -190,6 +193,9 @@ pub(crate) enum Command {
         /// Model slug to use.
         #[arg(long, default_value = DEFAULT_MODEL)]
         model: String,
+        /// Reasoning effort to request from the model.
+        #[arg(long, value_enum, default_value_t = BenchmarkReasoningEffort::Medium)]
+        reasoning_effort: BenchmarkReasoningEffort,
         /// Maximum agent/tool turns per scenario prompt. Omit to let Spark run until it completes.
         #[arg(long)]
         max_turns: Option<usize>,
@@ -256,6 +262,9 @@ pub(crate) enum Command {
         /// Model slug to pass to Codex CLI.
         #[arg(long, default_value = DEFAULT_MODEL)]
         model: String,
+        /// Reasoning effort to pass to Codex CLI.
+        #[arg(long, value_enum, default_value_t = BenchmarkReasoningEffort::Medium)]
+        reasoning_effort: BenchmarkReasoningEffort,
         /// Run each scenario in the suite this many times.
         #[arg(long, default_value_t = 1)]
         repeat: usize,
@@ -275,7 +284,40 @@ pub(crate) enum Command {
         #[arg(long, default_value = ".spark-profile/codex-cli")]
         output_dir: PathBuf,
     },
-    /// Compare saved harness benchmark traces with a Codex CLI benchmark report.
+    /// Run a benchmark suite through opencode for comparison with this harness.
+    OpencodeBenchmark {
+        /// Benchmark suite to run.
+        #[arg(value_enum)]
+        suite: ProfileBenchmarkSuiteKind,
+        /// Workspace root for opencode.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// opencode executable.
+        #[arg(long, default_value = "opencode")]
+        opencode_bin: PathBuf,
+        /// Model slug to pass to opencode, in provider/model form. Omit to use opencode's configured default.
+        #[arg(long)]
+        model: Option<String>,
+        /// Reasoning effort to pass to opencode as its model variant.
+        #[arg(long, value_enum, default_value_t = BenchmarkReasoningEffort::Medium)]
+        reasoning_effort: BenchmarkReasoningEffort,
+        /// Run each scenario in the suite this many times.
+        #[arg(long, default_value_t = 1)]
+        repeat: usize,
+        /// Run only these scenarios from the selected suite. Repeat to select multiple scenarios.
+        #[arg(long = "scenario", value_enum)]
+        scenarios: Vec<ProfileScenarioKind>,
+        /// Kill an opencode scenario attempt after this many seconds.
+        #[arg(long, default_value_t = 900)]
+        timeout_seconds: u64,
+        /// Run opencode without external plugins.
+        #[arg(long)]
+        pure: bool,
+        /// Directory where opencode benchmark outputs are written.
+        #[arg(long, default_value = ".spark-profile/opencode")]
+        output_dir: PathBuf,
+    },
+    /// Compare saved harness benchmark traces with external benchmark reports.
     BenchmarkCompare {
         /// Benchmark suite to compare.
         #[arg(long, value_enum, default_value_t = ProfileBenchmarkSuiteKind::RealWorld)]
@@ -292,6 +334,9 @@ pub(crate) enum Command {
         /// Codex CLI benchmark JSON report to compare against.
         #[arg(long)]
         codex_cli_report: PathBuf,
+        /// Optional opencode benchmark JSON report to include in the comparison.
+        #[arg(long)]
+        opencode_report: Option<PathBuf>,
         /// Optional LLM judge JSON report to fold into solution/process scoring.
         #[arg(long)]
         llm_judge_report: Option<PathBuf>,
@@ -416,6 +461,25 @@ pub(crate) enum TraceSort {
     Context,
     /// Highest Spark request latency first.
     RequestMs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum BenchmarkReasoningEffort {
+    Minimal,
+    Low,
+    Medium,
+    High,
+}
+
+impl BenchmarkReasoningEffort {
+    pub(crate) fn wire_value(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

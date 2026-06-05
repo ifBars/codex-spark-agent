@@ -79,6 +79,7 @@ pub(crate) type SharedDisplayEvents = Arc<Mutex<Vec<AgentDisplayEvent>>>;
 pub struct AgentRunner {
     pub(in crate::agent) client: SparkClient,
     pub(in crate::agent) cwd: PathBuf,
+    pub(in crate::agent) read_roots: Vec<PathBuf>,
     pub(in crate::agent) input: Vec<Value>,
     pub(in crate::agent) max_turns: Option<usize>,
     pub(in crate::agent) trace: Option<TraceWriter>,
@@ -105,13 +106,51 @@ pub struct AgentSnapshot {
     pub loaded_skills: Vec<String>,
     #[serde(default = "default_agent_mode")]
     pub mode: AgentMode,
+    #[serde(default = "default_reasoning_effort")]
+    pub reasoning_effort: String,
 }
 
 impl AgentRunner {
     pub fn new(
+        auth_tokens: AuthTokens,
+        cwd: PathBuf,
+        model: String,
+        max_turns: Option<usize>,
+        trace: bool,
+        profile: bool,
+        compact_after_chars: usize,
+        compact_after_tool_only_turns: usize,
+        max_input_chars: usize,
+        interactive: bool,
+        session_name: Option<String>,
+        new_session: bool,
+        trace_context: Option<Value>,
+        mode: AgentMode,
+    ) -> Result<Self> {
+        Self::new_with_reasoning_effort(
+            auth_tokens,
+            cwd,
+            model,
+            crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT.to_string(),
+            max_turns,
+            trace,
+            profile,
+            compact_after_chars,
+            compact_after_tool_only_turns,
+            max_input_chars,
+            interactive,
+            session_name,
+            new_session,
+            trace_context,
+            mode,
+        )
+    }
+
+    pub fn new_with_reasoning_effort(
         mut auth_tokens: AuthTokens,
         cwd: PathBuf,
         model: String,
+        reasoning_effort: String,
         max_turns: Option<usize>,
         trace: bool,
         profile: bool,
@@ -148,8 +187,9 @@ impl AgentRunner {
         };
 
         Ok(Self {
-            client: SparkClient::new(auth_tokens, model),
+            client: SparkClient::new_with_reasoning_effort(auth_tokens, model, reasoning_effort),
             cwd: cwd.clone(),
+            read_roots: Vec::new(),
             input: Vec::new(),
             max_turns,
             trace: if trace {
@@ -413,9 +453,10 @@ impl AgentRunner {
             .and_then(Value::as_f64)
             .unwrap_or_default();
         format!(
-            "{}; mode={}, live_input_chars={}, live_approx_input_tokens={} ({:.1}% of 128k), compact_after_chars={}, compact_after_tool_only_turns={}, max_input_chars={}",
+            "{}; mode={}, reasoning={}, live_input_chars={}, live_approx_input_tokens={} ({:.1}% of 128k), compact_after_chars={}, compact_after_tool_only_turns={}, max_input_chars={}",
             self.profiler.status_line(),
             self.mode.name(),
+            self.reasoning_effort(),
             live_input_chars,
             live_approx_tokens,
             live_context_pct,
@@ -429,6 +470,10 @@ impl AgentRunner {
         let mut summary = self.profiler.to_json();
         if let Some(object) = summary.as_object_mut() {
             object.insert("mode".to_string(), json!(self.mode.name()));
+            object.insert(
+                "reasoning_effort".to_string(),
+                json!(self.reasoning_effort()),
+            );
             object.insert(
                 "live_context".to_string(),
                 context_pressure_json(&self.input, self.compact_after_chars, self.max_input_chars)
@@ -446,6 +491,7 @@ impl AgentRunner {
             profiler: self.profiler.clone(),
             loaded_skills: self.loaded_skills.clone(),
             mode: self.mode,
+            reasoning_effort: self.reasoning_effort().to_string(),
         }
     }
 
@@ -455,6 +501,7 @@ impl AgentRunner {
         self.profiler = snapshot.profiler;
         self.loaded_skills = snapshot.loaded_skills;
         self.mode = snapshot.mode;
+        self.set_reasoning_effort(snapshot.reasoning_effort);
         self.readonly_tool_cache.clear();
     }
 
@@ -471,6 +518,19 @@ impl AgentRunner {
             self.readonly_tool_cache.clear();
         }
         self.mode = mode;
+    }
+
+    pub fn set_read_roots(&mut self, read_roots: Vec<PathBuf>) {
+        self.read_roots = read_roots;
+        self.readonly_tool_cache.clear();
+    }
+
+    pub fn reasoning_effort(&self) -> &str {
+        self.client.reasoning_effort()
+    }
+
+    pub fn set_reasoning_effort(&mut self, reasoning_effort: impl Into<String>) {
+        self.client.set_reasoning_effort(reasoning_effort);
     }
 
     pub fn load_skill_context(&mut self, name: &str, summary: &str) -> bool {
@@ -511,6 +571,10 @@ fn default_agent_snapshot_schema_version() -> u32 {
 
 fn default_agent_mode() -> AgentMode {
     AgentMode::Work
+}
+
+fn default_reasoning_effort() -> String {
+    crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT.to_string()
 }
 
 pub(crate) fn take_shared_display_events(events: &SharedDisplayEvents) -> Vec<AgentDisplayEvent> {

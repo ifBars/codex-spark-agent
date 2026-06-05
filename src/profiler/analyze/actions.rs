@@ -30,6 +30,8 @@ pub(super) fn required_actions_from_request_input(value: &Value) -> Vec<Required
             .cmp(&right.tool)
             .then_with(|| left.path.cmp(&right.path))
             .then_with(|| left.recursive.cmp(&right.recursive))
+            .then_with(|| left.command.cmp(&right.command))
+            .then_with(|| left.ok.cmp(&right.ok))
     });
     actions.dedup();
     actions
@@ -54,6 +56,8 @@ fn parse_required_action(raw: &str) -> Option<RequiredAction> {
     let mut from = None;
     let mut to = None;
     let mut recursive = None;
+    let mut command = None;
+    let mut ok = None;
     for part in raw.split_whitespace() {
         let Some((key, value)) = part.split_once('=') else {
             continue;
@@ -68,6 +72,12 @@ fn parse_required_action(raw: &str) -> Option<RequiredAction> {
                 "false" => recursive = Some(false),
                 _ => {}
             },
+            "command" => command = Some(value.trim_matches('`').to_string()),
+            "ok" => match value {
+                "true" => ok = Some(true),
+                "false" => ok = Some(false),
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -77,6 +87,8 @@ fn parse_required_action(raw: &str) -> Option<RequiredAction> {
         from,
         to,
         recursive,
+        command,
+        ok,
     })
 }
 
@@ -156,6 +168,11 @@ pub(super) fn required_action_from_value(value: &Value) -> Option<RequiredAction
             .map(str::to_string),
         to: value.get("to").and_then(Value::as_str).map(str::to_string),
         recursive: value.get("recursive").and_then(Value::as_bool),
+        command: value
+            .get("command")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        ok: value.get("ok").and_then(Value::as_bool),
     })
 }
 
@@ -183,6 +200,11 @@ pub(super) fn required_action_matches_call(
     }
     if let Some(recursive) = action.recursive
         && call.args.get("recursive").and_then(Value::as_bool) != Some(recursive)
+    {
+        return false;
+    }
+    if let Some(command) = &action.command
+        && call.args.get("command").and_then(Value::as_str) != Some(command.as_str())
     {
         return false;
     }
