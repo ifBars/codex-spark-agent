@@ -16,6 +16,9 @@ class Asset:
 
 
 TARGET_LABELS = {
+    "linux-x64": "Linux x64",
+    "windows-x64": "Windows x64",
+    "macos-arm64": "macOS Apple Silicon",
     "x86_64-unknown-linux-gnu": "Linux x64",
     "x86_64-pc-windows-msvc": "Windows x64",
     "aarch64-apple-darwin": "macOS Apple Silicon",

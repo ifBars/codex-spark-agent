@@ -67,7 +67,7 @@ jobs:
           fi
 
   build:
-    name: Build ${{ matrix.asset }}
+    name: Build ${{ matrix.package }}
     needs: prepare
     if: needs.prepare.outputs.should_release == 'true'
     strategy:
@@ -75,13 +75,16 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            asset: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-gnu
+            package: linux-x64
             extension: ""
           - os: windows-latest
-            asset: x86_64-pc-windows-msvc
+            target: x86_64-pc-windows-msvc
+            package: windows-x64
             extension: ".exe"
           - os: macos-14
-            asset: aarch64-apple-darwin
+            target: aarch64-apple-darwin
+            package: macos-arm64
             extension: ""
     runs-on: ${{ matrix.os }}
     steps:
@@ -91,23 +94,24 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.asset }}
+          targets: ${{ matrix.target }}
 
       - name: Test
         run: cargo test
 
       - name: Build release binary
-        run: cargo build --release --bin spark --target ${{ matrix.asset }}
+        run: cargo build --release --bin spark --target ${{ matrix.target }}
 
       - name: Package binary
         shell: pwsh
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-          TARGET_NAME: ${{ matrix.asset }}
+          TARGET_NAME: ${{ matrix.target }}
+          PACKAGE_NAME: ${{ matrix.package }}
           EXTENSION: ${{ matrix.extension }}
         run: |
           $ErrorActionPreference = "Stop"
-          $packageName = "spark-$env:VERSION-$env:TARGET_NAME"
+          $packageName = "spark-$env:VERSION-$env:PACKAGE_NAME"
           $packageDir = Join-Path "dist" $packageName
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
 
@@ -124,7 +128,7 @@ jobs:
       - name: Upload packaged binary
         uses: actions/upload-artifact@v7
         with:
-          name: spark-${{ matrix.asset }}
+          name: spark-${{ matrix.package }}
           path: |
             dist/*.zip
             dist/*.sha256
