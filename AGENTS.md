@@ -9,6 +9,20 @@ This is a Rust CLI harness for GPT-5.3-Codex-Spark. Keep changes modular, tracea
 - If JavaScript tooling is added or used, use `bun` instead of npm, pnpm, or yarn.
 - Do not use `codegraph status`; if codegraph is needed, use direct search/context/query commands.
 
+## Quick Harness Benchmark
+
+- For changes that affect the agent loop, native tools, command execution, compaction, tracing, profiling, or benchmark scoring, run the quick harness benchmark before and after the change when practical:
+
+  ```powershell
+  .\scripts\quick_harness_benchmark.ps1
+  ```
+
+- The quick benchmark runs a bounded, intentionally nontrivial `real-world` suite slice with one repeat: `precise-patch`, `multi-file-patch`, `github-issue-bugfix`, `rust-failing-test-bugfix`, `typescript-reducer-bugfix`, `github-issue-triage`, `technical-essay`, `config-migration`, `ops-report`, and `rust-log-analyzer-scaffold`. This is meant to track real harness performance across precise edits, coordinated multi-file work, issue-style repair, test-driven Rust/TypeScript fixes, grounded triage, sourced writing, migrations, computed reporting, and small project scaffolding without paying for the full suite.
+- The default slice should not be so easy that completion and quality scores are always perfect. If it starts saturating, add or rotate in a validated longer scenario rather than relying only on process-score movement.
+- When evaluating a harness behavior change, run this command once before the change and once after the change, then compare the generated report rows under `.spark-profile/benchmarks/`.
+- Use the before/after report rows to compare completion, quality, process score, tool failures, repeated tool calls, tool-only streaks, request duration, and max input tokens. Do not treat small timing deltas as regressions unless they repeat or come with worse quality/process signals.
+- Skip this benchmark for docs-only edits, cosmetic TUI-only changes, and isolated test-only refactors unless the change touches benchmark-visible behavior.
+
 ## Structure
 
 - Organize Rust code by domain, not by dumping new logic into `main.rs`.

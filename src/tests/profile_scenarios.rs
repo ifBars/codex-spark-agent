@@ -6,6 +6,7 @@ use crate::profile::scenarios::{
     profile_scenario_prompts, profile_scenario_validation_command,
 };
 use crate::{APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS};
+use serde_json::json;
 
 #[test]
 fn compaction_pressure_scenario_targets_prompt_size() {
@@ -272,7 +273,7 @@ fn precise_patch_scenario_exercises_minimal_code_edit() {
             vec!["fs.search"]
         ]
     );
-    assert_eq!(calls.len(), 4);
+    assert_eq!(calls.len(), 5);
     assert_eq!(
         calls[0]["path"],
         ".spark-scenarios/precise-patch/tests/status_map.spec.md"
@@ -281,7 +282,12 @@ fn precise_patch_scenario_exercises_minimal_code_edit() {
         calls[1]["path"],
         ".spark-scenarios/precise-patch/src/status_map.ts"
     );
-    assert_eq!(calls[2]["path"], ".spark-scenarios/precise-patch/src");
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/precise-patch/src/status_map.ts"
+    );
+    assert_eq!(calls[2]["tools"], json!(["fs.edit", "fs.replace"]));
+    assert_eq!(calls[3]["path"], ".spark-scenarios/precise-patch/src");
     assert!(profile_scenario_validation_command(ProfileScenarioKind::PrecisePatch).is_some());
 }
 
@@ -322,7 +328,7 @@ fn multi_file_patch_scenario_exercises_coordinated_updates() {
             vec!["fs.search"]
         ]
     );
-    assert_eq!(calls.len(), 4);
+    assert_eq!(calls.len(), 7);
     assert_eq!(
         calls[0]["path"],
         ".spark-scenarios/multi-file-patch/src/routes.ts"
@@ -335,7 +341,23 @@ fn multi_file_patch_scenario_exercises_coordinated_updates() {
         calls[2]["path"],
         ".spark-scenarios/multi-file-patch/docs/routes.md"
     );
-    assert_eq!(calls[3]["path"], ".spark-scenarios/multi-file-patch");
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/multi-file-patch/src/routes.ts"
+    );
+    assert_eq!(
+        calls[3]["tools"],
+        json!(["fs.edit", "fs.replace", "fs.write"])
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/multi-file-patch/src/navigation.ts"
+    );
+    assert_eq!(
+        calls[5]["path"],
+        ".spark-scenarios/multi-file-patch/docs/routes.md"
+    );
+    assert_eq!(calls[6]["path"], ".spark-scenarios/multi-file-patch");
     assert!(profile_scenario_validation_command(ProfileScenarioKind::MultiFilePatch).is_some());
 }
 
@@ -738,7 +760,7 @@ fn rust_failing_test_bugfix_declares_cargo_validation_expectations() {
             vec!["cmd.exec"]
         ]
     );
-    assert_eq!(calls.len(), 4);
+    assert_eq!(calls.len(), 5);
     assert_eq!(
         calls[0]["path"],
         ".spark-scenarios/rust-failing-test-bugfix/issue.md"
@@ -751,8 +773,16 @@ fn rust_failing_test_bugfix_declares_cargo_validation_expectations() {
         calls[2]["path"],
         ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs"
     );
-    assert_eq!(calls[3]["tool"], "cmd.exec");
-    assert_eq!(calls[3]["command"], "cargo test");
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs"
+    );
+    assert_eq!(
+        calls[3]["tools"],
+        json!(["fs.edit", "fs.replace", "fs.write"])
+    );
+    assert_eq!(calls[4]["tool"], "cmd.exec");
+    assert_eq!(calls[4]["command"], "cargo test");
 }
 
 #[test]
@@ -784,7 +814,7 @@ fn typescript_reducer_bugfix_declares_bun_validation_expectations() {
             vec!["cmd.exec"]
         ]
     );
-    assert_eq!(calls.len(), 4);
+    assert_eq!(calls.len(), 5);
     assert_eq!(
         calls[0]["path"],
         ".spark-scenarios/typescript-reducer-bugfix/issue.md"
@@ -797,8 +827,89 @@ fn typescript_reducer_bugfix_declares_bun_validation_expectations() {
         calls[2]["path"],
         ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts"
     );
-    assert_eq!(calls[3]["tool"], "cmd.exec");
-    assert_eq!(calls[3]["command"], "bun test");
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts"
+    );
+    assert_eq!(
+        calls[3]["tools"],
+        json!(["fs.edit", "fs.replace", "fs.write"])
+    );
+    assert_eq!(calls[4]["tool"], "cmd.exec");
+    assert_eq!(calls[4]["command"], "bun test");
+}
+
+#[test]
+fn config_migration_declares_ordered_mutation_and_validation_expectations() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::ConfigMigration, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::ConfigMigration)
+        .expect("validation");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::ConfigMigration);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::ConfigMigration);
+
+    assert!(prompt.contains("Profile scenario: config-migration"));
+    assert!(prompt.contains("Use cmd.exec or fs.search"));
+    assert_eq!(validation.program, "powershell");
+    assert_eq!(
+        groups,
+        vec![
+            vec!["fs.read"],
+            vec!["fs.edit", "fs.replace", "fs.write"],
+            vec!["cmd.exec", "fs.search"]
+        ]
+    );
+    assert_eq!(calls.len(), 8);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/config-migration/migration.md"
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/config-migration/config/app.json"
+    );
+    assert_eq!(
+        calls[4]["tools"],
+        json!(["fs.edit", "fs.replace", "fs.write"])
+    );
+    assert_eq!(
+        calls[5]["path"],
+        ".spark-scenarios/config-migration/src/config.ts"
+    );
+    assert_eq!(
+        calls[6]["path"],
+        ".spark-scenarios/config-migration/docs/config.md"
+    );
+    assert_eq!(calls[7]["tools"], json!(["cmd.exec", "fs.search"]));
+}
+
+#[test]
+fn technical_essay_uses_read_metadata_for_final_word_count_check() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::TechnicalEssay, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::TechnicalEssay);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::TechnicalEssay);
+
+    assert!(prompt.contains("Profile scenario: technical-essay"));
+    assert!(prompt.contains("fs.read total_words"));
+    assert!(prompt.contains("do not use cmd.exec just to count words"));
+    assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
+    assert_eq!(calls.len(), 3);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/technical-essay/brief.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/technical-essay/essay.md"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/technical-essay/essay.md"
+    );
+    assert_eq!(calls[2]["tool"], "fs.read");
 }
 
 #[test]

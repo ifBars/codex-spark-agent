@@ -43,6 +43,8 @@ pub(super) use trace_utils::{summarize_compaction_report, trace_file_sort_key};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct RequiredAction {
     tool: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    alternate_tools: Vec<String>,
     path: Option<String>,
     from: Option<String>,
     to: Option<String>,

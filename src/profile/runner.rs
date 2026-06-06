@@ -270,7 +270,7 @@ fn benchmark_startup_context(
 ) -> Result<Option<String>> {
     let reference_context = benchmark_reference_context(read_roots);
     let environment = format!(
-        "<environment_context>\n  <cwd>{}</cwd>\n  <note>Use paths relative to cwd for native filesystem and shell tools. Do not copy the absolute cwd into fs.* path arguments.</note>{}\n</environment_context>\n\n<benchmark_quality_context>\n{}\n</benchmark_quality_context>",
+        "<environment_context>\n  <cwd>{}</cwd>\n  <note>Use paths relative to cwd for native filesystem and shell tools. Do not copy the absolute cwd into fs.* path arguments.</note>\n  <note>For cmd.exec workdir, use a path inside this cwd, preferably a relative .spark-scenarios/... path. Do not use source repository or read-only reference-root absolute paths as command workdirs.</note>\n  <note>For benchmark prompts with exact .spark-scenarios paths, start by reading those paths directly. Do not list cwd, recursively list .spark-scenarios, or search for AGENTS.md just to rediscover provided fixtures or instructions.</note>\n  <note>When a benchmark prompt lists required actions, treat them as an execution checklist. Complete every required read, edit, command, search, and verification action explicitly before the final answer, even when a later smoke check seems sufficient.</note>{}\n</environment_context>\n\n<benchmark_quality_context>\n{}\n</benchmark_quality_context>",
         context_path(cwd),
         reference_context,
         benchmark_quality_context(scenario)
@@ -491,6 +491,17 @@ mod tests {
         assert!(context.contains("<cwd>"));
         assert!(context.contains(&context_path(dir.path())));
         assert!(context.contains("Use paths relative to cwd"));
+        assert!(context.contains("For cmd.exec workdir"));
+        assert!(
+            context.contains(
+                "Do not use source repository or read-only reference-root absolute paths"
+            )
+        );
+        assert!(context.contains("start by reading those paths directly"));
+        assert!(context.contains("Do not list cwd"));
+        assert!(context.contains("search for AGENTS.md"));
+        assert!(context.contains("treat them as an execution checklist"));
+        assert!(context.contains("Complete every required read, edit, command, search"));
     }
 
     #[test]
@@ -510,6 +521,11 @@ mod tests {
         assert!(context.contains("<read_only_reference_root>"));
         assert!(context.contains(&context_path(source.path())));
         assert!(context.contains("writes and shell commands remain scoped to cwd"));
+        assert!(
+            context.contains(
+                "Do not use source repository or read-only reference-root absolute paths"
+            )
+        );
     }
 
     #[test]

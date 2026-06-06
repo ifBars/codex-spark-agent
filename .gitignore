@@ -4,6 +4,7 @@
 # Spark local runtime state
 /.agents/
 /.spark/
+/.spark-codex-cli-smoke/
 /.spark-runs/
 /.spark-profile/
 /.spark-codex/
@@ -21,6 +22,8 @@
 *.log
 *.tmp
 *.temp
+__pycache__/
+*.py[cod]
 
 # Editors and OS files
 .vscode/

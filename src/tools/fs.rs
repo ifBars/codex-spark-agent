@@ -34,7 +34,10 @@ pub(super) fn fs_read_with_read_roots(
     args: Value,
 ) -> Result<ToolResult> {
     let path = required_str(&args, "path")?;
-    let full = resolve_read_path(cwd, read_roots, path)?;
+    let full = match resolve_read_path(cwd, read_roots, path) {
+        Ok(path) => path,
+        Err(error) => return Ok(failed_read_path_result(cwd, path, &error.to_string())),
+    };
     let offset = args
         .get("offset")
         .and_then(Value::as_u64)
@@ -51,6 +54,8 @@ pub(super) fn fs_read_with_read_roots(
         .unwrap_or(true);
     let content = read_text_file(&full)?;
     let total_lines = content.lines().count();
+    let total_chars = content.chars().count();
+    let total_words = count_words(&content);
     let start_index = (offset - 1) as usize;
     let (lines, returned_lines, content_truncated) = bounded_read_window(
         content
@@ -72,6 +77,8 @@ pub(super) fn fs_read_with_read_roots(
             "limit": limit,
             "returned_lines": returned_lines,
             "total_lines": total_lines,
+            "total_chars": total_chars,
+            "total_words": total_words,
             "has_more": has_more,
             "next_offset": has_more.then_some(offset + returned_lines as u64),
             "content_truncated": content_truncated,
@@ -114,6 +121,132 @@ fn bounded_read_window<'a>(
     }
 
     (selected.join("\n"), returned_lines, content_truncated)
+}
+
+fn count_words(text: &str) -> usize {
+    let mut count = 0usize;
+    let mut in_word = false;
+    for character in text.chars() {
+        if character.is_alphanumeric() || character == '\'' {
+            if !in_word {
+                count += 1;
+                in_word = true;
+            }
+        } else {
+            in_word = false;
+        }
+    }
+    count
+}
+
+fn failed_read_path_result(cwd: &Path, raw_path: &str, error: &str) -> ToolResult {
+    ToolResult {
+        ok: false,
+        data: json!({
+            "path": raw_path,
+            "error_kind": "path_not_found",
+            "message": format!("path not found: {raw_path}; file was not read"),
+            "details": {
+                "resolver_error": error,
+                "suggestions": read_path_suggestions(cwd, raw_path, 5),
+                "hint": "Retry with an exact path from suggestions, or use fs.list on the nearest existing parent.",
+            },
+        }),
+        error: Some(format!("path not found: {raw_path}; file was not read")),
+    }
+}
+
+fn read_path_suggestions(cwd: &Path, raw_path: &str, limit: usize) -> Vec<String> {
+    let raw = Path::new(raw_path);
+    if raw.is_absolute() {
+        return Vec::new();
+    }
+    let Ok(cwd) = std::fs::canonicalize(cwd) else {
+        return Vec::new();
+    };
+
+    let mut current = cwd.clone();
+    let mut components = raw.components().peekable();
+    while let Some(component) = components.next() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => {
+                let candidate = current.join(part);
+                if candidate.exists() {
+                    current = candidate;
+                    continue;
+                }
+                let rest = components
+                    .filter_map(|component| match component {
+                        std::path::Component::Normal(part) => Some(part.to_owned()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                return similar_child_paths(&cwd, &current, part, &rest, limit);
+            }
+            _ => return Vec::new(),
+        }
+    }
+
+    Vec::new()
+}
+
+fn similar_child_paths(
+    cwd: &Path,
+    parent: &Path,
+    missing: &std::ffi::OsStr,
+    rest: &[std::ffi::OsString],
+    limit: usize,
+) -> Vec<String> {
+    let Some(missing) = missing.to_str() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut suggestions = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            let name_text = name.to_str()?;
+            similar_path_component(missing, name_text).then(|| {
+                let mut path = entry.path();
+                for component in rest {
+                    path.push(component);
+                }
+                display_rel(cwd, &path)
+            })
+        })
+        .collect::<Vec<_>>();
+    suggestions.sort();
+    suggestions.truncate(limit);
+    suggestions
+}
+
+fn similar_path_component(missing: &str, candidate: &str) -> bool {
+    let missing = missing.to_ascii_lowercase();
+    let candidate = candidate.to_ascii_lowercase();
+    missing.contains(&candidate)
+        || candidate.contains(&missing)
+        || levenshtein_distance(&missing, &candidate)
+            <= (missing.len().max(candidate.len()) / 3).max(2)
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    let right_chars = right.chars().collect::<Vec<_>>();
+    let mut previous = (0..=right_chars.len()).collect::<Vec<_>>();
+    let mut current = vec![0; right_chars.len() + 1];
+    for (left_index, left_char) in left.chars().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right_chars.iter().enumerate() {
+            let insertion = current[right_index] + 1;
+            let deletion = previous[right_index + 1] + 1;
+            let substitution = previous[right_index] + usize::from(left_char != *right_char);
+            current[right_index + 1] = insertion.min(deletion).min(substitution);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right_chars.len()]
 }
 
 #[cfg(test)]
@@ -763,25 +896,236 @@ pub(super) fn fs_replace(cwd: &Path, args: Value) -> Result<ToolResult> {
     let full = resolve_under(cwd, path)?;
     let content = std::fs::read_to_string(&full)
         .with_context(|| format!("failed to read {}", full.display()))?;
-    let replacements = content.matches(old).count();
+    let replace_plan = replacement_plan(&content, old, new);
+    let replacements = replace_plan.replacements;
+    if replace_plan.ambiguous_leading_indent_match {
+        let message = format!(
+            "old text matched {replacements} leading-indent-equivalent blocks; file was not changed"
+        );
+        return Ok(failed_file_tool_result(
+            cwd,
+            &full,
+            "ambiguous_old_text",
+            &message,
+            json!({
+                "actual_replacements": replacements,
+                "hint": "Use fs.edit with an exact line range when leading-indent-equivalent old text is ambiguous.",
+            }),
+        ));
+    }
     if let Some(expected) = args.get("expected_replacements").and_then(Value::as_u64)
         && replacements != expected as usize
     {
-        anyhow::bail!(
+        let message = format!(
             "expected {expected} replacements but found {replacements}; file was not changed"
         );
+        return Ok(failed_file_tool_result(
+            cwd,
+            &full,
+            "replacement_count_mismatch",
+            &message,
+            json!({
+                "expected_replacements": expected,
+                "actual_replacements": replacements,
+                "matches": text_match_contexts(&content, &replace_plan.old, 5),
+                "hint": "Use fs.edit with the exact line range when the old text is ambiguous.",
+            }),
+        ));
     }
     if replacements == 0 {
-        anyhow::bail!("old text not found; file was not changed");
+        return Ok(failed_file_tool_result(
+            cwd,
+            &full,
+            "old_text_not_found",
+            "old text not found; file was not changed",
+            json!({
+                "hint": "Read the target lines or retry with text copied exactly from the latest file contents.",
+            }),
+        ));
     }
-    let updated = content.replace(old, new);
+    let updated = content.replace(&replace_plan.old, &replace_plan.new);
     std::fs::write(&full, updated)
         .with_context(|| format!("failed to write {}", full.display()))?;
     Ok(ToolResult {
         ok: true,
-        data: json!({"path": display_rel(cwd, &full), "replacements": replacements}),
+        data: json!({
+            "path": display_rel(cwd, &full),
+            "replacements": replacements,
+            "line_ending_normalized": replace_plan.line_ending_normalized,
+            "leading_indent_normalized": replace_plan.leading_indent_normalized,
+        }),
         error: None,
     })
+}
+
+struct ReplacementPlan {
+    old: String,
+    new: String,
+    replacements: usize,
+    line_ending_normalized: bool,
+    leading_indent_normalized: bool,
+    ambiguous_leading_indent_match: bool,
+}
+
+fn replacement_plan(content: &str, old: &str, new: &str) -> ReplacementPlan {
+    let exact_replacements = content.matches(old).count();
+    if exact_replacements > 0 {
+        return ReplacementPlan {
+            old: old.to_string(),
+            new: new.to_string(),
+            replacements: exact_replacements,
+            line_ending_normalized: false,
+            leading_indent_normalized: false,
+            ambiguous_leading_indent_match: false,
+        };
+    }
+
+    if let Some((old_variant, new_variant)) = line_ending_variant_for_content(content, old, new) {
+        let replacements = content.matches(&old_variant).count();
+        if replacements > 0 {
+            return ReplacementPlan {
+                old: old_variant,
+                new: new_variant,
+                replacements,
+                line_ending_normalized: true,
+                leading_indent_normalized: false,
+                ambiguous_leading_indent_match: false,
+            };
+        }
+    }
+
+    if let Some((old_variant, new_variant, replacements, line_ending_normalized)) =
+        leading_indent_variant_for_content(content, old, new)
+    {
+        return ReplacementPlan {
+            old: old_variant,
+            new: new_variant,
+            replacements,
+            line_ending_normalized,
+            leading_indent_normalized: true,
+            ambiguous_leading_indent_match: false,
+        };
+    }
+
+    if let Some((replacements, line_ending_normalized)) =
+        ambiguous_leading_indent_matches(content, old)
+    {
+        return ReplacementPlan {
+            old: old.to_string(),
+            new: new.to_string(),
+            replacements,
+            line_ending_normalized,
+            leading_indent_normalized: true,
+            ambiguous_leading_indent_match: true,
+        };
+    }
+
+    ReplacementPlan {
+        old: old.to_string(),
+        new: new.to_string(),
+        replacements: 0,
+        line_ending_normalized: false,
+        leading_indent_normalized: false,
+        ambiguous_leading_indent_match: false,
+    }
+}
+
+fn line_ending_variant_for_content(
+    content: &str,
+    old: &str,
+    new: &str,
+) -> Option<(String, String)> {
+    if content.contains("\r\n") && old.contains('\n') && !old.contains("\r\n") {
+        return Some((old.replace('\n', "\r\n"), new.replace('\n', "\r\n")));
+    }
+    if !content.contains("\r\n") && old.contains("\r\n") {
+        return Some((old.replace("\r\n", "\n"), new.replace("\r\n", "\n")));
+    }
+    None
+}
+
+fn leading_indent_variant_for_content(
+    content: &str,
+    old: &str,
+    new: &str,
+) -> Option<(String, String, usize, bool)> {
+    let newline = if content.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let line_ending_normalized =
+        (content.contains("\r\n") && old.contains('\n') && !old.contains("\r\n"))
+            || (!content.contains("\r\n") && old.contains("\r\n"));
+    let normalized_old = old.replace("\r\n", "\n");
+    let normalized_new = new.replace("\r\n", "\n");
+    let old_lines = normalized_lines_without_trailing_newline(&normalized_old);
+    if old_lines.is_empty() {
+        return None;
+    }
+
+    let content_lines = content.lines().collect::<Vec<_>>();
+    if old_lines.len() > content_lines.len() {
+        return None;
+    }
+
+    let mut matches = Vec::new();
+    for start in 0..=(content_lines.len() - old_lines.len()) {
+        let candidate = &content_lines[start..start + old_lines.len()];
+        if candidate
+            .iter()
+            .zip(old_lines.iter())
+            .all(|(actual, expected)| actual.trim_start() == expected.trim_start())
+            && candidate
+                .iter()
+                .zip(old_lines.iter())
+                .any(|(actual, expected)| actual != expected)
+        {
+            matches.push(candidate.join(newline));
+        }
+    }
+
+    if matches.len() != 1 {
+        return None;
+    }
+    Some((
+        matches.remove(0),
+        normalized_new.replace('\n', newline),
+        1,
+        line_ending_normalized,
+    ))
+}
+
+fn ambiguous_leading_indent_matches(content: &str, old: &str) -> Option<(usize, bool)> {
+    let line_ending_normalized =
+        (content.contains("\r\n") && old.contains('\n') && !old.contains("\r\n"))
+            || (!content.contains("\r\n") && old.contains("\r\n"));
+    let normalized_old = old.replace("\r\n", "\n");
+    let old_lines = normalized_lines_without_trailing_newline(&normalized_old);
+    if old_lines.is_empty() {
+        return None;
+    }
+
+    let content_lines = content.lines().collect::<Vec<_>>();
+    if old_lines.len() > content_lines.len() {
+        return None;
+    }
+
+    let matches = (0..=(content_lines.len() - old_lines.len()))
+        .filter(|start| {
+            let candidate = &content_lines[*start..*start + old_lines.len()];
+            candidate
+                .iter()
+                .zip(old_lines.iter())
+                .all(|(actual, expected)| actual.trim_start() == expected.trim_start())
+                && candidate
+                    .iter()
+                    .zip(old_lines.iter())
+                    .any(|(actual, expected)| actual != expected)
+        })
+        .count();
+
+    (matches > 1).then_some((matches, line_ending_normalized))
 }
 
 pub(super) fn fs_edit(cwd: &Path, args: Value) -> Result<ToolResult> {
@@ -806,7 +1150,21 @@ pub(super) fn fs_edit(cwd: &Path, args: Value) -> Result<ToolResult> {
     }
     if end_line >= start_line {
         if end_line > line_count {
-            anyhow::bail!("end_line {end_line} exceeds file line count {line_count}");
+            return Ok(failed_file_tool_result(
+                cwd,
+                &full,
+                "line_range_out_of_bounds",
+                &format!(
+                    "end_line {end_line} exceeds file line count {line_count}; file was not changed"
+                ),
+                json!({
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "line_count": line_count,
+                    "available_range": line_range_context(&lines, start_line, line_count),
+                    "hint": "Retry fs.edit with an end_line no larger than line_count, or use fs.write if replacing the whole file.",
+                }),
+            ));
         }
     } else if end_line + 1 != start_line {
         anyhow::bail!("for insertion, end_line must be exactly start_line - 1");
@@ -823,16 +1181,37 @@ pub(super) fn fs_edit(cwd: &Path, args: Value) -> Result<ToolResult> {
     } else {
         String::new()
     };
+    let mut replacement_text = replacement.to_string();
+    let mut expected_old_indent_adjusted = false;
     if let Some(expected_old) = args.get("expected_old").and_then(Value::as_str)
-        && expected_old != old_text
+        && !same_text_ignoring_line_endings(expected_old, &old_text)
     {
-        anyhow::bail!("expected_old did not match current line range; file was not changed");
+        if let Some(adjusted) =
+            leading_indent_tolerant_replacement(expected_old, &old_text, replacement, newline)
+        {
+            replacement_text = adjusted;
+            expected_old_indent_adjusted = true;
+        } else {
+            return Ok(failed_file_tool_result(
+                cwd,
+                &full,
+                "expected_old_mismatch",
+                "expected_old did not match current line range; file was not changed",
+                json!({
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "current_text": compact_middle(&old_text, 2_000),
+                    "current_lines": line_range_context(&lines, start_line, end_line),
+                    "hint": "Retry with expected_old copied from current_text, adjust the line range, or omit expected_old only when the range was just verified.",
+                }),
+            ));
+        }
     }
 
-    let replacement_lines = replacement
+    let replacement_lines = replacement_text
         .strip_suffix("\r\n")
-        .or_else(|| replacement.strip_suffix('\n'))
-        .unwrap_or(replacement)
+        .or_else(|| replacement_text.strip_suffix('\n'))
+        .unwrap_or(&replacement_text)
         .lines()
         .map(str::to_string)
         .collect::<Vec<_>>();
@@ -845,7 +1224,7 @@ pub(super) fn fs_edit(cwd: &Path, args: Value) -> Result<ToolResult> {
     lines.splice(start_index..end_index, replacement_lines);
 
     let mut updated = lines.join(newline);
-    if had_trailing_newline || replacement.ends_with('\n') {
+    if had_trailing_newline || replacement_text.ends_with('\n') {
         updated.push_str(newline);
     }
     std::fs::write(&full, updated)
@@ -858,9 +1237,151 @@ pub(super) fn fs_edit(cwd: &Path, args: Value) -> Result<ToolResult> {
             "start_line": start_line,
             "end_line": end_line,
             "old_lines": if end_line >= start_line { end_line - start_line + 1 } else { 0 },
-            "new_lines": replacement.lines().count(),
+            "new_lines": replacement_text.lines().count(),
+            "expected_old_indent_adjusted": expected_old_indent_adjusted,
         }),
         error: None,
+    })
+}
+
+fn leading_indent_tolerant_replacement(
+    expected_old: &str,
+    old_text: &str,
+    replacement: &str,
+    newline: &str,
+) -> Option<String> {
+    let expected_lines = normalized_lines_without_trailing_newline(expected_old);
+    let old_lines = normalized_lines_without_trailing_newline(old_text);
+    let replacement_lines = normalized_lines_without_trailing_newline(replacement);
+    if expected_lines.is_empty()
+        || expected_lines.len() != old_lines.len()
+        || replacement_lines.len() != old_lines.len()
+    {
+        return None;
+    }
+
+    let mut differs_only_by_leading_indent = false;
+    for (expected, old) in expected_lines.iter().zip(old_lines.iter()) {
+        if expected.trim_start() != old.trim_start() {
+            return None;
+        }
+        if expected != old {
+            differs_only_by_leading_indent = true;
+        }
+    }
+    if !differs_only_by_leading_indent {
+        return None;
+    }
+
+    let adjusted = replacement_lines
+        .iter()
+        .zip(old_lines.iter())
+        .map(|(replacement_line, old_line)| {
+            if replacement_line.is_empty() || starts_with_whitespace(replacement_line) {
+                (*replacement_line).to_string()
+            } else {
+                format!("{}{}", leading_whitespace(old_line), replacement_line)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(newline);
+
+    if replacement.ends_with('\n') {
+        Some(format!("{adjusted}{newline}"))
+    } else {
+        Some(adjusted)
+    }
+}
+
+fn normalized_lines_without_trailing_newline(text: &str) -> Vec<&str> {
+    text.strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .unwrap_or(text)
+        .lines()
+        .collect()
+}
+
+fn starts_with_whitespace(text: &str) -> bool {
+    text.chars()
+        .next()
+        .is_some_and(|character| character.is_whitespace())
+}
+
+fn leading_whitespace(text: &str) -> &str {
+    let end = text
+        .char_indices()
+        .find_map(|(index, character)| (!character.is_whitespace()).then_some(index))
+        .unwrap_or(text.len());
+    &text[..end]
+}
+
+fn same_text_ignoring_line_endings(left: &str, right: &str) -> bool {
+    left == right || normalize_line_endings(left) == normalize_line_endings(right)
+}
+
+fn normalize_line_endings(value: &str) -> String {
+    value.replace("\r\n", "\n")
+}
+
+fn failed_file_tool_result(
+    cwd: &Path,
+    full: &Path,
+    error_kind: &str,
+    message: &str,
+    details: Value,
+) -> ToolResult {
+    ToolResult {
+        ok: false,
+        data: json!({
+            "path": display_rel(cwd, full),
+            "error_kind": error_kind,
+            "message": message,
+            "details": details,
+        }),
+        error: Some(message.to_string()),
+    }
+}
+
+fn text_match_contexts(content: &str, pattern: &str, limit: usize) -> Vec<Value> {
+    if pattern.is_empty() {
+        return Vec::new();
+    }
+    content
+        .match_indices(pattern)
+        .take(limit)
+        .map(|(start, matched)| {
+            let start_line = line_number_at_byte(content, start);
+            let end_line = line_number_at_byte(content, start + matched.len());
+            json!({
+                "start_line": start_line,
+                "end_line": end_line,
+                "text": compact_middle(matched, 1_000),
+            })
+        })
+        .collect()
+}
+
+fn line_number_at_byte(content: &str, byte_index: usize) -> usize {
+    content[..byte_index.min(content.len())]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1
+}
+
+fn line_range_context(lines: &[String], start_line: usize, end_line: usize) -> Value {
+    if lines.is_empty() || start_line == 0 || start_line > lines.len() || end_line < start_line {
+        return json!({
+            "start_line": start_line,
+            "end_line": end_line,
+            "content": "",
+        });
+    }
+    let clamped_end = end_line.min(lines.len());
+    json!({
+        "start_line": start_line,
+        "end_line": clamped_end,
+        "content": compact_middle(&lines[start_line - 1..clamped_end].join("\n"), 2_000),
     })
 }
 

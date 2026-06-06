@@ -16,7 +16,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
     vec![
         ToolDescriptor {
             name: "fs.read".to_string(),
-            description: "Read a bounded UTF-8 line window under the workspace. Use offset/limit to page through larger files instead of reading them all at once.".to_string(),
+            description: "Read a bounded UTF-8 line window under the workspace. Returns full-file total_lines, total_chars, and total_words metadata; use offset/limit to page through larger files instead of reading them all at once.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -98,7 +98,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
         },
         ToolDescriptor {
             name: "fs.replace".to_string(),
-            description: "Replace exact UTF-8 text in one workspace file. Optionally require an expected replacement count.".to_string(),
+            description: "Replace UTF-8 text in one workspace file. Matches exact text first, then safe line-ending or leading-indent equivalent blocks when unambiguous. Optionally require an expected replacement count.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

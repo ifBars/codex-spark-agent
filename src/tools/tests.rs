@@ -206,8 +206,68 @@ fn fs_read_reports_window_metadata() {
 
     assert_eq!(result.data["returned_lines"], 2);
     assert_eq!(result.data["total_lines"], 3);
+    assert_eq!(result.data["total_chars"], 14);
+    assert_eq!(result.data["total_words"], 3);
     assert_eq!(result.data["has_more"], true);
     assert_eq!(result.data["next_offset"], 3);
+}
+
+#[test]
+fn fs_read_reports_full_file_word_count_for_bounded_window() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("essay.md"),
+        "Title\n\nAlpha beta gamma.\nDon't split contractions.\n",
+    )
+    .expect("write essay");
+
+    let result = fs_read(
+        dir.path(),
+        json!({"path": "essay.md", "offset": 1, "limit": 1, "line_numbers": false}),
+    )
+    .expect("read");
+
+    assert_eq!(result.data["returned_lines"], 1);
+    assert_eq!(result.data["has_more"], true);
+    assert_eq!(result.data["total_words"], 7);
+    assert_eq!(result.data["total_chars"], 51);
+}
+
+#[test]
+fn fs_read_missing_path_suggests_similar_existing_component() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join(".spark-scenarios/technical-essay/sources"))
+        .expect("create sources");
+    std::fs::write(
+        dir.path()
+            .join(".spark-scenarios/technical-essay/sources/S3-cost.md"),
+        "source note\n",
+    )
+    .expect("write source");
+
+    let result = fs_read(
+        dir.path(),
+        json!({
+            "path": ".spark-scenarios/technical-technical-essay/sources/S3-cost.md",
+            "offset": 1,
+            "limit": 10,
+            "line_numbers": true
+        }),
+    )
+    .expect("failed read observation");
+
+    assert!(!result.ok);
+    assert_eq!(result.data["error_kind"], "path_not_found");
+    assert_eq!(
+        result.data["details"]["suggestions"][0],
+        ".spark-scenarios/technical-essay/sources/S3-cost.md"
+    );
+    assert!(
+        result
+            .data
+            .to_string()
+            .contains("Retry with an exact path from suggestions")
+    );
 }
 
 #[test]
@@ -577,7 +637,7 @@ fn fs_replace_requires_expected_count_before_writing() {
     let path = dir.path().join("sample.txt");
     std::fs::write(&path, "alpha beta beta\n").expect("write sample");
 
-    let error = fs_replace(
+    let result = fs_replace(
         dir.path(),
         json!({
             "path": "sample.txt",
@@ -586,9 +646,19 @@ fn fs_replace_requires_expected_count_before_writing() {
             "expected_replacements": 1
         }),
     )
-    .expect_err("expected count mismatch");
+    .expect("expected failed tool observation");
 
-    assert!(error.to_string().contains("expected 1 replacements"));
+    assert!(!result.ok);
+    assert_eq!(result.data["error_kind"], "replacement_count_mismatch");
+    assert_eq!(result.data["details"]["actual_replacements"], 2);
+    assert_eq!(result.data["details"]["matches"][0]["start_line"], 1);
+    assert!(
+        result
+            .error
+            .as_deref()
+            .expect("error")
+            .contains("expected 1 replacements")
+    );
     assert_eq!(
         std::fs::read_to_string(&path).expect("read unchanged"),
         "alpha beta beta\n"
@@ -621,6 +691,89 @@ fn fs_replace_updates_exact_text() {
 }
 
 #[test]
+fn fs_replace_accepts_line_ending_equivalent_old_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.txt");
+    std::fs::write(&path, "alpha\r\nbeta\r\ngamma\r\n").expect("write sample");
+
+    let result = fs_replace(
+        dir.path(),
+        json!({
+            "path": "sample.txt",
+            "old": "alpha\nbeta",
+            "new": "ALPHA\nBETA",
+            "expected_replacements": 1
+        }),
+    )
+    .expect("replace");
+
+    assert!(result.ok);
+    assert_eq!(result.data["replacements"], 1);
+    assert_eq!(result.data["line_ending_normalized"], true);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "ALPHA\r\nBETA\r\ngamma\r\n"
+    );
+}
+
+#[test]
+fn fs_replace_accepts_leading_indent_equivalent_block() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("routes.ts");
+    std::fs::write(
+        &path,
+        "export const routes = [\n{ id: 'home', path: '/' },\n{ id: 'settings', path: '/settings' },\n];\n",
+    )
+    .expect("write routes");
+
+    let result = fs_replace(
+        dir.path(),
+        json!({
+            "path": "routes.ts",
+            "old": "export const routes = [\n  { id: 'home', path: '/' },\n  { id: 'settings', path: '/settings' },\n];",
+            "new": "export const routes = [\n  { id: 'home', path: '/' },\n  { id: 'settings', path: '/settings' },\n  { id: 'reports', path: '/reports' },\n];",
+            "expected_replacements": 1
+        }),
+    )
+    .expect("replace");
+
+    assert!(result.ok);
+    assert_eq!(result.data["replacements"], 1);
+    assert_eq!(result.data["leading_indent_normalized"], true);
+    assert_eq!(result.data["line_ending_normalized"], false);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "export const routes = [\n  { id: 'home', path: '/' },\n  { id: 'settings', path: '/settings' },\n  { id: 'reports', path: '/reports' },\n];\n"
+    );
+}
+
+#[test]
+fn fs_replace_indent_tolerance_does_not_hide_ambiguous_old_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.txt");
+    std::fs::write(&path, "alpha\nbeta\nalpha\n    beta\n").expect("write sample");
+
+    let result = fs_replace(
+        dir.path(),
+        json!({
+            "path": "sample.txt",
+            "old": "alpha\n  beta",
+            "new": "alpha\n  gamma",
+            "expected_replacements": 1
+        }),
+    )
+    .expect("expected failed observation");
+
+    assert!(!result.ok);
+    assert_eq!(result.data["error_kind"], "ambiguous_old_text");
+    assert_eq!(result.data["details"]["actual_replacements"], 2);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read unchanged"),
+        "alpha\nbeta\nalpha\n    beta\n"
+    );
+}
+
+#[test]
 fn fs_edit_replaces_inclusive_line_range() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("sample.txt");
@@ -643,6 +796,88 @@ fn fs_edit_replaces_inclusive_line_range() {
     assert_eq!(
         std::fs::read_to_string(&path).expect("read updated"),
         "one\nTWO\nthree\n"
+    );
+}
+
+#[test]
+fn fs_edit_expected_old_accepts_line_ending_equivalent_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write sample");
+
+    let result = fs_edit(
+        dir.path(),
+        json!({
+            "path": "sample.txt",
+            "start_line": 1,
+            "end_line": 2,
+            "replacement": "ONE\nTWO",
+            "expected_old": "one\r\ntwo"
+        }),
+    )
+    .expect("edit");
+
+    assert!(result.ok);
+    assert_eq!(result.data["old_lines"], 2);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "ONE\nTWO\nthree\n"
+    );
+}
+
+#[test]
+fn fs_edit_expected_old_accepts_missing_leading_indent_and_preserves_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.ts");
+    std::fs::write(
+        &path,
+        "switch (status) {\n  case 'queued':\n    return 'Unknown';\n}\n",
+    )
+    .expect("write sample");
+
+    let result = fs_edit(
+        dir.path(),
+        json!({
+            "path": "sample.ts",
+            "start_line": 3,
+            "end_line": 3,
+            "replacement": "return 'Queued';",
+            "expected_old": "return 'Unknown';"
+        }),
+    )
+    .expect("edit");
+
+    assert!(result.ok);
+    assert_eq!(result.data["expected_old_indent_adjusted"], true);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "switch (status) {\n  case 'queued':\n    return 'Queued';\n}\n"
+    );
+}
+
+#[test]
+fn fs_edit_expected_old_indent_tolerance_requires_same_line_shape() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.ts");
+    std::fs::write(&path, "  case 'queued':\n    return 'Unknown';\n").expect("write sample");
+
+    let result = fs_edit(
+        dir.path(),
+        json!({
+            "path": "sample.ts",
+            "start_line": 1,
+            "end_line": 2,
+            "replacement": "case 'queued':\nreturn 'Queued';",
+            "expected_old": "case 'queued':"
+        }),
+    )
+    .expect("failed observation");
+
+    assert!(!result.ok);
+    assert_eq!(result.data["error_kind"], "expected_old_mismatch");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read unchanged"),
+        "  case 'queued':\n    return 'Unknown';\n"
     );
 }
 
@@ -677,7 +912,7 @@ fn fs_edit_expected_old_mismatch_does_not_write() {
     let path = dir.path().join("sample.txt");
     std::fs::write(&path, "one\ntwo\nthree\n").expect("write sample");
 
-    let error = fs_edit(
+    let result = fs_edit(
         dir.path(),
         json!({
             "path": "sample.txt",
@@ -687,9 +922,42 @@ fn fs_edit_expected_old_mismatch_does_not_write() {
             "expected_old": "wrong"
         }),
     )
-    .expect_err("expected mismatch");
+    .expect("expected failed tool observation");
 
-    assert!(error.to_string().contains("expected_old did not match"));
+    assert!(!result.ok);
+    assert_eq!(result.data["error_kind"], "expected_old_mismatch");
+    assert_eq!(result.data["details"]["current_text"], "two");
+    assert_eq!(result.data["details"]["current_lines"]["start_line"], 2);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read unchanged"),
+        "one\ntwo\nthree\n"
+    );
+}
+
+#[test]
+fn fs_edit_out_of_bounds_reports_line_count_and_context() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write sample");
+
+    let result = fs_edit(
+        dir.path(),
+        json!({
+            "path": "sample.txt",
+            "start_line": 2,
+            "end_line": 4,
+            "replacement": "TWO",
+        }),
+    )
+    .expect("expected failed tool observation");
+
+    assert!(!result.ok);
+    assert_eq!(result.data["error_kind"], "line_range_out_of_bounds");
+    assert_eq!(result.data["details"]["line_count"], 3);
+    assert_eq!(
+        result.data["details"]["available_range"]["content"],
+        "two\nthree"
+    );
     assert_eq!(
         std::fs::read_to_string(&path).expect("read unchanged"),
         "one\ntwo\nthree\n"

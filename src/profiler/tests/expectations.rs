@@ -255,6 +255,181 @@ fn analyze_trace_reports_extra_calls_after_expected_calls_satisfied() {
 }
 
 #[test]
+fn analyze_trace_consumes_expected_calls_in_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_trace_metadata_with_expected_tool_calls(
+        dir.path(),
+        json!([
+            {
+                "tool": "fs.read",
+                "path": "config/app.json"
+            },
+            {
+                "tool": "fs.write",
+                "path": "config/app.json"
+            },
+            {
+                "tool": "fs.read",
+                "path": "config/app.json"
+            }
+        ]),
+    );
+    write_function_call_trace(
+        dir.path(),
+        1,
+        "call_read",
+        "fs_read",
+        "{\"path\":\"config/app.json\"}",
+    );
+    write_tool_result_trace(
+        dir.path(),
+        1,
+        "call_read",
+        "fs.read",
+        json!({"path": "config/app.json"}),
+        true,
+    );
+    write_function_call_trace(
+        dir.path(),
+        2,
+        "call_write",
+        "fs_write",
+        "{\"path\":\"config/app.json\",\"content\":\"updated\"}",
+    );
+    write_tool_result_trace(
+        dir.path(),
+        2,
+        "call_write",
+        "fs.write",
+        json!({"path": "config/app.json"}),
+        true,
+    );
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["satisfied_calls"],
+        2
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["missing_calls"]
+            .as_array()
+            .expect("missing calls")
+            .len(),
+        1
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["missing_calls"][0]["tool"],
+        "fs.read"
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["missing_calls"][0]["path"],
+        "config/app.json"
+    );
+}
+
+#[test]
+fn analyze_trace_allows_same_turn_parallel_calls_to_satisfy_ordered_expectations() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_trace_metadata_with_expected_tool_calls(
+        dir.path(),
+        json!([
+            {
+                "tool": "fs.read",
+                "path": ".spark-scenarios/github-issue-triage/issue.md"
+            },
+            {
+                "tool": "fs.read",
+                "path": ".spark-scenarios/github-issue-triage/src/cachePolicy.ts"
+            },
+            {
+                "tool": "fs.read",
+                "path": ".spark-scenarios/github-issue-triage/logs/warehouse-import.log"
+            }
+        ]),
+    );
+    write_function_call_trace(
+        dir.path(),
+        1,
+        "call_issue",
+        "fs_read",
+        "{\"path\":\".spark-scenarios/github-issue-triage/issue.md\"}",
+    );
+    write_tool_result_trace(
+        dir.path(),
+        1,
+        "call_issue",
+        "fs.read",
+        json!({"path": ".spark-scenarios/github-issue-triage/issue.md"}),
+        true,
+    );
+    std::fs::write(
+        dir.path().join("002-response.json"),
+        serde_json::to_vec_pretty(&json!({
+            "raw": {
+                "response": {
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "call_id": "call_log",
+                            "name": "fs_read",
+                            "arguments": "{\"path\":\".spark-scenarios/github-issue-triage/logs/warehouse-import.log\"}"
+                        },
+                        {
+                            "type": "function_call",
+                            "call_id": "call_cache",
+                            "name": "fs_read",
+                            "arguments": "{\"path\":\".spark-scenarios/github-issue-triage/src/cachePolicy.ts\"}"
+                        }
+                    ]
+                }
+            }
+        }))
+        .expect("serialize response"),
+    )
+    .expect("write response");
+    std::fs::write(
+        dir.path().join("002-tool-result.json"),
+        serde_json::to_vec_pretty(&json!({
+            "tool": "fs.read",
+            "call_id": "call_log",
+            "args": {"path": ".spark-scenarios/github-issue-triage/logs/warehouse-import.log"},
+            "duration_ms": 1,
+            "result": {"ok": true, "error": null, "data": {}}
+        }))
+        .expect("serialize log result"),
+    )
+    .expect("write log result");
+    std::fs::write(
+        dir.path().join("002-tool-result-002.json"),
+        serde_json::to_vec_pretty(&json!({
+            "tool": "fs.read",
+            "call_id": "call_cache",
+            "args": {"path": ".spark-scenarios/github-issue-triage/src/cachePolicy.ts"},
+            "duration_ms": 1,
+            "result": {"ok": true, "error": null, "data": {}}
+        }))
+        .expect("serialize cache result"),
+    )
+    .expect("write cache result");
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["satisfied_calls"],
+        3
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["missing_calls"],
+        json!([])
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["extra_calls_after_satisfied"],
+        0
+    );
+}
+
+#[test]
 fn analyze_trace_satisfies_expected_calls_on_matching_result_status() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_trace_metadata_with_expected_tool_calls(
@@ -328,6 +503,45 @@ fn analyze_trace_satisfies_expected_calls_on_matching_result_status() {
     assert_eq!(
         summary["profile_scenario_call_expectations"]["extra_calls_after_satisfied"],
         0
+    );
+}
+
+#[test]
+fn analyze_trace_satisfies_expected_call_with_alternative_tools() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_trace_metadata_with_expected_tool_calls(
+        dir.path(),
+        json!([{
+            "tools": ["fs.edit", "fs.replace", "fs.write"],
+            "path": ".spark-scenarios/multi-file-patch/src/routes.ts"
+        }]),
+    );
+
+    write_function_call_trace(
+        dir.path(),
+        1,
+        "call_write",
+        "fs_write",
+        "{\"path\":\".spark-scenarios/multi-file-patch/src/routes.ts\",\"content\":\"updated\"}",
+    );
+    write_tool_result_trace(
+        dir.path(),
+        1,
+        "call_write",
+        "fs.write",
+        json!({"path": ".spark-scenarios/multi-file-patch/src/routes.ts"}),
+        true,
+    );
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["satisfied_calls"],
+        1
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["missing_calls"],
+        json!([])
     );
 }
 

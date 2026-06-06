@@ -188,27 +188,20 @@ pub(super) fn scenario_tool_call_expectation_report(
         return None;
     }
 
+    let ordered_matches = ordered_expected_call_matches(&expected_calls, calls, results);
     let mut satisfied = Vec::new();
     let mut missing = Vec::new();
-    for expected in &expected_calls {
-        if calls
-            .iter()
-            .any(|call| call_satisfies_expected(expected, call, results))
-        {
+    let mut matched_indices = Vec::new();
+    for (expected, matched_index) in expected_calls.iter().zip(ordered_matches) {
+        if let Some(index) = matched_index {
             satisfied.push(expected.clone());
+            matched_indices.push(index);
         } else {
             missing.push(expected.clone());
         }
     }
     let first_satisfied_call_index = if missing.is_empty() {
-        (0..calls.len()).find(|index| {
-            expected_calls.iter().all(|expected| {
-                calls
-                    .iter()
-                    .take(index + 1)
-                    .any(|call| call_satisfies_expected(expected, call, results))
-            })
-        })
+        matched_indices.iter().max().copied()
     } else {
         None
     };
@@ -261,6 +254,31 @@ pub(super) fn scenario_tool_call_expectation_report(
         "context_growth_after_satisfied_chars": context_growth_after_satisfied_chars,
         "extra_tool_calls": extra_calls,
     }))
+}
+
+fn ordered_expected_call_matches(
+    expected_calls: &[super::RequiredAction],
+    calls: &[ObservedToolCall],
+    results: &[ObservedToolResult],
+) -> Vec<Option<usize>> {
+    let mut matches = Vec::with_capacity(expected_calls.len());
+    let mut minimum_turn = 0usize;
+    let mut used_indices = BTreeSet::<usize>::new();
+    for expected in expected_calls {
+        let matched = calls
+            .iter()
+            .enumerate()
+            .filter(|(index, call)| !used_indices.contains(index) && call.turn >= minimum_turn)
+            .find_map(|(index, call)| {
+                call_satisfies_expected(expected, call, results).then_some(index)
+            });
+        if let Some(index) = matched {
+            used_indices.insert(index);
+            minimum_turn = calls[index].turn;
+        }
+        matches.push(matched);
+    }
+    matches
 }
 
 fn call_satisfies_expected(

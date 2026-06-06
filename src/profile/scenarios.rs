@@ -638,7 +638,7 @@ pub(crate) fn profile_scenario_prompts(
              1. Read .spark-scenarios/technical-essay/brief.md.\n\
              2. Read all files under .spark-scenarios/technical-essay/sources.\n\
              3. Write .spark-scenarios/technical-essay/essay.md following the brief.\n\
-             4. Read essay.md and verify it includes the title, section headings, and citations [S1], [S2], and [S3].\n\
+             4. Read essay.md and verify it includes the title, section headings, and citations [S1], [S2], and [S3]. Use fs.read total_words for the word-count estimate; do not use cmd.exec just to count words.\n\
              Finish with the essay path, word-count estimate, and whether all citations are present."
                 .to_string(),
         ]),
@@ -651,7 +651,7 @@ pub(crate) fn profile_scenario_prompts(
              3. Read .spark-scenarios/config-migration/src/config.ts.\n\
              4. Read .spark-scenarios/config-migration/docs/config.md.\n\
              5. Update all three files for schema version 2 using authentication.method and retry.maxAttempts.\n\
-             6. Validate the JSON is parseable and read/search the changed files to verify old authMode/retry.retries references are gone.\n\
+             6. Use cmd.exec or fs.search to validate the JSON is parseable and verify old authMode/retry.retries references are gone from changed files.\n\
              Finish with files changed, validation result, and any migration risks."
                 .to_string(),
         ]),
@@ -1219,6 +1219,10 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "path": ".spark-scenarios/precise-patch/src/status_map.ts",
             }),
             json!({
+                "tools": ["fs.edit", "fs.replace"],
+                "path": ".spark-scenarios/precise-patch/src/status_map.ts",
+            }),
+            json!({
                 "tool": "fs.search",
                 "path": ".spark-scenarios/precise-patch/src",
             }),
@@ -1238,6 +1242,18 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tool": "fs.read",
+                "path": ".spark-scenarios/multi-file-patch/docs/routes.md",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/multi-file-patch/src/routes.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/multi-file-patch/src/navigation.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
                 "path": ".spark-scenarios/multi-file-patch/docs/routes.md",
             }),
             json!({
@@ -1419,6 +1435,10 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "path": ".spark-scenarios/github-issue-bugfix/tests/quote.test.ts",
             }),
             json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/github-issue-bugfix/src/quote.ts",
+            }),
+            json!({
                 "tool": "cmd.exec",
                 "command": "bun test",
             }),
@@ -1437,6 +1457,10 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "path": ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs",
             }),
             json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
+            }),
+            json!({
                 "tool": "cmd.exec",
                 "command": "cargo test",
             }),
@@ -1453,6 +1477,10 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.read",
                 "path": ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -1486,6 +1514,10 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "tool": "fs.write",
                 "path": ".spark-scenarios/technical-essay/essay.md",
             }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/technical-essay/essay.md",
+            }),
         ],
         ProfileScenarioKind::ConfigMigration => vec![
             json!({
@@ -1503,6 +1535,21 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.read",
                 "path": ".spark-scenarios/config-migration/docs/config.md",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/config-migration/config/app.json",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/config-migration/src/config.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/config-migration/docs/config.md",
+            }),
+            json!({
+                "tools": ["cmd.exec", "fs.search"],
             }),
         ],
         ProfileScenarioKind::OpsReport => vec![

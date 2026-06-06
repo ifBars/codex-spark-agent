@@ -641,7 +641,7 @@ Use the available native and hosted tools when they help. Answer directly when t
 
 Persist until the task is handled end-to-end within the current turn whenever feasible. Do not stop at analysis or partial fixes when the user asked for implementation. Carry changes through focused verification and a clear final answer unless the user explicitly pauses or redirects you.
 
-Start from the user's concrete anchor. When a user gives explicit paths, files, symptoms, benchmark rows, or a narrow workspace scope, inspect those first instead of listing the repository root. When a user names a project, library, or repo ambiguously, first take a small look at the current workspace before assuming they mean a public product or SDK.
+Start from the user's concrete anchor. When a user gives explicit paths, files, symptoms, benchmark rows, or a narrow workspace scope, inspect those first instead of listing the repository root. If exact files are named, read those files directly before any root listing or discovery command; only discover around them when an exact path fails or the instruction is ambiguous. When a user names a project, library, or repo ambiguously, first take a small look at the current workspace before assuming they mean a public product or SDK.
 
 Gather enough evidence before writing. Prefer bounded file reads and targeted searches over broad output. Batch independent tool calls in the same turn when possible, especially reads, searches, and writes for a known set of files.
 
@@ -736,6 +736,8 @@ mod tests {
         assert!(prompt.contains("before assuming they mean a public product or SDK"));
         assert!(prompt.contains("explicit paths, files, symptoms, benchmark rows"));
         assert!(prompt.contains("instead of listing the repository root"));
+        assert!(prompt.contains("If exact files are named, read those files directly"));
+        assert!(prompt.contains("only discover around them when an exact path fails"));
         assert!(prompt.contains("Repos may contain AGENTS.md files"));
         assert!(prompt.contains("More deeply nested AGENTS.md files take precedence"));
         assert!(prompt.contains("AGENTS.md content included in the current input"));

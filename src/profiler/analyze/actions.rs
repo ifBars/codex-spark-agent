@@ -83,6 +83,7 @@ fn parse_required_action(raw: &str) -> Option<RequiredAction> {
     }
     Some(RequiredAction {
         tool: tool?,
+        alternate_tools: Vec::new(),
         path,
         from,
         to,
@@ -155,9 +156,34 @@ fn collect_loaded_skill_contexts(value: &Value, skills: &mut BTreeSet<String>) {
 }
 
 pub(super) fn required_action_from_value(value: &Value) -> Option<RequiredAction> {
-    let tool = value.get("tool").and_then(Value::as_str)?.to_string();
+    let tool = value
+        .get("tool")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            value
+                .get("tools")?
+                .as_array()?
+                .iter()
+                .filter_map(Value::as_str)
+                .next()
+                .map(str::to_string)
+        })?;
+    let alternate_tools = value
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|candidate| candidate != &tool)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     Some(RequiredAction {
         tool,
+        alternate_tools,
         path: value
             .get("path")
             .and_then(Value::as_str)
@@ -180,7 +206,12 @@ pub(super) fn required_action_matches_call(
     action: &RequiredAction,
     call: &ObservedToolCall,
 ) -> bool {
-    if action.tool != call.tool_name {
+    if action.tool != call.tool_name
+        && !action
+            .alternate_tools
+            .iter()
+            .any(|tool| tool == &call.tool_name)
+    {
         return false;
     }
     if let Some(path) = &action.path
