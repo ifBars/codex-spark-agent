@@ -9,6 +9,7 @@
 /.spark-profile/
 /.spark-codex/
 /.spark-scenarios/
+skills-lock.json
 
 # Local secrets and environment overrides
 .env
