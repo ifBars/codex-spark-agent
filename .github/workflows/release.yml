@@ -1,0 +1,174 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/release.yml
+      - .github/scripts/release_notes.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      should_release: ${{ steps.release.outputs.should_release }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Read package version
+        id: version
+        shell: bash
+        run: |
+          version="$(python3 - <<'PY'
+          import tomllib
+          with open("Cargo.toml", "rb") as f:
+              print(tomllib.load(f)["package"]["version"])
+          PY
+          )"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Check for existing release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; skipping."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release $TAG does not exist; building assets."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build ${{ matrix.asset }}
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: x86_64-unknown-linux-gnu
+            extension: ""
+          - os: windows-latest
+            asset: x86_64-pc-windows-msvc
+            extension: ".exe"
+          - os: macos-14
+            asset: aarch64-apple-darwin
+            extension: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.asset }}
+
+      - name: Test
+        run: cargo test
+
+      - name: Build release binary
+        run: cargo build --release --bin spark --target ${{ matrix.asset }}
+
+      - name: Package binary
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET_NAME: ${{ matrix.asset }}
+          EXTENSION: ${{ matrix.extension }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packageName = "spark-$env:VERSION-$env:TARGET_NAME"
+          $packageDir = Join-Path "dist" $packageName
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+
+          Copy-Item -LiteralPath "target/$env:TARGET_NAME/release/spark$env:EXTENSION" -Destination (Join-Path $packageDir "spark$env:EXTENSION")
+          Copy-Item -LiteralPath "README.md" -Destination $packageDir
+          Copy-Item -LiteralPath "LICENSE" -Destination $packageDir
+
+          $archive = Join-Path "dist" "$packageName.zip"
+          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $archive -Force
+
+          $hash = Get-FileHash -LiteralPath $archive -Algorithm SHA256
+          "$($hash.Hash.ToLowerInvariant())  $(Split-Path -Leaf $archive)" | Set-Content -NoNewline -Encoding ascii "$archive.sha256"
+
+      - name: Upload packaged binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark-${{ matrix.asset }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs:
+      - prepare
+      - build
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download packaged binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: spark-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate release notes
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 .github/scripts/release_notes.py \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --repo "$REPOSITORY" \
+            --commit "$SHA" \
+            --run-id "$RUN_ID" \
+            --asset-dir dist \
+            --output release-notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release create "$TAG" dist/*.zip dist/*.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "codex-spark-agent $TAG" \
+            --notes-file release-notes.md
