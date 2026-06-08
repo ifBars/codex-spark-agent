@@ -1,3 +1,6 @@
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
+
 use anyhow::Result;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -5,8 +8,8 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::compaction::{compaction_trigger_for_turn, format_compaction_notice};
 use crate::agent::{AgentRunner, TOOL_ONLY_STREAK_COMPACTION_TRIGGER};
 use crate::client::{
-    ReasoningDisplayUpdate, function_calls, output_items_for_next_input, output_text_delta,
-    reasoning_display_update, response_text,
+    ReasoningDisplayUpdate, WebSearchDisplayUpdate, function_calls, output_items_for_next_input,
+    output_text_delta, reasoning_display_update, response_text, web_search_display_update,
 };
 use crate::tools::{builtin_tools, tools_for_mode};
 
@@ -129,6 +132,9 @@ impl AgentRunner {
             let client = self.client.clone();
             let request_input = self.input.clone();
             let mut streamed_text = String::new();
+            let mut hosted_search_starts = HashMap::<String, Instant>::new();
+            let mut hosted_search_queries = HashMap::<String, Option<String>>::new();
+            let mut hosted_search_displayed = HashSet::<String>::new();
             let (response, raw) = match client
                 .responses_create_with_event_handler(&request_input, &tools, |event| {
                     if let Some(update) = reasoning_display_update(event) {
@@ -138,6 +144,50 @@ impl AgentRunner {
                                 self.emit_reasoning_summary(&text);
                             }
                             ReasoningDisplayUpdate::Finished => self.emit_reasoning_finish(),
+                        }
+                    }
+                    if let Some(update) = web_search_display_update(event) {
+                        match update {
+                            WebSearchDisplayUpdate::Started { id, query } => {
+                                hosted_search_starts.insert(id.clone(), Instant::now());
+                                hosted_search_queries.insert(id.clone(), query.clone());
+                                if query.is_some() {
+                                    hosted_search_displayed.insert(id);
+                                    self.emit_tool_batch_start(1);
+                                    self.emit_tool_call(
+                                        "web.search",
+                                        &web_search_display_args(query),
+                                    );
+                                }
+                            }
+                            WebSearchDisplayUpdate::Query { id, query } => {
+                                hosted_search_queries.insert(id.clone(), Some(query.clone()));
+                                if hosted_search_displayed.insert(id) {
+                                    self.emit_tool_batch_start(1);
+                                    self.emit_tool_call(
+                                        "web.search",
+                                        &web_search_display_args(Some(query)),
+                                    );
+                                }
+                            }
+                            WebSearchDisplayUpdate::Finished { id, query, ok } => {
+                                let started = hosted_search_starts.remove(&id);
+                                let query = query.or_else(|| {
+                                    hosted_search_queries.remove(&id).and_then(|query| query)
+                                });
+                                if hosted_search_displayed.insert(id) {
+                                    self.emit_tool_batch_start(1);
+                                    self.emit_tool_call(
+                                        "web.search",
+                                        &web_search_display_args(query.clone()),
+                                    );
+                                }
+                                let duration_ms = started
+                                    .map(|started| started.elapsed().as_millis() as u64)
+                                    .unwrap_or(0);
+                                let error = (!ok).then_some("hosted web search did not complete");
+                                self.emit_tool_result("web.search", ok, duration_ms, 0, error);
+                            }
                         }
                     }
                     if let Some(delta) = output_text_delta(event) {
@@ -292,6 +342,13 @@ impl AgentRunner {
         }
         self.emit_warning(format!("{stage}: {error}"));
         self.emit_profile_summary()
+    }
+}
+
+fn web_search_display_args(query: Option<String>) -> String {
+    match query {
+        Some(query) => json!({ "query": query }).to_string(),
+        None => json!({ "query": "hosted web search" }).to_string(),
     }
 }
 

@@ -80,6 +80,8 @@ async fn main() -> Result<()> {
             prompt_file,
             cwd,
             model,
+            reasoning_effort,
+            system_prompt,
             mode,
             max_turns,
             trace,
@@ -123,10 +125,11 @@ async fn main() -> Result<()> {
             let start_new_session = new_session || (interactive && !explicit_session);
             session::prepare_default_session_store(session_name.as_deref())?;
             let auth = config::load_auth()?;
-            let mut runner = agent::AgentRunner::new(
+            let mut runner = agent::AgentRunner::new_with_reasoning_effort(
                 auth,
                 cwd.clone(),
                 model,
+                reasoning_effort,
                 max_turns,
                 trace,
                 profile,
@@ -139,6 +142,7 @@ async fn main() -> Result<()> {
                 None,
                 mode.into(),
             )?;
+            runner.set_system_prompt(system_prompt);
             if let Some(name) = &session_name {
                 if start_new_session {
                     runner.save_session_named(name)?;
@@ -508,10 +512,12 @@ async fn main() -> Result<()> {
             cwd,
             limit,
             all_runs,
+            harness_report,
             codex_cli_report,
             opencode_report,
             llm_judge_report,
             group_by_reasoning,
+            group_by_model,
             output_dir,
         } => {
             let cwd = std::fs::canonicalize(&cwd)
@@ -527,10 +533,12 @@ async fn main() -> Result<()> {
                     suite,
                     limit,
                     all_runs,
+                    harness_reports: harness_report,
                     codex_cli_reports: codex_cli_report,
                     opencode_reports: opencode_report,
                     llm_judge_report,
                     group_by_reasoning,
+                    group_by_model,
                     output_dir,
                 },
             )?;

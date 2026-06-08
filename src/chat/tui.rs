@@ -1056,9 +1056,13 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             .filter(|error| !error.trim().is_empty())
             .map(|error| format!(": {}", compact_inline(error, 160)))
             .unwrap_or_default();
-        self.append_tool_group_line(format!(
-            "      {status} {name} {duration_ms}ms {}{error}",
+        let output = if name == "web.search" && output_chars == 0 {
+            "hosted".to_string()
+        } else {
             format_chars(output_chars)
+        };
+        self.append_tool_group_line(format!(
+            "      {status} {name} {duration_ms}ms {output}{error}",
         ));
     }
 
@@ -1752,6 +1756,25 @@ fn format_tool_args(name: &str, args: &str) -> String {
             };
             format!("{label} {query:?} in {path}")
         }
+        "web.search" => {
+            let query = string_field(object, "query")
+                .or_else(|| {
+                    object
+                        .get("queries")
+                        .and_then(Value::as_array)
+                        .and_then(|queries| queries.first())
+                        .and_then(Value::as_str)
+                })
+                .unwrap_or("hosted web search");
+            let more = object
+                .get("queries")
+                .and_then(Value::as_array)
+                .map(|queries| queries.len().saturating_sub(1))
+                .filter(|more| *more > 0)
+                .map(|more| format!(" +{more} more"))
+                .unwrap_or_default();
+            format!("search {query:?}{more}")
+        }
         "fs.stat" => string_field(object, "path")
             .map(str::to_string)
             .unwrap_or_else(|| compact_inline(args, 180)),
@@ -2185,6 +2208,56 @@ mod tests {
             ),
             r#"regex "fn\\s+main" in src"#
         );
+    }
+
+    #[test]
+    fn web_search_tool_args_render_query_field() {
+        assert_eq!(
+            format_tool_args("web.search", r#"{"query":"current rust release"}"#),
+            r#"search "current rust release""#
+        );
+        assert_eq!(
+            format_tool_args(
+                "web.search",
+                r#"{"queries":["rust release","cargo changelog"]}"#
+            ),
+            r#"search "rust release" +1 more"#
+        );
+    }
+
+    #[test]
+    fn hosted_web_search_events_render_as_tool_activity() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+
+        tui.apply_agent_events(vec![
+            AgentDisplayEvent::ToolBatchStart { count: 1 },
+            AgentDisplayEvent::ToolCall {
+                name: "web.search".to_string(),
+                args: r#"{"query":"current rust release"}"#.to_string(),
+            },
+            AgentDisplayEvent::ToolResult {
+                name: "web.search".to_string(),
+                ok: true,
+                duration_ms: 320,
+                output_chars: 0,
+                error: None,
+            },
+        ]);
+
+        assert_eq!(tui.messages.len(), 1);
+        assert!(matches!(tui.messages[0].role, MessageRole::Tool));
+        assert!(
+            tui.messages[0]
+                .body
+                .contains(r#"[1] web.search search "current rust release""#)
+        );
+        assert!(tui.messages[0].body.contains("ok web.search 320ms hosted"));
+        assert!(matches!(tui.activity.phase, ActivityPhase::Tools));
+        assert_eq!(tui.activity.finished_tools, 1);
+
+        let collapsed = flatten_lines(&tui.render_transcript_lines());
+        assert!(collapsed.contains("1 batch, 1 call, 1 ok"));
+        assert!(collapsed.contains("web.search x1"));
     }
 
     #[test]

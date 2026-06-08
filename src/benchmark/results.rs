@@ -93,10 +93,12 @@ pub(crate) struct BenchmarkComparisonOptions {
     pub(crate) suite: ProfileBenchmarkSuiteKind,
     pub(crate) limit: usize,
     pub(crate) all_runs: bool,
+    pub(crate) harness_reports: Vec<PathBuf>,
     pub(crate) codex_cli_reports: Vec<PathBuf>,
     pub(crate) opencode_reports: Vec<PathBuf>,
     pub(crate) llm_judge_report: Option<PathBuf>,
     pub(crate) group_by_reasoning: bool,
+    pub(crate) group_by_model: bool,
     pub(crate) output_dir: PathBuf,
 }
 
@@ -218,13 +220,21 @@ pub(crate) fn write_benchmark_report(
 pub(crate) fn write_benchmark_comparison(
     options: BenchmarkComparisonOptions,
 ) -> Result<BenchmarkComparisonOutput> {
-    let harness_rows = collect_benchmark_rows(&BenchmarkReportOptions {
-        cwd: options.cwd.clone(),
-        suite: options.suite,
-        limit: options.limit,
-        all_runs: options.all_runs,
-        output_dir: options.output_dir.clone(),
-    })?;
+    let harness_rows = if options.harness_reports.is_empty() {
+        collect_benchmark_rows(&BenchmarkReportOptions {
+            cwd: options.cwd.clone(),
+            suite: options.suite,
+            limit: options.limit,
+            all_runs: options.all_runs,
+            output_dir: options.output_dir.clone(),
+        })?
+    } else {
+        collect_benchmark_rows_from_manifest_paths(
+            &options.cwd,
+            options.suite,
+            &options.harness_reports,
+        )?
+    };
     if harness_rows.is_empty() {
         anyhow::bail!(
             "no harness traces found for benchmark suite '{}' under {}",
@@ -261,8 +271,12 @@ pub(crate) fn write_benchmark_comparison(
             .filter(|row| row.suite == options.suite.name())
             .map(comparison_row_from_external_agent),
     );
-    if options.group_by_reasoning {
-        label_rows_by_reasoning(&mut rows);
+    if options.group_by_model || options.group_by_reasoning {
+        label_rows_by_model_and_reasoning(
+            &mut rows,
+            options.group_by_model,
+            options.group_by_reasoning,
+        );
     }
     if let Some(path) = &options.llm_judge_report {
         let judge_report = read_llm_judge_report(path)?;
@@ -309,6 +323,42 @@ pub(crate) fn write_benchmark_comparison(
         rows: rows.len(),
         aggregate,
     })
+}
+
+fn collect_benchmark_rows_from_manifest_paths(
+    cwd: &Path,
+    suite: ProfileBenchmarkSuiteKind,
+    paths: &[PathBuf],
+) -> Result<Vec<BenchmarkRunRow>> {
+    let mut rows = Vec::new();
+    for path in paths {
+        let manifest = read_benchmark_run_manifest(cwd, path)?;
+        if manifest.suite != suite.name() {
+            anyhow::bail!(
+                "benchmark manifest {} belongs to suite '{}', expected '{}'",
+                path.display(),
+                manifest.suite,
+                suite.name()
+            );
+        }
+        rows.extend(collect_benchmark_rows_from_manifest(
+            &BenchmarkReportOptions {
+                cwd: cwd.to_path_buf(),
+                suite,
+                limit: 0,
+                all_runs: true,
+                output_dir: PathBuf::new(),
+            },
+            &manifest,
+        )?);
+    }
+    rows.sort_by(|left, right| {
+        scenario_order(suite, &left.scenario)
+            .cmp(&scenario_order(suite, &right.scenario))
+            .then_with(|| left.reasoning_effort.cmp(&right.reasoning_effort))
+            .then_with(|| left.run_id.cmp(&right.run_id))
+    });
+    Ok(rows)
 }
 
 pub(crate) fn write_benchmark_run_manifest(
@@ -439,15 +489,24 @@ fn latest_benchmark_run_manifest(
     let Some(path) = candidates.pop() else {
         return Ok(None);
     };
-    let contents = std::fs::read_to_string(&path)
-        .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", path.display()))?;
-    let manifest = serde_json::from_str::<BenchmarkRunManifest>(&contents)
-        .map_err(|error| anyhow::anyhow!("failed to parse {}: {error}", path.display()))?;
+    let manifest = read_benchmark_run_manifest(Path::new("."), &path)?;
     if manifest.suite == suite {
         Ok(Some(manifest))
     } else {
         Ok(None)
     }
+}
+
+fn read_benchmark_run_manifest(cwd: &Path, path: &Path) -> Result<BenchmarkRunManifest> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let contents = std::fs::read_to_string(&path)
+        .map_err(|error| anyhow::anyhow!("failed to read {}: {error}", path.display()))?;
+    serde_json::from_str::<BenchmarkRunManifest>(&contents)
+        .map_err(|error| anyhow::anyhow!("failed to parse {}: {error}", path.display()))
 }
 
 fn resolve_manifest_trace_dir(cwd: &Path, trace_dir: &str) -> PathBuf {
@@ -1591,14 +1650,37 @@ struct ScenarioBaseline {
     efficiency: EfficiencyComponents,
 }
 
-fn label_rows_by_reasoning(rows: &mut [ComparisonRow]) {
+fn label_rows_by_model_and_reasoning(
+    rows: &mut [ComparisonRow],
+    group_by_model: bool,
+    group_by_reasoning: bool,
+) {
     for row in rows {
-        let reasoning = row.reasoning_effort.trim();
-        if reasoning.is_empty() || reasoning == "unknown" {
+        let mut parts = Vec::new();
+        if group_by_model {
+            let model = row.model.trim();
+            if !model.is_empty() && model != "unknown" {
+                parts.push(runner_variant_slug(model));
+            }
+        }
+        if group_by_reasoning {
+            let reasoning = row.reasoning_effort.trim();
+            if !reasoning.is_empty() && reasoning != "unknown" && reasoning != "None" {
+                parts.push(runner_variant_slug(reasoning));
+            }
+        }
+        if parts.is_empty() {
             continue;
         }
-        row.runner = format!("{}/{}", row.runner, reasoning);
+        row.runner = format!("{}/{}", row.runner, parts.join("+"));
     }
+}
+
+fn runner_variant_slug(value: &str) -> String {
+    value
+        .trim()
+        .replace("openai/", "")
+        .replace(['/', '\\', ' '], "-")
 }
 
 fn comparison_baseline_runner(rows: &[ComparisonRow], preferred_runner: &str) -> String {
@@ -1606,10 +1688,16 @@ fn comparison_baseline_runner(rows: &[ComparisonRow], preferred_runner: &str) ->
         return preferred_runner.to_string();
     }
     let prefix = format!("{preferred_runner}/");
-    rows.iter()
+    let candidates = rows
+        .iter()
         .map(|row| row.runner.as_str())
         .filter(|runner| runner.starts_with(&prefix))
-        .min()
+        .collect::<Vec<_>>();
+    candidates
+        .iter()
+        .copied()
+        .find(|runner| runner.contains("gpt-5.5"))
+        .or_else(|| candidates.iter().copied().min())
         .unwrap_or(preferred_runner)
         .to_string()
 }
@@ -2406,6 +2494,9 @@ td.num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: no
 .pill {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; font-size: 12px; color: var(--muted); white-space: nowrap; }}
 .surface {{ color: var(--ink); font-weight: 650; }}
 .chart {{ background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 16px; overflow-x: auto; }}
+.model-strip {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }}
+.model-chip {{ border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; background: #f8fafc; color: #344154; font-size: 12px; line-height: 1.35; }}
+.model-chip strong {{ color: var(--ink); }}
 .readout {{ border-left: 3px solid var(--ink); padding-left: 14px; margin: 22px 0 8px; }}
 svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
 @media (max-width: 860px) {{ .hero {{ grid-template-columns: 1fr; }} .metric-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
@@ -2505,8 +2596,9 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
     html.push_str("<h2>Per-Scenario Deltas</h2>");
     html.push_str(&comparison_delta_table(rows));
     html.push_str("<h2>Benchmark Index Comparison</h2><div class=\"chart\">");
+    html.push_str(&comparison_model_strip(rows));
     html.push_str(&comparison_score_svg(rows));
-    html.push_str("</div><h2>Run Rows</h2><div class=\"ledger\"><table><thead><tr><th>Runner</th><th>Scenario</th><th>Attempts</th><th>Benchmark Index</th><th>Completion</th><th>Quality</th><th>Process</th><th>LLM review</th><th>Legacy score</th><th>Validation</th><th>Success</th><th>Duration</th><th>Source footprint</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
+    html.push_str("</div><h2>Run Rows</h2><div class=\"ledger\"><table><thead><tr><th>Runner</th><th>Model</th><th>Scenario</th><th>Attempts</th><th>Benchmark Index</th><th>Completion</th><th>Quality</th><th>Process</th><th>LLM review</th><th>Legacy score</th><th>Validation</th><th>Success</th><th>Duration</th><th>Source footprint</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
     for row in rows {
         let validation = row
             .validation_exit_code
@@ -2520,9 +2612,10 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
             });
         let _ = write!(
             html,
-            "<tr class=\"runner-{}\"><td>{}</td><td>{}</td><td class=\"num\">{}/{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{} files / {} bytes</td><td class=\"num\">{}</td><td>{}</td></tr>",
+            "<tr class=\"runner-{}\"><td>{}</td><td>{}</td><td>{}</td><td class=\"num\">{}/{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td>{}</td><td class=\"num\">{:.1}</td><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{} files / {} bytes</td><td class=\"num\">{}</td><td>{}</td></tr>",
             html_escape(&row.runner),
             html_escape(&row.runner),
+            html_escape(&model_label(row)),
             html_escape(&row.scenario),
             row.successful_attempts,
             row.attempts,
@@ -2543,6 +2636,41 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
     }
     html.push_str("</tbody></table></div></main></body></html>");
     html
+}
+
+fn comparison_model_strip(rows: &[ComparisonRow]) -> String {
+    let mut runner_models = BTreeMap::<String, BTreeSet<String>>::new();
+    for row in rows {
+        runner_models
+            .entry(row.runner.clone())
+            .or_default()
+            .insert(model_label(row));
+    }
+    let mut runners = runner_models.keys().cloned().collect::<Vec<_>>();
+    runners.sort_by(|left, right| compare_runner_labels(left, right));
+    let mut html = String::from("<div class=\"model-strip\" aria-label=\"Runner models\">");
+    for runner in runners {
+        let models = runner_models
+            .get(&runner)
+            .map(|models| models.iter().cloned().collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        let _ = write!(
+            html,
+            "<div class=\"model-chip\"><strong>{}</strong><br>{}</div>",
+            html_escape(&runner_label(&runner)),
+            html_escape(&models)
+        );
+    }
+    html.push_str("</div>");
+    html
+}
+
+fn model_label(row: &ComparisonRow) -> String {
+    if row.reasoning_effort.is_empty() {
+        row.model.clone()
+    } else {
+        format!("{} ({})", row.model, row.reasoning_effort)
+    }
 }
 
 fn aggregate_metric_with_fallback(
@@ -3003,7 +3131,7 @@ fn comparison_score_svg(rows: &[ComparisonRow]) -> String {
             };
             let _ = write!(
                 svg,
-                r##"<text x="{}" y="{}" font-size="10" text-anchor="end" fill="#596579">{}</text><rect x="{}" y="{}" width="{}" height="{}" rx="4" fill="{}"><title>{} / {} benchmark index {:.1}</title></rect><text x="{}" y="{}" font-size="11" text-anchor="{}" fill="#263244">{:.1}</text>"##,
+                r##"<text x="{}" y="{}" font-size="10" text-anchor="end" fill="#596579">{}</text><rect x="{}" y="{}" width="{}" height="{}" rx="4" fill="{}"><title>{} / {} / {} benchmark index {:.1}</title></rect><text x="{}" y="{}" font-size="11" text-anchor="{}" fill="#263244">{:.1}</text>"##,
                 label_width - 12,
                 y + 10,
                 html_escape(&runner_label(runner)),
@@ -3014,6 +3142,7 @@ fn comparison_score_svg(rows: &[ComparisonRow]) -> String {
                 runner_color(runner),
                 html_escape(scenario),
                 html_escape(runner),
+                html_escape(&model_label(row)),
                 value,
                 label_x,
                 y + 10,
@@ -3723,6 +3852,9 @@ mod tests {
         assert!(html.contains(">Completion<"));
         assert!(html.contains(">Quality<"));
         assert!(html.contains(">OpenCode<"));
+        assert!(html.contains("model-strip"));
+        assert!(html.contains("spark (medium)"));
+        assert!(html.contains("<th>Model</th>"));
         assert!(html.contains("runner-opencode"));
         assert!(html.contains("Coverage Expansion"));
         assert!(html.contains("Per-Scenario Deltas"));

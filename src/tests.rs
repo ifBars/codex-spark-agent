@@ -5,7 +5,7 @@ use crate::chat::{
 mod profile_scenarios;
 
 use crate::DEFAULT_COMPACT_AFTER_CHARS;
-use crate::cli::TraceSort;
+use crate::cli::{Cli, Command, TraceSort};
 use crate::client::output_text_delta;
 use crate::profile::scenarios::validate_scenario_repeat;
 use crate::session::{is_active_session, timestamp_session_name};
@@ -17,6 +17,54 @@ use crate::trace::commands::{
 };
 use serde_json::json;
 use std::path::PathBuf;
+
+#[test]
+fn chat_cli_accepts_reasoning_effort_flag() {
+    let cli = <Cli as clap::Parser>::try_parse_from([
+        "spark",
+        "chat",
+        "--reasoning-effort",
+        "low",
+        "answer from relay",
+    ])
+    .expect("parse chat reasoning flag");
+
+    let Command::Chat {
+        reasoning_effort,
+        prompt,
+        ..
+    } = cli.command
+    else {
+        panic!("expected chat command");
+    };
+
+    assert_eq!(reasoning_effort, "low");
+    assert_eq!(prompt, vec!["answer from relay"]);
+}
+
+#[test]
+fn chat_cli_accepts_custom_system_prompt_flag() {
+    let cli = <Cli as clap::Parser>::try_parse_from([
+        "spark",
+        "chat",
+        "--system-prompt",
+        "You are Relay in Discord.",
+        "answer from relay",
+    ])
+    .expect("parse chat system prompt flag");
+
+    let Command::Chat {
+        system_prompt,
+        prompt,
+        ..
+    } = cli.command
+    else {
+        panic!("expected chat command");
+    };
+
+    assert_eq!(system_prompt.as_deref(), Some("You are Relay in Discord."));
+    assert_eq!(prompt, vec!["answer from relay"]);
+}
 
 #[test]
 fn slash_commands_match_exactly_or_with_whitespace() {

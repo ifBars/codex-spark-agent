@@ -542,6 +542,10 @@ impl AgentRunner {
         self.client.set_reasoning_effort(reasoning_effort);
     }
 
+    pub fn set_system_prompt(&mut self, system_prompt: impl Into<Option<String>>) {
+        self.client.set_system_prompt(system_prompt);
+    }
+
     pub fn load_skill_context(&mut self, name: &str, summary: &str) -> bool {
         if self.loaded_skills.iter().any(|loaded| loaded == name) {
             return false;

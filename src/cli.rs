@@ -58,6 +58,12 @@ pub(crate) enum Command {
         /// Model slug to use.
         #[arg(long, default_value = DEFAULT_MODEL)]
         model: String,
+        /// Reasoning effort to request from the model.
+        #[arg(long, value_parser = ["low", "medium", "high", "xhigh"], default_value = crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT)]
+        reasoning_effort: String,
+        /// Additional system/developer instructions appended to Spark's built-in harness prompt.
+        #[arg(long)]
+        system_prompt: Option<String>,
         /// Tool access mode. ask is read-only; work allows edits and command execution.
         #[arg(long, value_enum, default_value_t = RunMode::Work)]
         mode: RunMode,
@@ -349,6 +355,9 @@ pub(crate) enum Command {
         /// Include every matching harness run instead of only the newest run per scenario.
         #[arg(long)]
         all_runs: bool,
+        /// Optional Spark harness benchmark manifest(s) to include. Repeat to merge reports.
+        #[arg(long)]
+        harness_report: Vec<PathBuf>,
         /// Codex CLI benchmark JSON report(s) to compare against. Repeat to merge reports.
         #[arg(long, required = true)]
         codex_cli_report: Vec<PathBuf>,
@@ -361,6 +370,9 @@ pub(crate) enum Command {
         /// Split runner labels by recorded reasoning effort, e.g. spark-harness/high.
         #[arg(long)]
         group_by_reasoning: bool,
+        /// Split runner labels by recorded model, e.g. codex-cli/gpt-5.5.
+        #[arg(long)]
+        group_by_model: bool,
         /// Directory where comparison JSON, CSV, and HTML files are written.
         #[arg(long, default_value = ".spark-profile/benchmarks")]
         output_dir: PathBuf,

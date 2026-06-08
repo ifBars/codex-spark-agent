@@ -15,6 +15,7 @@ pub struct SparkClient {
     pub auth: AuthTokens,
     model: String,
     reasoning_effort: String,
+    system_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +76,7 @@ impl SparkClient {
             auth,
             model,
             reasoning_effort: reasoning_effort.into(),
+            system_prompt: None,
         }
     }
 
@@ -86,6 +88,14 @@ impl SparkClient {
         self.reasoning_effort = reasoning_effort.into();
     }
 
+    pub(crate) fn set_system_prompt(&mut self, system_prompt: impl Into<Option<String>>) {
+        self.system_prompt = system_prompt.into();
+    }
+
+    fn instructions(&self) -> String {
+        spark_system_prompt_with_custom(self.system_prompt.as_deref())
+    }
+
     pub async fn responses_create_with_event_handler(
         &self,
         input: &[Value],
@@ -94,7 +104,7 @@ impl SparkClient {
     ) -> Result<(Response, Value)> {
         let body = json!({
             "model": self.model,
-            "instructions": spark_system_prompt(),
+            "instructions": self.instructions(),
             "input": input,
             "tools": tools.iter().map(tool_to_wire).collect::<Vec<_>>(),
             "tool_choice": "auto",
@@ -260,7 +270,7 @@ SKILL.md:
 
         let body = json!({
             "model": self.model,
-            "instructions": spark_system_prompt(),
+            "instructions": self.instructions(),
             "input": input,
             "tools": tools.iter().map(tool_to_wire).collect::<Vec<_>>(),
             "parallel_tool_calls": true,
@@ -335,6 +345,23 @@ pub enum ReasoningDisplayUpdate {
     Finished,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WebSearchDisplayUpdate {
+    Started {
+        id: String,
+        query: Option<String>,
+    },
+    Query {
+        id: String,
+        query: String,
+    },
+    Finished {
+        id: String,
+        query: Option<String>,
+        ok: bool,
+    },
+}
+
 pub fn reasoning_display_update(event: &Value) -> Option<ReasoningDisplayUpdate> {
     let event_type = event.get("type").and_then(Value::as_str)?;
     match event_type {
@@ -372,6 +399,73 @@ fn reasoning_summary_text(item: &Value) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n");
     (!text.trim().is_empty()).then_some(text)
+}
+
+pub fn web_search_display_update(event: &Value) -> Option<WebSearchDisplayUpdate> {
+    let event_type = event.get("type").and_then(Value::as_str)?;
+    if event_type.starts_with("response.web_search_call.") {
+        let id = event
+            .get("item_id")
+            .and_then(Value::as_str)
+            .or_else(|| event.get("id").and_then(Value::as_str))
+            .unwrap_or("web_search")
+            .to_string();
+        return web_search_query(event).map(|query| WebSearchDisplayUpdate::Query { id, query });
+    }
+    let item = event.get("item")?;
+    if item.get("type").and_then(Value::as_str) != Some("web_search_call") {
+        return None;
+    }
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .or_else(|| event.get("item_id").and_then(Value::as_str))
+        .unwrap_or("web_search")
+        .to_string();
+    let query = web_search_query(item);
+    match event_type {
+        "response.output_item.added" => Some(WebSearchDisplayUpdate::Started { id, query }),
+        "response.output_item.done" => {
+            let ok = item
+                .get("status")
+                .and_then(Value::as_str)
+                .is_none_or(|status| status == "completed");
+            Some(WebSearchDisplayUpdate::Finished { id, query, ok })
+        }
+        _ => None,
+    }
+}
+
+fn web_search_query(item: &Value) -> Option<String> {
+    query_from_value(item).filter(|query| !query.trim().is_empty())
+}
+
+fn query_from_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(object) => {
+            for key in ["query", "search_query", "search_terms", "q"] {
+                if let Some(query) = object
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|query| !query.trim().is_empty())
+                {
+                    return Some(query.to_string());
+                }
+            }
+            if let Some(query) = object
+                .get("queries")
+                .and_then(Value::as_array)
+                .and_then(|queries| queries.first())
+                .and_then(Value::as_str)
+                .filter(|query| !query.trim().is_empty())
+            {
+                return Some(query.to_string());
+            }
+            object.values().find_map(query_from_value)
+        }
+        Value::Array(values) => values.iter().find_map(query_from_value),
+        _ => None,
+    }
 }
 
 fn reconstruct_output_from_events(events: &[Value]) -> Vec<Value> {
@@ -679,6 +773,18 @@ When validation is relevant, run the narrowest meaningful check first, then broa
 After required evidence is gathered and validation passes, stop calling tools and provide the final answer. When finished, provide the final answer as a normal assistant message."#
 }
 
+fn spark_system_prompt_with_custom(custom_system_prompt: Option<&str>) -> String {
+    let base = spark_system_prompt();
+    let Some(custom_system_prompt) = custom_system_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return base.to_string();
+    };
+
+    format!("{base}\n\n# Harness instructions\n\n{custom_system_prompt}")
+}
+
 fn judge_system_prompt() -> &'static str {
     "You are an expert software benchmark judge. Score only from supplied evidence, call out uncertainty, and return the requested JSON shape without markdown."
 }
@@ -697,8 +803,9 @@ mod tests {
 
     use super::{
         DEFAULT_SPARK_AGENT_REASONING_EFFORT, ReasoningDisplayUpdate, Response, SparkClient,
-        output_items_for_next_input, reasoning_display_update, response_from_stream, response_text,
-        spark_system_prompt, tool_to_wire,
+        WebSearchDisplayUpdate, output_items_for_next_input, reasoning_display_update,
+        response_from_stream, response_text, spark_system_prompt, spark_system_prompt_with_custom,
+        tool_to_wire, web_search_display_update,
     };
 
     fn test_auth_tokens() -> AuthTokens {
@@ -754,6 +861,15 @@ mod tests {
     }
 
     #[test]
+    fn spark_system_prompt_appends_custom_harness_instructions() {
+        let prompt = spark_system_prompt_with_custom(Some("You are Relay in Discord."));
+
+        assert!(prompt.contains("You are GPT-5.3-Codex-Spark"));
+        assert!(prompt.contains("# Harness instructions"));
+        assert!(prompt.contains("You are Relay in Discord."));
+    }
+
+    #[test]
     fn hosted_web_search_tool_serializes_as_responses_tool() {
         let tool = crate::tools::builtin_tools()
             .into_iter()
@@ -787,6 +903,78 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["type"], "web_search_call");
         assert_eq!(items[0]["id"], "ws_test");
+    }
+
+    #[test]
+    fn web_search_display_update_surfaces_hosted_search_lifecycle() {
+        assert_eq!(
+            web_search_display_update(&json!({
+                "type": "response.output_item.added",
+                "item": {
+                    "type": "web_search_call",
+                    "id": "ws_test",
+                    "action": {
+                        "type": "search",
+                        "queries": ["current rust release"]
+                    }
+                }
+            })),
+            Some(WebSearchDisplayUpdate::Started {
+                id: "ws_test".to_string(),
+                query: Some("current rust release".to_string()),
+            })
+        );
+
+        assert_eq!(
+            web_search_display_update(&json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "web_search_call",
+                    "id": "ws_test",
+                    "status": "completed",
+                    "action": {
+                        "type": "search",
+                        "queries": ["current rust release"]
+                    }
+                }
+            })),
+            Some(WebSearchDisplayUpdate::Finished {
+                id: "ws_test".to_string(),
+                query: Some("current rust release".to_string()),
+                ok: true,
+            })
+        );
+    }
+
+    #[test]
+    fn web_search_display_update_reads_query_from_stream_event() {
+        assert_eq!(
+            web_search_display_update(&json!({
+                "type": "response.web_search_call.searching",
+                "item_id": "ws_test",
+                "query": "Obsession 2025 film plot"
+            })),
+            Some(WebSearchDisplayUpdate::Query {
+                id: "ws_test".to_string(),
+                query: "Obsession 2025 film plot".to_string(),
+            })
+        );
+
+        assert_eq!(
+            web_search_display_update(&json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "web_search_call",
+                    "id": "ws_test",
+                    "status": "completed"
+                }
+            })),
+            Some(WebSearchDisplayUpdate::Finished {
+                id: "ws_test".to_string(),
+                query: None,
+                ok: true,
+            })
+        );
     }
 
     #[test]

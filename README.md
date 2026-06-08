@@ -109,6 +109,18 @@ Run against another workspace:
 cargo run --bin spark -- chat --cwd C:\path\to\repo "Find the config loader."
 ```
 
+Choose reasoning effort for a one-shot or interactive chat:
+
+```powershell
+cargo run --bin spark -- chat --reasoning-effort low "Answer briefly."
+```
+
+Append harness-specific system instructions:
+
+```powershell
+cargo run --bin spark -- chat --system-prompt "You are Relay in Discord." "Who are you?"
+```
+
 Use read-only mode when you want inspection without edits or commands that mutate files:
 
 ```powershell
