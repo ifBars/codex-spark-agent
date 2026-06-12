@@ -96,6 +96,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Test
         run: cargo test
 

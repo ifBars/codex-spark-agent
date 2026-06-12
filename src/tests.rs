@@ -567,7 +567,8 @@ Set-Content -LiteralPath {preflight_report_candidate} -Value '{{"status":"failed
 (Get-Item -LiteralPath {harness_report_candidate}).LastWriteTimeUtc = [datetime]'2026-06-10T16:00:00Z'
 (Get-Item -LiteralPath {preflight_report_candidate}).LastWriteTimeUtc = [datetime]'2026-06-10T16:01:00Z'
 $selectedHarnessReport = Get-LatestHarnessReportFile -Directory {report_dir} -Suite 'real-world' -SinceUtc ([datetime]'2026-06-10T15:59:00Z')
-if ($selectedHarnessReport -ne {harness_report_candidate}) {{
+$expectedHarnessReport = (Get-Item -LiteralPath {harness_report_candidate}).FullName
+if ($selectedHarnessReport -ne $expectedHarnessReport) {{
     throw "expected harness report selection to ignore preflight artifact, got '$selectedHarnessReport'"
 }}
 $statusPath = Write-CodexPreflightStatus -Directory {report_dir} -Suite 'real-world' -Status 'failed' -CodexBin 'codex' -Model 'gpt-5.3-codex-spark' -ReasoningEffort 'medium' -Scenario @('precise-patch','ops-report') -ExitCode 1 -RetryHint 'try again in 10 minutes'
