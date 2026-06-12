@@ -1,6 +1,6 @@
 [package]
 name = "codex-spark-agent"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Experimental Rust CLI harness for GPT-5.3-Codex-Spark over the ChatGPT Codex backend"
 license = "MIT"
