@@ -61,6 +61,28 @@ fn write_trace_metadata_with_expected_tool_calls(dir: &Path, calls: Value) {
     .expect("write metadata");
 }
 
+fn write_trace_metadata_with_expected_and_optional_tool_calls(
+    dir: &Path,
+    expected_calls: Value,
+    optional_calls: Value,
+) {
+    std::fs::write(
+        dir.join("000-trace-metadata.json"),
+        serde_json::to_vec_pretty(&json!({
+            "model": "gpt-5.3-codex-spark",
+            "context": {
+                "profile_scenario": {
+                    "name": "github-issue-bugfix",
+                    "expected_tool_calls": expected_calls,
+                    "optional_tool_calls": optional_calls,
+                }
+            }
+        }))
+        .expect("serialize metadata"),
+    )
+    .expect("write metadata");
+}
+
 fn write_trace_metadata_with_expected_skills(dir: &Path, skills: Value) {
     std::fs::write(
         dir.join("000-trace-metadata.json"),

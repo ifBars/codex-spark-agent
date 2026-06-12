@@ -5,7 +5,7 @@ use std::path::PathBuf;
 pub(crate) mod markdown;
 pub(crate) mod tui;
 
-use crate::{agent, session, skill, tools};
+use crate::{agent, prompt_commands, session, skill, tools};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SlashCommand {
@@ -74,6 +74,11 @@ pub(crate) const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "/skills",
         usage: "/skills",
         description: "List available skills",
+    },
+    SlashCommand {
+        name: "/commands",
+        usage: "/commands",
+        description: "List reusable prompt commands",
     },
     SlashCommand {
         name: "/save",
@@ -147,6 +152,20 @@ pub(crate) async fn run_line_interactive_chat(
             continue;
         }
 
+        if input == "/commands" {
+            for command in prompt_commands::discover_commands(&cwd)? {
+                if command.description.is_empty() {
+                    println!("{} ({})", command.name, command.source_path);
+                } else {
+                    println!(
+                        "{} - {} ({})",
+                        command.name, command.description, command.source_path
+                    );
+                }
+            }
+            continue;
+        }
+
         if let Some(command) = command_args(input, "/skill") {
             skill::commands::handle_skill_command(runner, &cwd, command.trim()).await?;
             if let Some(name) = &session_name {
@@ -159,13 +178,16 @@ pub(crate) async fn run_line_interactive_chat(
             "/exit" | "/quit" => return Ok(()),
             "/help" => {
                 println!(
-                    "Commands: /help, /status, /mode, /reasoning, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /save, /clear, /exit"
+                    "Commands: /help, /status, /mode, /reasoning, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit"
                 );
                 println!(
                     "Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>"
                 );
                 println!(
                     "Skill commands: /skills, /skill load <name>, /skill refresh, /skill list"
+                );
+                println!(
+                    "Prompt commands: /commands lists .agents/commands, .spark/commands, and .claude/commands; /<name> [args] expands and runs a Markdown prompt."
                 );
                 continue;
             }
@@ -275,21 +297,35 @@ pub(crate) async fn run_line_interactive_chat(
             continue;
         }
 
-        if input.starts_with('/') {
-            eprintln!("{}", unknown_slash_command_warning(input));
-            continue;
+        let expanded_prompt = if input.starts_with('/') {
+            match prompt_commands::expand_slash_command(&cwd, input)? {
+                Some(prompt) => prompt,
+                None => {
+                    eprintln!("{}", unknown_slash_command_warning(input));
+                    continue;
+                }
+            }
+        } else {
+            input.to_string()
+        };
+
+        if expanded_prompt != input {
+            println!(
+                "expanded command: {}",
+                slash_command_token(input).unwrap_or(input)
+            );
         }
 
         let mut save_after_run = false;
-        if let Err(error) = skill::commands::load_skill_mentions(runner, &cwd, input).await {
+        if let Err(error) =
+            skill::commands::load_skill_mentions(runner, &cwd, &expanded_prompt).await
+        {
             eprintln!("error: {error:#}");
+        } else if let Err(error) = runner.run(&expanded_prompt).await {
+            eprintln!("error: {error:#}");
+            save_after_run = true;
         } else {
-            if let Err(error) = runner.run(input).await {
-                eprintln!("error: {error:#}");
-                save_after_run = true;
-            } else {
-                save_after_run = true;
-            }
+            save_after_run = true;
         }
 
         if save_after_run && let Some(name) = &session_name {

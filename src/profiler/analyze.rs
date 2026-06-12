@@ -262,7 +262,9 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         scenario_skill_expectation_report(trace_metadata.as_ref(), &loaded_skill_contexts);
     let tool_only_turn_report = tool_only_turn_report(&timeline);
     let compaction_regrowth_report = compaction_regrowth_report(&timeline);
-    let tool_failure_recovery_report = tool_failure_recovery_report(&observed_tool_results);
+    let validation_success = scenario_validation_succeeded(dir);
+    let tool_failure_recovery_report =
+        tool_failure_recovery_report(&observed_tool_results, validation_success);
     if let Some(object) = summary.as_object_mut() {
         insert_analysis_reports(
             object,
@@ -282,4 +284,26 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
         );
     }
     Ok(summary)
+}
+
+fn scenario_validation_succeeded(dir: &Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(dir.join("scenario-validation.json")) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return false;
+    };
+    let command_ok = value.get("exit_code").and_then(Value::as_i64) == Some(0)
+        && !value
+            .get("timed_out")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let browser_ok = value.get("browser").is_none_or(|browser| {
+        browser.get("exit_code").and_then(Value::as_i64) == Some(0)
+            && !browser
+                .get("timed_out")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+    });
+    command_ok && browser_ok
 }

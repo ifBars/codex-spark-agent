@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 
 use crate::{
-    benchmark::{codex_cli::CodexCliBenchmarkRow, workspace},
+    benchmark::{codex_cli::CodexCliBenchmarkRow, expected_scenario_artifacts, workspace},
     cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind},
     profile::{scenarios, validation},
 };
@@ -187,7 +187,7 @@ async fn run_opencode_scenario(
         .map_err(|error| anyhow::anyhow!("failed to write opencode final message: {error}"))?;
 
     let stderr_metrics = classify_stderr(&stderr);
-    let expected_artifacts = expected_artifacts(scenario);
+    let expected_artifacts = expected_scenario_artifacts(scenario);
     let present_artifacts = expected_artifacts
         .iter()
         .filter(|path| scenario_cwd.join(path).exists())
@@ -232,6 +232,8 @@ async fn run_opencode_scenario(
             .model
             .clone()
             .unwrap_or_else(|| "opencode-default".to_string()),
+        command_path: String::new(),
+        command_version: String::new(),
         reasoning_effort: options.reasoning_effort.clone(),
         score: 0.0,
         success: exit_code == Some(0)
@@ -273,6 +275,7 @@ async fn run_opencode_scenario(
             .unwrap_or(0),
         final_message_chars: final_message.chars().count() as u64,
         run_dir: run_dir.display().to_string(),
+        provider_retry_hint: String::new(),
         failure_points: failure_points.join(";"),
     };
     row.score = external_agent_score(&row);
@@ -480,41 +483,6 @@ fn actionable_stderr_line(line: &str) -> bool {
         .any(|fragment| line.contains(fragment))
 }
 
-fn expected_artifacts(scenario: ProfileScenarioKind) -> Vec<&'static str> {
-    match scenario {
-        ProfileScenarioKind::ReactCalculatorScaffold => vec![
-            ".spark-scenarios/react-calculator/package.json",
-            ".spark-scenarios/react-calculator/index.html",
-            ".spark-scenarios/react-calculator/src/main.tsx",
-            ".spark-scenarios/react-calculator/src/App.tsx",
-            ".spark-scenarios/react-calculator/src/App.test.tsx",
-            ".spark-scenarios/react-calculator/src/styles.css",
-        ],
-        ProfileScenarioKind::RustLogAnalyzerScaffold => vec![
-            ".spark-scenarios/rust-log-analyzer/Cargo.toml",
-            ".spark-scenarios/rust-log-analyzer/src/lib.rs",
-            ".spark-scenarios/rust-log-analyzer/src/main.rs",
-        ],
-        ProfileScenarioKind::GithubIssueBugfix => {
-            vec![".spark-scenarios/github-issue-bugfix/src/quote.ts"]
-        }
-        ProfileScenarioKind::GithubIssueTriage => {
-            vec![".spark-scenarios/github-issue-triage/triage.md"]
-        }
-        ProfileScenarioKind::TechnicalEssay => vec![".spark-scenarios/technical-essay/essay.md"],
-        ProfileScenarioKind::ConfigMigration => vec![
-            ".spark-scenarios/config-migration/config/app.json",
-            ".spark-scenarios/config-migration/src/config.ts",
-            ".spark-scenarios/config-migration/docs/config.md",
-        ],
-        ProfileScenarioKind::OpsReport => vec![
-            ".spark-scenarios/ops-report/metrics.json",
-            ".spark-scenarios/ops-report/report.md",
-        ],
-        _ => Vec::new(),
-    }
-}
-
 fn failure_points(
     exit_code: Option<i32>,
     timed_out: bool,
@@ -717,5 +685,14 @@ mod tests {
     #[test]
     fn opencode_reasoning_effort_is_passed_as_variant() {
         assert_eq!(opencode_reasoning_variant_arg("high"), "high");
+    }
+
+    #[test]
+    fn merge_conflict_resolution_has_artifact_expectation() {
+        assert_eq!(
+            expected_scenario_artifacts(ProfileScenarioKind::MergeConflictResolution),
+            &[".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"]
+        );
+        assert!(expected_scenario_artifacts(ProfileScenarioKind::RepoSurvey).is_empty());
     }
 }

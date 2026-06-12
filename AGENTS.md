@@ -17,7 +17,12 @@ This is a Rust CLI harness for GPT-5.3-Codex-Spark. Keep changes modular, tracea
   .\scripts\quick_harness_benchmark.ps1
   ```
 
-- The quick benchmark runs a bounded, intentionally nontrivial `real-world` suite slice with one repeat: `precise-patch`, `multi-file-patch`, `github-issue-bugfix`, `rust-failing-test-bugfix`, `typescript-reducer-bugfix`, `github-issue-triage`, `technical-essay`, `config-migration`, `ops-report`, and `rust-log-analyzer-scaffold`. This is meant to track real harness performance across precise edits, coordinated multi-file work, issue-style repair, test-driven Rust/TypeScript fixes, grounded triage, sourced writing, migrations, computed reporting, and small project scaffolding without paying for the full suite.
+- The quick benchmark runs a bounded, intentionally nontrivial `real-world` suite slice with one repeat: `precise-patch`, `multi-file-patch`, `github-issue-bugfix`, `rust-failing-test-bugfix`, `typescript-reducer-bugfix`, `merge-conflict-resolution`, `github-issue-triage`, `ci-failure-triage`, `pull-request-review`, `dependency-upgrade-triage`, `technical-essay`, `config-migration`, `ops-report`, and `rust-log-analyzer-scaffold`. This is meant to track real harness performance across precise edits, coordinated multi-file work, issue-style repair, test-driven Rust/TypeScript fixes, merge repair, grounded triage, review, dependency migration triage, sourced writing, migrations, computed reporting, and small project scaffolding without paying for the full suite.
+- To inspect the live quick slice instead of trusting this prose, run:
+
+  ```powershell
+  .\scripts\quick_harness_benchmark.ps1 -ListScenarios
+  ```
 - The default slice should not be so easy that completion and quality scores are always perfect. If it starts saturating, add or rotate in a validated longer scenario rather than relying only on process-score movement.
 - When evaluating a harness behavior change, run this command once before the change and once after the change, then compare the generated report rows under `.spark-profile/benchmarks/`.
 - Use the before/after report rows to compare completion, quality, process score, tool failures, repeated tool calls, tool-only streaks, request duration, and max input tokens. Do not treat small timing deltas as regressions unless they repeat or come with worse quality/process signals.

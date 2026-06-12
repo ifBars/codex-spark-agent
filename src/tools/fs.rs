@@ -896,7 +896,19 @@ pub(super) fn fs_replace(cwd: &Path, args: Value) -> Result<ToolResult> {
     let full = resolve_under(cwd, path)?;
     let content = std::fs::read_to_string(&full)
         .with_context(|| format!("failed to read {}", full.display()))?;
-    let replace_plan = replacement_plan(&content, old, new);
+    let mut replace_plan = replacement_plan(&content, old, new);
+    let mut display_line_numbers_stripped = false;
+    let stripped_replace = strip_replace_display_line_number_prefixes(old, new);
+    if replace_plan.replacements == 0
+        && !replace_plan.ambiguous_leading_indent_match
+        && let Some((stripped_old, stripped_new)) = stripped_replace.as_ref()
+    {
+        let stripped_plan = replacement_plan(&content, stripped_old, stripped_new);
+        if stripped_plan.replacements > 0 || stripped_plan.ambiguous_leading_indent_match {
+            replace_plan = stripped_plan;
+            display_line_numbers_stripped = true;
+        }
+    }
     let replacements = replace_plan.replacements;
     if replace_plan.ambiguous_leading_indent_match {
         let message = format!(
@@ -953,6 +965,7 @@ pub(super) fn fs_replace(cwd: &Path, args: Value) -> Result<ToolResult> {
             "replacements": replacements,
             "line_ending_normalized": replace_plan.line_ending_normalized,
             "leading_indent_normalized": replace_plan.leading_indent_normalized,
+            "display_line_numbers_stripped": display_line_numbers_stripped,
         }),
         error: None,
     })
@@ -1028,6 +1041,46 @@ fn replacement_plan(content: &str, old: &str, new: &str) -> ReplacementPlan {
         leading_indent_normalized: false,
         ambiguous_leading_indent_match: false,
     }
+}
+
+fn strip_replace_display_line_number_prefixes(old: &str, new: &str) -> Option<(String, String)> {
+    Some((
+        strip_display_line_number_prefixes_from_block(old)?,
+        strip_display_line_number_prefixes_from_block(new)?,
+    ))
+}
+
+fn strip_display_line_number_prefixes_from_block(text: &str) -> Option<String> {
+    let lines = normalized_lines_without_trailing_newline(text);
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut first_number = None;
+    let mut stripped_lines = Vec::with_capacity(lines.len());
+    for (index, line) in lines.iter().enumerate() {
+        let (line_number, stripped) = strip_display_line_number_prefix(line)?;
+        let expected_number = *first_number.get_or_insert(line_number) + index;
+        if line_number != expected_number {
+            return None;
+        }
+        stripped_lines.push(stripped);
+    }
+
+    let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let stripped = stripped_lines.join(newline);
+    if text.ends_with('\n') {
+        Some(format!("{stripped}{newline}"))
+    } else {
+        Some(stripped)
+    }
+}
+
+fn strip_display_line_number_prefix(line: &str) -> Option<(usize, &str)> {
+    let colon_index = line.find(':')?;
+    let line_number = line[..colon_index].parse::<usize>().ok()?;
+    let rest = &line[colon_index + 1..];
+    Some((line_number, rest.strip_prefix(' ').unwrap_or(rest)))
 }
 
 fn line_ending_variant_for_content(
@@ -1183,12 +1236,30 @@ pub(super) fn fs_edit(cwd: &Path, args: Value) -> Result<ToolResult> {
     };
     let mut replacement_text = replacement.to_string();
     let mut expected_old_indent_adjusted = false;
+    let mut expected_old_line_numbers_stripped = false;
     if let Some(expected_old) = args.get("expected_old").and_then(Value::as_str)
-        && !same_text_ignoring_line_endings(expected_old, &old_text)
+        && !same_edit_expected_old_text(expected_old, &old_text)
     {
-        if let Some(adjusted) =
-            leading_indent_tolerant_replacement(expected_old, &old_text, replacement, newline)
+        let stripped_expected_old =
+            strip_expected_old_line_number_prefixes(expected_old, start_line, end_line, newline);
+        let mut candidate_expected_old = expected_old;
+        if let Some(stripped) = stripped_expected_old.as_deref()
+            && (same_edit_expected_old_text(stripped, &old_text)
+                || leading_indent_tolerant_replacement(stripped, &old_text, replacement, newline)
+                    .is_some())
         {
+            candidate_expected_old = stripped;
+            expected_old_line_numbers_stripped = true;
+        }
+
+        if same_edit_expected_old_text(candidate_expected_old, &old_text) {
+            // Accept the exact line-range text after removing copied display line numbers.
+        } else if let Some(adjusted) = leading_indent_tolerant_replacement(
+            candidate_expected_old,
+            &old_text,
+            replacement,
+            newline,
+        ) {
             replacement_text = adjusted;
             expected_old_indent_adjusted = true;
         } else {
@@ -1239,9 +1310,49 @@ pub(super) fn fs_edit(cwd: &Path, args: Value) -> Result<ToolResult> {
             "old_lines": if end_line >= start_line { end_line - start_line + 1 } else { 0 },
             "new_lines": replacement_text.lines().count(),
             "expected_old_indent_adjusted": expected_old_indent_adjusted,
+            "expected_old_line_numbers_stripped": expected_old_line_numbers_stripped,
         }),
         error: None,
     })
+}
+
+fn same_edit_expected_old_text(expected_old: &str, old_text: &str) -> bool {
+    same_text_ignoring_line_endings(expected_old, old_text)
+        || expected_old
+            .strip_suffix("\r\n")
+            .or_else(|| expected_old.strip_suffix('\n'))
+            .is_some_and(|trimmed| same_text_ignoring_line_endings(trimmed, old_text))
+}
+
+fn strip_expected_old_line_number_prefixes(
+    expected_old: &str,
+    start_line: usize,
+    end_line: usize,
+    newline: &str,
+) -> Option<String> {
+    if end_line < start_line {
+        return None;
+    }
+
+    let expected_lines = normalized_lines_without_trailing_newline(expected_old);
+    let line_count = end_line - start_line + 1;
+    if expected_lines.is_empty() || expected_lines.len() != line_count {
+        return None;
+    }
+
+    let mut stripped_lines = Vec::with_capacity(expected_lines.len());
+    for (index, line) in expected_lines.iter().enumerate() {
+        let prefix = format!("{}:", start_line + index);
+        let stripped = line.strip_prefix(&prefix)?;
+        stripped_lines.push(stripped.strip_prefix(' ').unwrap_or(stripped));
+    }
+
+    let stripped = stripped_lines.join(newline);
+    if expected_old.ends_with('\n') {
+        Some(format!("{stripped}{newline}"))
+    } else {
+        Some(stripped)
+    }
 }
 
 fn leading_indent_tolerant_replacement(

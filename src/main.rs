@@ -7,9 +7,11 @@ mod client;
 mod config;
 mod profile;
 mod profiler;
+mod prompt_commands;
 mod session;
 mod setup;
 mod skill;
+mod spinner_preview;
 mod telemetry;
 mod tools;
 mod trace;
@@ -33,12 +35,22 @@ const DEFAULT_SCENARIO_TARGET_TOKENS: usize = 45_000;
 const MAX_SCENARIO_TARGET_TOKENS: usize = 120_000;
 const MAX_SCENARIO_REPEAT: usize = 50;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     telemetry::init();
     let cli = Cli::parse();
 
-    match cli.command {
+    if matches!(&cli.command, Command::SpinnerPreview) {
+        return spinner_preview::run();
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(run_command(cli.command))
+}
+
+async fn run_command(command: Command) -> Result<()> {
+    match command {
         Command::Login { no_browser, device } => {
             let tokens = if device {
                 auth::login_device_code().await?
@@ -162,6 +174,11 @@ async fn main() -> Result<()> {
                 if prompt.trim().is_empty() {
                     anyhow::bail!("prompt is required");
                 }
+                let prompt = if prompt.starts_with('/') {
+                    prompt_commands::expand_slash_command(&cwd, &prompt)?.unwrap_or(prompt)
+                } else {
+                    prompt
+                };
                 skill::commands::load_skill_mentions(&mut runner, &cwd, &prompt).await?;
                 runner.run(&prompt).await?;
                 if let Some(name) = &session_name {
@@ -216,6 +233,38 @@ async fn main() -> Result<()> {
                     );
                 }
             }
+        }
+        Command::Commands {
+            cwd,
+            json,
+            name,
+            args,
+        } => {
+            let cwd = std::fs::canonicalize(&cwd)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
+            if let Some(name) = name {
+                let prompt = prompt_commands::expand_command(&cwd, &name, &args.join(" "))?;
+                println!("{prompt}");
+            } else {
+                let commands = prompt_commands::discover_commands(&cwd)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&commands)?);
+                } else {
+                    for command in commands {
+                        if command.description.is_empty() {
+                            println!("{} ({})", command.name, command.source_path);
+                        } else {
+                            println!(
+                                "{} - {} ({})",
+                                command.name, command.description, command.source_path
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Command::SpinnerPreview => {
+            spinner_preview::run()?;
         }
         Command::Traces {
             limit,
@@ -371,6 +420,7 @@ async fn main() -> Result<()> {
             cwd,
             limit,
             all_runs,
+            run_manifests,
             output_dir,
         } => {
             let cwd = std::fs::canonicalize(&cwd)
@@ -386,6 +436,7 @@ async fn main() -> Result<()> {
                     suite,
                     limit,
                     all_runs,
+                    run_manifests,
                     output_dir,
                 },
             )?;
@@ -449,15 +500,41 @@ async fn main() -> Result<()> {
                 },
             )
             .await?;
-            println!(
-                "codex_cli_benchmark suite={} rows={} legacy_avg_score={} json={}",
-                suite.name(),
-                report.rows,
+            let average_score = report
+                .aggregate
+                .get("average_score")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
+            let comparable_runs = report
+                .aggregate
+                .get("comparable_runs")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(report.rows as u64);
+            let request_failures = report
+                .aggregate
+                .pointer("/diagnostics/request_failure")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let request_failure_scenarios = json_count_map_summary(
                 report
                     .aggregate
-                    .get("average_score")
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(0.0),
+                    .pointer("/diagnostics/request_failure_scenarios"),
+            )
+            .unwrap_or_else(|| "n/a".to_string());
+            let comparable_average_score = report
+                .aggregate
+                .get("comparable_average_score")
+                .and_then(serde_json::Value::as_f64)
+                .map(|score| format!("{score:.1}"))
+                .unwrap_or_else(|| "n/a".to_string());
+            println!(
+                "codex_cli_benchmark suite={} rows={} comparable_runs={} request_failures={} request_failure_scenarios={} legacy_avg_score={average_score:.1} comparable_avg_score={} json={}",
+                suite.name(),
+                report.rows,
+                comparable_runs,
+                request_failures,
+                request_failure_scenarios,
+                comparable_average_score,
                 report.json_path.display()
             );
         }
@@ -518,6 +595,7 @@ async fn main() -> Result<()> {
             llm_judge_report,
             group_by_reasoning,
             group_by_model,
+            fail_on_directional_comparison,
             output_dir,
         } => {
             let cwd = std::fs::canonicalize(&cwd)
@@ -560,6 +638,19 @@ async fn main() -> Result<()> {
                 report.csv_path.display(),
                 report.html_path.display()
             );
+            if fail_on_directional_comparison {
+                if let Some(message) =
+                    benchmark::results::comparison_directional_failure_message(&report.aggregate)
+                {
+                    anyhow::bail!(
+                        "{}; artifacts: json={} csv={} html={}",
+                        message,
+                        report.json_path.display(),
+                        report.csv_path.display(),
+                        report.html_path.display()
+                    );
+                }
+            }
         }
         Command::BenchmarkJudge {
             comparison_report,
@@ -619,4 +710,17 @@ fn selected_benchmark_scenarios(
         );
     }
     Ok(requested.to_vec())
+}
+
+pub(crate) fn json_count_map_summary(value: Option<&serde_json::Value>) -> Option<String> {
+    let object = value?.as_object()?;
+    let mut parts = object
+        .iter()
+        .filter_map(|(key, value)| {
+            let count = value.as_u64()?;
+            (count > 0).then(|| format!("{key}:{count}"))
+        })
+        .collect::<Vec<_>>();
+    parts.sort();
+    (!parts.is_empty()).then(|| parts.join(","))
 }

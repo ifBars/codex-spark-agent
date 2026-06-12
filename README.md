@@ -20,6 +20,7 @@ Current shape:
 - native file and command tools,
 - SQLite-backed named sessions,
 - repo-local skill loading from `.agents/skills`,
+- reusable prompt commands from `.agents/commands`, `.spark/commands`, and `.claude/commands`,
 - trace and profile output for local runs,
 - benchmark scenarios for comparing harness behavior.
 
@@ -149,6 +150,8 @@ Inside `spark chat`, these are the commands I use most:
 - `/compact` compacts the active conversation.
 - `/session ...` manages saved sessions.
 - `/skills`, `/skill load <name>`, and `/skill refresh` manage repo skills.
+- `/commands` lists reusable prompt commands.
+- `/<command> [args]` expands a Markdown prompt command and runs it.
 - `/new`, `/save`, `/clear`, and `/exit` do what they say.
 
 Interactive chat starts a fresh timestamped session unless you pass `--session <name>`. Named sessions live in Spark's local app data directory.
@@ -174,6 +177,53 @@ cargo run --bin spark -- chat "Use @rust-patterns and review src/tools.rs."
 ```
 
 Spark compiles a compact skill summary on first use and caches it under `.spark/skills/`. If the source `SKILL.md` changes, the cache is rebuilt on the next load.
+
+## Prompt commands
+
+Reusable prompt commands live in any of these folders:
+
+```text
+.agents/commands/<name>.md
+.spark/commands/<name>.md
+.claude/commands/<name>.md
+```
+
+Use `.agents/commands` when you are bringing existing agent-harness workflows into Spark. Use `.spark/commands` for Spark-local prompts. Spark also imports legacy Claude Code project commands from `.claude/commands`. If multiple folders define the same command name, `.agents` wins, then `.spark`, then `.claude`.
+
+Nested command files use Claude-style namespacing. For example, `.claude/commands/db/migrate.md` becomes `/db:migrate`.
+
+List commands:
+
+```powershell
+cargo run --bin spark -- commands
+```
+
+Preview an expanded command without running the agent:
+
+```powershell
+cargo run --bin spark -- commands review src/main.rs
+```
+
+Run one in chat:
+
+```powershell
+cargo run --bin spark -- chat
+# then type: /review src/main.rs
+```
+
+Command files are Markdown. Optional frontmatter can provide a description, and `{{args}}` or Claude's `$ARGUMENTS` placeholder marks where slash-command arguments should be inserted:
+
+```markdown
+---
+description: Review a focused change
+---
+
+Review this change:
+
+{{args}}
+```
+
+If a command has no argument placeholder, Spark appends the arguments under an `Arguments:` heading.
 
 ## Built-in tools
 
@@ -235,6 +285,31 @@ cargo run --bin spark -- opencode-benchmark real-world --timeout-seconds 360 --p
 cargo run --bin spark -- benchmark-compare --suite real-world --codex-cli-report .spark-profile/codex-cli/report.json
 ```
 
+For a bounded Spark-vs-Codex CLI pass over real-world development tasks, use the paired quick comparison script:
+
+```powershell
+.\scripts\quick_comparison_benchmark.ps1
+```
+
+It runs the selected Spark harness scenarios, reports from that exact run manifest, runs the same scenarios through the logged-in `codex` binary, and writes a comparison report under `.spark-profile/benchmarks/`. The quick scripts print machine-readable run metadata such as `benchmark_suite`, `benchmark_model`, `reasoning_effort`, `repeat`, `max_turns`, `scenario_count`, and `scenarios`; the paired comparison script also prints `timeout_seconds` and `codex_bin`. The default quick slice includes real development tasks such as bugfixes, merge conflict resolution, config migration, issue triage, CI failure triage, pull request review, dependency upgrade triage, ops reporting, sourced writing, and small Rust scaffolding. Pass `-Scenario rust-failing-test-bugfix` or another scenario list when you want a smaller smoke run before a broader comparison.
+
+To inspect the selected quick slice without running Spark or native Codex, use:
+
+```powershell
+.\scripts\quick_comparison_benchmark.ps1 -ListScenarios
+.\scripts\quick_harness_benchmark.ps1 -ListScenarios
+```
+
+Before spending a Spark run, the quick comparison script preflights the logged-in `codex` binary with the selected model and reasoning effort. It writes a timestamped `*-codex-preflight-*.json` status artifact under `.spark-profile/benchmarks/` and prints `codex_preflight_status=...`, `codex_preflight_codex_path=...`, `codex_preflight_codex_version=...`, `codex_preflight_rerun_command=...`, and `codex_preflight_resume_command=...` so blocked native comparisons are auditable and easy to resume. The artifact includes `scenario_count`, `scenarios`, `repeat`, `max_turns`, `timeout_seconds`, `codex_preflight_timeout_seconds`, `codex_command_path`, `codex_command_version`, `rerun_command`, and `resume_command` for the quick slice that was about to run. The rerun command preserves the exact invocation, while the resume command omits only `-PreflightOnly` and pins `-CodexBin` to the resolved native binary path when available, so a successful retry can proceed into the full Spark-vs-native comparison against the same executable. Native Codex benchmark reports also include `codex_bin`, `codex_command_path`, and `codex_command_version`, and each native row carries `command_path` and `command_version`; final comparison JSON, CSV, and HTML rows preserve those row-level fields for provenance. Final comparison JSON also includes an `inputs` object, and the HTML includes a `Report Inputs` table plus an input freshness warning, so mixed fresh/stale benchmark reports show their source paths, modified times, row counts, scenario coverage, and modified-time span. It also records structured comparison validity under `aggregate.diagnostics.comparison_validity`; pass `--fail-on-directional-comparison` to `benchmark-compare`, or `-FailOnDirectionalComparison` to the quick comparison script, when CI should write artifacts but exit nonzero if stale inputs or skipped provider/API rows make the headline directional. It also records switch state fields: `ignore_user_config`, `isolated_codex_home`, `allow_harness_request_failure_comparison`, `allow_codex_request_failure_comparison`, `skip_codex_preflight`, `preflight_only`, and `fail_on_directional_comparison`. When the provider returns retry guidance, the artifact includes the original `retry_hint`, `retry_after_seconds`, and machine-readable `retry_at_local` / `retry_at_utc` timestamps; the same retry fields are printed to stdout when available. If native Codex is rate-limited or otherwise unavailable, it prints `codex_preflight=failed` and exits before running Spark. Pass `-SkipCodexPreflight` to defer that check to the full `codex-cli-benchmark` step. Provider/API outages are reported as non-comparable rows with scenario summaries such as `request_failure_scenarios=scenario:count`, so usage limits, quota failures, and rate limits are not scored as task performance. If at least one valid Spark or native Codex row remains, the quick comparison continues and prints terminal summaries such as `harness_provider_api_failure_scenarios=config-migration:1` or `codex_provider_api_failure_scenarios=config-migration:1`; the final comparison excludes only the provider/API rows. Ordinary Spark task failures, including local max-turns stops, remain comparable and are scored normally.
+
+To check native Codex availability without running either benchmark, use:
+
+```powershell
+.\scripts\quick_comparison_benchmark.ps1 -PreflightOnly
+```
+
+When `-IsolatedCodexHome` is used, the quick script skips this upfront native preflight because the isolated `CODEX_HOME` is prepared inside the Rust benchmark runner.
+
 These commands write reports under `.spark-profile/`. Keep that folder private unless you have reviewed the contents.
 
 ## Compaction
@@ -279,6 +354,12 @@ List skill cache status:
 
 ```powershell
 cargo run --bin spark -- skills
+```
+
+List reusable prompt commands:
+
+```powershell
+cargo run --bin spark -- commands
 ```
 
 ## License

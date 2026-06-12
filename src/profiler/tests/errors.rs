@@ -142,6 +142,223 @@ fn analyze_trace_reports_recovered_tool_failures() {
 }
 
 #[test]
+fn analyze_trace_treats_alternate_file_mutation_as_recovery() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("001-tool-result.json"),
+        serde_json::to_vec_pretty(&json!({
+            "call_id": "call_1",
+            "tool": "fs.replace",
+            "args": {"path": "src/status_map.ts"},
+            "duration_ms": 2,
+            "result": {
+                "ok": false,
+                "data": {
+                    "error_kind": "expected_replacements_mismatch",
+                    "message": "expected 1 replacements but found 2"
+                },
+                "error": "expected 1 replacements but found 2"
+            }
+        }))
+        .expect("serialize failed result"),
+    )
+    .expect("write failed result");
+    std::fs::write(
+        dir.path().join("002-tool-result.json"),
+        serde_json::to_vec_pretty(&json!({
+            "call_id": "call_2",
+            "tool": "fs.edit",
+            "args": {"path": "src/status_map.ts"},
+            "duration_ms": 3,
+            "result": {
+                "ok": true,
+                "data": {"path": "src/status_map.ts"},
+                "error": null
+            }
+        }))
+        .expect("serialize recovered result"),
+    )
+    .expect("write recovered result");
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(summary["tool_failure_recovery"]["failed_tool_results"], 1);
+    assert_eq!(summary["tool_failure_recovery"]["recovered_failures"], 1);
+    assert_eq!(summary["tool_failure_recovery"]["unrecovered_failures"], 0);
+    assert_eq!(
+        summary["tool_failure_recovery"]["recovered"][0]["recovered_by_tool"],
+        "fs.edit"
+    );
+    assert_eq!(
+        summary["tool_failure_recovery"]["by_tool"]["fs.replace"]["recovered"],
+        1
+    );
+    assert!(
+        summary["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["kind"] == "tool_failure_recovered")
+    );
+    assert!(
+        !summary["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["kind"] == "tool_failure_unrecovered")
+    );
+}
+
+#[test]
+fn analyze_trace_treats_successful_post_run_validation_as_cmd_recovery() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("001-tool-result.json"),
+        serde_json::to_vec_pretty(&json!({
+            "call_id": "call_1",
+            "tool": "cmd.exec",
+            "args": {"command": "validate stale refs", "workdir": ".spark-scenarios/config-migration"},
+            "duration_ms": 12,
+            "result": {
+                "ok": false,
+                "data": {"code": 1},
+                "error": "command exited with code 1"
+            }
+        }))
+        .expect("serialize failed validation result"),
+    )
+    .expect("write failed validation result");
+    std::fs::write(
+        dir.path().join("002-tool-result.json"),
+        serde_json::to_vec_pretty(&json!({
+            "call_id": "call_2",
+            "tool": "fs.write",
+            "args": {"path": ".spark-scenarios/config-migration/docs/config.md"},
+            "duration_ms": 3,
+            "result": {
+                "ok": true,
+                "data": {"path": ".spark-scenarios/config-migration/docs/config.md"},
+                "error": null
+            }
+        }))
+        .expect("serialize repair result"),
+    )
+    .expect("write repair result");
+    std::fs::write(
+        dir.path().join("scenario-validation.json"),
+        serde_json::to_vec_pretty(&json!({
+            "scenario": "config-migration",
+            "workdir": ".spark-scenarios/config-migration",
+            "command": ["powershell", "-NoProfile", "-Command", "validate"],
+            "exit_code": 0,
+            "timed_out": false,
+            "duration_ms": 50,
+            "stdout": "validation passed",
+            "stderr": ""
+        }))
+        .expect("serialize validation artifact"),
+    )
+    .expect("write validation artifact");
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(summary["tool_failure_recovery"]["failed_tool_results"], 1);
+    assert_eq!(summary["tool_failure_recovery"]["recovered_failures"], 1);
+    assert_eq!(summary["tool_failure_recovery"]["unrecovered_failures"], 0);
+    assert_eq!(
+        summary["tool_failure_recovery"]["recovered"][0]["recovered_by_tool"],
+        "scenario-validation"
+    );
+    assert_eq!(
+        summary["tool_failure_recovery"]["by_tool"]["cmd.exec"]["recovered"],
+        1
+    );
+    assert!(
+        summary["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["kind"] == "tool_failure_recovered")
+    );
+    assert!(
+        !summary["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["kind"] == "tool_failure_unrecovered")
+    );
+}
+
+#[test]
+fn analyze_trace_does_not_recover_cmd_failure_when_post_run_validation_fails() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("001-tool-result.json"),
+        serde_json::to_vec_pretty(&json!({
+            "call_id": "call_1",
+            "tool": "cmd.exec",
+            "args": {"command": "validate stale refs"},
+            "duration_ms": 12,
+            "result": {
+                "ok": false,
+                "data": {"code": 1},
+                "error": "command exited with code 1"
+            }
+        }))
+        .expect("serialize failed validation result"),
+    )
+    .expect("write failed validation result");
+    std::fs::write(
+        dir.path().join("002-tool-result.json"),
+        serde_json::to_vec_pretty(&json!({
+            "call_id": "call_2",
+            "tool": "fs.write",
+            "args": {"path": ".spark-scenarios/config-migration/docs/config.md"},
+            "duration_ms": 3,
+            "result": {
+                "ok": true,
+                "data": {"path": ".spark-scenarios/config-migration/docs/config.md"},
+                "error": null
+            }
+        }))
+        .expect("serialize repair result"),
+    )
+    .expect("write repair result");
+    std::fs::write(
+        dir.path().join("scenario-validation.json"),
+        serde_json::to_vec_pretty(&json!({
+            "scenario": "config-migration",
+            "workdir": ".spark-scenarios/config-migration",
+            "command": ["powershell", "-NoProfile", "-Command", "validate"],
+            "exit_code": 1,
+            "timed_out": false,
+            "duration_ms": 50,
+            "stdout": "",
+            "stderr": "validation failed"
+        }))
+        .expect("serialize validation artifact"),
+    )
+    .expect("write validation artifact");
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(summary["tool_failure_recovery"]["failed_tool_results"], 1);
+    assert_eq!(summary["tool_failure_recovery"]["recovered_failures"], 0);
+    assert_eq!(summary["tool_failure_recovery"]["unrecovered_failures"], 1);
+    assert_eq!(
+        summary["tool_failure_recovery"]["by_tool"]["cmd.exec"]["unrecovered"],
+        1
+    );
+    assert!(
+        summary["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["kind"] == "tool_failure_unrecovered")
+    );
+}
+
+#[test]
 fn analyze_trace_recomputes_even_when_profile_summary_exists() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(

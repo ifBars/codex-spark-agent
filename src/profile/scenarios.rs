@@ -29,7 +29,11 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
         ProfileScenarioKind::GithubIssueBugfix => Some("github-issue-bugfix"),
         ProfileScenarioKind::RustFailingTestBugfix => Some("rust-failing-test-bugfix"),
         ProfileScenarioKind::TypeScriptReducerBugfix => Some("typescript-reducer-bugfix"),
+        ProfileScenarioKind::MergeConflictResolution => Some("merge-conflict-resolution"),
         ProfileScenarioKind::GithubIssueTriage => Some("github-issue-triage"),
+        ProfileScenarioKind::CiFailureTriage => Some("ci-failure-triage"),
+        ProfileScenarioKind::PullRequestReview => Some("pull-request-review"),
+        ProfileScenarioKind::DependencyUpgradeTriage => Some("dependency-upgrade-triage"),
         ProfileScenarioKind::TechnicalEssay => Some("technical-essay"),
         ProfileScenarioKind::ConfigMigration => Some("config-migration"),
         ProfileScenarioKind::OpsReport => Some("ops-report"),
@@ -284,6 +288,32 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture cart.test.ts: {error}"))?;
         }
+        ProfileScenarioKind::MergeConflictResolution => {
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests"))
+                .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
+            std::fs::write(
+                dir.join("issue.md"),
+                "# Merge Conflict: preserve both feature flag rollouts\n\nThe feature flag file was left with conflict markers after merging the enterprise dashboard rollout with the EU data-residency rollout. Resolve the conflict in `src/featureFlags.ts` without changing the public function shape. Keep the dashboard-v2 flag for enterprise accounts and beta tenants, and also keep the data-residency flag for EU accounts. Run `bun test` when done.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture issue.md: {error}"))?;
+            std::fs::write(
+                dir.join("package.json"),
+                "{\n  \"type\": \"module\",\n  \"scripts\": {\n    \"test\": \"bun test\"\n  }\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture package.json: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("featureFlags.ts"),
+                "export type Account = {\n  plan: 'free' | 'team' | 'enterprise';\n  tenant: string;\n  region: 'us' | 'eu';\n};\n\nexport function enabledFlags(account: Account): string[] {\n  const flags = ['core'];\n<<<<<<< HEAD\n  if (account.plan === 'enterprise' || account.tenant.startsWith('beta-')) {\n    flags.push('dashboard-v2');\n  }\n=======\n  if (account.region === 'eu') {\n    flags.push('data-residency');\n  }\n>>>>>>> region-rollout\n  return flags;\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture featureFlags.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("featureFlags.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { enabledFlags } from '../src/featureFlags';\n\ntest('enterprise accounts keep dashboard-v2', () => {\n  expect(enabledFlags({ plan: 'enterprise', tenant: 'acme', region: 'us' })).toContain('dashboard-v2');\n});\n\ntest('beta tenants keep dashboard-v2', () => {\n  expect(enabledFlags({ plan: 'team', tenant: 'beta-acme', region: 'us' })).toContain('dashboard-v2');\n});\n\ntest('eu accounts keep data residency', () => {\n  expect(enabledFlags({ plan: 'team', tenant: 'acme', region: 'eu' })).toContain('data-residency');\n});\n\ntest('eu enterprise accounts receive both branch flags', () => {\n  const flags = enabledFlags({ plan: 'enterprise', tenant: 'acme', region: 'eu' });\n  expect(flags).toContain('dashboard-v2');\n  expect(flags).toContain('data-residency');\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture featureFlags.test.ts: {error}"))?;
+        }
         ProfileScenarioKind::GithubIssueTriage => {
             std::fs::create_dir_all(dir.join("src"))
                 .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
@@ -304,6 +334,105 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 "10:00:01 import complete sku=A-100 quantity=12\n10:00:04 GET /api/items cache=HIT age=287 quantity=9\n10:04:48 GET /api/items cache=HIT age=295 quantity=9\n10:05:03 GET /api/items cache=MISS age=0 quantity=12\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture warehouse-import.log: {error}"))?;
+        }
+        ProfileScenarioKind::CiFailureTriage => {
+            std::fs::create_dir_all(dir.join(".github").join("workflows"))
+                .map_err(|error| anyhow::anyhow!("failed to create workflow fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("logs"))
+                .map_err(|error| anyhow::anyhow!("failed to create logs fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests"))
+                .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
+            std::fs::write(
+                dir.join("issue.md"),
+                "# CI Failure: checkout discount regression\n\nThe `frontend-tests` GitHub Actions job fails after adding the SAVE20 campaign. Triage the failure from the local workflow, CI log, production helper, and test file. Do not modify source files; write a focused diagnosis with the failing command, failing assertion, likely root cause, and minimal fix plan.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture issue.md: {error}"))?;
+            std::fs::write(
+                dir.join(".github").join("workflows").join("frontend.yml"),
+                "name: frontend-tests\n\non: [pull_request]\n\njobs:\n  frontend-tests:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: oven-sh/setup-bun@v1\n      - run: bun install --frozen-lockfile\n      - run: bun test\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture frontend.yml: {error}"))?;
+            std::fs::write(
+                dir.join("logs").join("frontend-tests.log"),
+                "[frontend-tests] run bun test\n\ntests/discount.test.ts:\n  ✓ keeps full price without a discount code\n  ✓ applies SAVE10 campaign\n  ✗ applies SAVE20 campaign to checkout totals\n\n  expect(received).toBe(expected)\n\n  Expected: 80\n  Received: 100\n\n  at tests/discount.test.ts:14:41\n\n1 failed, 2 passed\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture frontend-tests.log: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("discount.ts"),
+                "export function applyDiscount(total: number, discountCode?: string): number {\n  const code = discountCode?.trim().toUpperCase();\n  if (!code) return total;\n  if (code === 'SAVE10') return Math.round(total * 0.9 * 100) / 100;\n  return total;\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture discount.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("discount.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { applyDiscount } from '../src/discount';\n\ntest('keeps full price without a discount code', () => {\n  expect(applyDiscount(100)).toBe(100);\n});\n\ntest('applies SAVE10 campaign', () => {\n  expect(applyDiscount(100, 'SAVE10')).toBe(90);\n});\n\ntest('applies SAVE20 campaign to checkout totals', () => {\n  expect(applyDiscount(100, 'SAVE20')).toBe(80);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture discount.test.ts: {error}"))?;
+        }
+        ProfileScenarioKind::PullRequestReview => {
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests"))
+                .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
+            std::fs::write(
+                dir.join("pr.md"),
+                "# PR #184: Add admin comp discount\n\nReview this checkout discount PR. Product rules: only users with role exactly `admin` may receive a full internal comp discount. `read-only-admin` users can inspect orders but must never create discounts. Do not edit source files; write `review.md` with any blocking finding, evidence, and a minimal test/fix recommendation.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture pr.md: {error}"))?;
+            std::fs::write(
+                dir.join("diff.patch"),
+                "diff --git a/src/checkout.ts b/src/checkout.ts\nindex 2db51a1..8d7ef22 100644\n--- a/src/checkout.ts\n+++ b/src/checkout.ts\n@@\n export function discountFor(user: User, cart: Cart): number {\n+  const normalizedRole = user.role.trim().toLowerCase();\n+  if (normalizedRole.includes('admin')) {\n+    return cart.subtotalCents;\n+  }\n   if (cart.couponCode === 'SAVE10') {\n     return Math.round(cart.subtotalCents * 0.1);\n   }\ndiff --git a/tests/checkout.test.ts b/tests/checkout.test.ts\nindex aa0b21c..f12ca39 100644\n--- a/tests/checkout.test.ts\n+++ b/tests/checkout.test.ts\n@@\n test('admin users can comp internal carts', () => {\n   expect(discountFor({ id: 'u-1', role: 'admin' }, { subtotalCents: 5000 })).toBe(5000);\n });\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture diff.patch: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("checkout.ts"),
+                "export type UserRole = 'customer' | 'support' | 'admin' | 'read-only-admin';\n\nexport type User = {\n  id: string;\n  role: UserRole;\n};\n\nexport type Cart = {\n  subtotalCents: number;\n  couponCode?: string;\n};\n\nexport function discountFor(user: User, cart: Cart): number {\n  const normalizedRole = user.role.trim().toLowerCase();\n  if (normalizedRole.includes('admin')) {\n    return cart.subtotalCents;\n  }\n  if (cart.couponCode === 'SAVE10') {\n    return Math.round(cart.subtotalCents * 0.1);\n  }\n  return 0;\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture checkout.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("checkout.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { discountFor } from '../src/checkout';\n\ntest('SAVE10 applies a ten percent discount', () => {\n  expect(discountFor({ id: 'u-1', role: 'customer' }, { subtotalCents: 5000, couponCode: 'SAVE10' })).toBe(500);\n});\n\ntest('admin users can comp internal carts', () => {\n  expect(discountFor({ id: 'u-2', role: 'admin' }, { subtotalCents: 5000 })).toBe(5000);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture checkout.test.ts: {error}"))?;
+        }
+        ProfileScenarioKind::DependencyUpgradeTriage => {
+            std::fs::create_dir_all(dir.join("docs"))
+                .map_err(|error| anyhow::anyhow!("failed to create docs fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests"))
+                .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
+            std::fs::write(
+                dir.join("upgrade.md"),
+                "# Renovate PR: @acme/time-utils 1.4.2 -> 2.0.0\n\nTriage this dependency upgrade before merge. Billing cutoffs must remain based on UTC dates, because local-time cutoffs can bill customers in the wrong month near midnight. Do not edit source files; write `upgrade-triage.md` with the changed package, migration risk, affected code, test gap, and minimal fix plan.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture upgrade.md: {error}"))?;
+            std::fs::write(
+                dir.join("package.json"),
+                "{\n  \"name\": \"billing-cutoff-service\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"dependencies\": {\n    \"@acme/time-utils\": \"2.0.0\"\n  },\n  \"devDependencies\": {\n    \"bun-types\": \"latest\"\n  }\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture package.json: {error}"))?;
+            std::fs::write(
+                dir.join("bun.lock"),
+                "@acme/time-utils@2.0.0:\n  version \"2.0.0\"\n  integrity \"sha512-fixture\"\n\n@acme/time-utils@1.4.2:\n  version \"1.4.2\"\n  integrity \"sha512-previous\"\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture bun.lock: {error}"))?;
+            std::fs::write(
+                dir.join("docs").join("time-utils-2.0.md"),
+                "# @acme/time-utils 2.0 Migration\n\n`parseBusinessDate(input)` now interprets date-only strings in the process local timezone by default. Version 1.x interpreted date-only strings as UTC. To preserve UTC behavior, call `parseBusinessDate(input, { zone: 'utc' })`.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture time-utils-2.0.md: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("billingWindow.ts"),
+                "import { parseBusinessDate } from '@acme/time-utils';\n\nexport function billingCutoffIso(input: string): string {\n  const cutoff = parseBusinessDate(input);\n  return cutoff.toISOString().slice(0, 10);\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture billingWindow.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("billingWindow.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { billingCutoffIso } from '../src/billingWindow';\n\ntest('formats a billing cutoff date', () => {\n  expect(billingCutoffIso('2026-03-31')).toBe('2026-03-31');\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture billingWindow.test.ts: {error}"))?;
         }
         ProfileScenarioKind::TechnicalEssay => {
             std::fs::create_dir_all(dir.join("sources"))
@@ -362,7 +491,7 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 .map_err(|error| anyhow::anyhow!("failed to create data fixture: {error}"))?;
             std::fs::write(
                 dir.join("brief.md"),
-                "# Ops Report Brief\n\nAnalyze `data/tickets.csv`. Treat the first CSV line as the header, not a ticket. Write `report.md` with the operational readout and `metrics.json` with exactly these numeric keys: `totalTickets`, `openTickets`, `p1Open`, and `averageOpenMinutes`. Count ticket rows only for `totalTickets`; round `averageOpenMinutes` for open tickets to one decimal place. Mention the highest-risk team in the report and explain why.\n",
+                "# Ops Report Brief\n\nAnalyze `data/tickets.csv`. Treat the first CSV line as the header, not a ticket. Write `report.md` with the operational readout and `metrics.json` with exactly these numeric keys: `totalTickets`, `openTickets`, `p1Open`, and `averageOpenMinutes`. Count ticket rows only for `totalTickets`; round `averageOpenMinutes` for open tickets to one decimal place. Rank the highest-risk team by open P1 ticket count, then by oldest open P1 age as the tie-breaker. Do not count P2 tickets as P1 tickets. Mention the highest-risk team in the report and explain why.\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
             std::fs::write(
@@ -456,8 +585,9 @@ pub(crate) fn profile_scenario_prompts(
              1. Read .spark-scenarios/precise-patch/tests/status_map.spec.md.\n\
              2. Read .spark-scenarios/precise-patch/src/status_map.ts.\n\
              3. Use fs.edit or fs.replace to change only the queued branch so queued returns Queued.\n\
-             4. Use fs.search under .spark-scenarios/precise-patch/src for return 'Unknown'; and confirm the default branch still returns Unknown.\n\
-             5. Use fs.read on .spark-scenarios/precise-patch/src/status_map.ts to verify the final contents.\n\
+             4. The exact line return 'Unknown'; appears in more than one branch; do not replace that bare line globally. Either use line-scoped fs.edit on the queued branch, or use fs.replace with both case 'queued' and the return line in old and new so the branch label is preserved.\n\
+             5. Use fs.search under .spark-scenarios/precise-patch/src for return 'Unknown'; and confirm the default branch still returns Unknown.\n\
+             6. Use fs.read on .spark-scenarios/precise-patch/src/status_map.ts to verify the final contents.\n\
              Finish with the exact file changed, validation result, and whether any unrelated code was left untouched."
                 .to_string(),
         ]),
@@ -587,7 +717,7 @@ pub(crate) fn profile_scenario_prompts(
              2. Read .spark-scenarios/github-issue-bugfix/src/quote.ts.\n\
              3. Read .spark-scenarios/github-issue-bugfix/tests/quote.test.ts.\n\
              4. Patch the production code with the smallest reasonable change so annual quotes annualize before discounting.\n\
-             5. Run bun test from .spark-scenarios/github-issue-bugfix.\n\
+             5. Run bun test from .spark-scenarios/github-issue-bugfix after the patch. If you ran it before patching and it failed, run it again after patching and only finalize after the post-patch run passes.\n\
              Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
                 .to_string(),
         ]),
@@ -600,7 +730,7 @@ pub(crate) fn profile_scenario_prompts(
              2. Read .spark-scenarios/rust-failing-test-bugfix/src/lib.rs.\n\
              3. Read .spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs.\n\
              4. Patch production code with the smallest reasonable change so runnable jobs are filtered and ordered correctly.\n\
-             5. Run cargo test from .spark-scenarios/rust-failing-test-bugfix. Do not set CARGO_TARGET_DIR.\n\
+             5. Run cargo test from .spark-scenarios/rust-failing-test-bugfix after the patch. If you ran it before patching and it failed, run it again after patching and only finalize after the post-patch run passes. Do not set CARGO_TARGET_DIR.\n\
              Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
                 .to_string(),
         ]),
@@ -613,8 +743,21 @@ pub(crate) fn profile_scenario_prompts(
              2. Read .spark-scenarios/typescript-reducer-bugfix/src/cart.ts.\n\
              3. Read .spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts.\n\
              4. Patch production code with the smallest reasonable change so inactive lines are ignored and non-positive quantities remove the line.\n\
-             5. Run bun test from .spark-scenarios/typescript-reducer-bugfix.\n\
+             5. Run bun test from .spark-scenarios/typescript-reducer-bugfix after the patch. If you ran it before patching and it failed, run it again after patching and only finalize after the post-patch run passes.\n\
              Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::MergeConflictResolution => Ok(vec![
+            "Profile scenario: merge-conflict-resolution.\n\
+             Work only under .spark-scenarios/merge-conflict-resolution.\n\
+             Treat issue.md like a merge conflict assigned to you.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/merge-conflict-resolution/issue.md.\n\
+             2. Read .spark-scenarios/merge-conflict-resolution/src/featureFlags.ts and .spark-scenarios/merge-conflict-resolution/tests/featureFlags.test.ts.\n\
+             3. Resolve the conflict markers in src/featureFlags.ts while preserving both dashboard-v2 and data-residency behavior.\n\
+             4. Run bun test from .spark-scenarios/merge-conflict-resolution.\n\
+             5. Read src/featureFlags.ts to verify no <<<<<<<, =======, or >>>>>>> markers remain.\n\
+             Finish with the conflict resolution summary, changed file, test result, and whether the patch stayed scoped."
                 .to_string(),
         ]),
         ProfileScenarioKind::GithubIssueTriage => Ok(vec![
@@ -628,6 +771,47 @@ pub(crate) fn profile_scenario_prompts(
              4. Write .spark-scenarios/github-issue-triage/triage.md with likely root cause, evidence, reproduction steps, and fix plan.\n\
              5. Read triage.md to verify it names /api/items, src/cachePolicy.ts, Cache-Control, max-age=300, and stale-while-revalidate=30.\n\
              Finish with a concise triage summary and confidence level."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::CiFailureTriage => Ok(vec![
+            "Profile scenario: ci-failure-triage.\n\
+             Work only under .spark-scenarios/ci-failure-triage.\n\
+             Triage the failing CI run and write a grounded diagnosis; do not modify source files.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/ci-failure-triage/issue.md.\n\
+             2. Read .spark-scenarios/ci-failure-triage/.github/workflows/frontend.yml.\n\
+             3. Read .spark-scenarios/ci-failure-triage/logs/frontend-tests.log.\n\
+             4. Read .spark-scenarios/ci-failure-triage/src/discount.ts and .spark-scenarios/ci-failure-triage/tests/discount.test.ts.\n\
+             5. Write .spark-scenarios/ci-failure-triage/ci-triage.md with the failing command, failing test/assertion, likely root cause, and minimal fix plan.\n\
+             6. Read ci-triage.md to verify it names bun test, SAVE20, applyDiscount, src/discount.ts, and tests/discount.test.ts.\n\
+             Finish with the triage path and whether source files were left unchanged."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::PullRequestReview => Ok(vec![
+            "Profile scenario: pull-request-review.\n\
+             Work only under .spark-scenarios/pull-request-review.\n\
+             Review the PR like a code reviewer; do not modify source files.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/pull-request-review/pr.md.\n\
+             2. Read .spark-scenarios/pull-request-review/diff.patch.\n\
+             3. Read .spark-scenarios/pull-request-review/src/checkout.ts and .spark-scenarios/pull-request-review/tests/checkout.test.ts.\n\
+             4. Write .spark-scenarios/pull-request-review/review.md with severity, blocking finding, evidence, and a minimal test/fix recommendation.\n\
+             5. Read review.md to verify it names read-only-admin, includes('admin'), discountFor, src/checkout.ts, and tests/checkout.test.ts.\n\
+             Finish with the review path and whether source files were left unchanged."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::DependencyUpgradeTriage => Ok(vec![
+            "Profile scenario: dependency-upgrade-triage.\n\
+             Work only under .spark-scenarios/dependency-upgrade-triage.\n\
+             Triage the dependency upgrade like a maintainer; do not modify source files.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/dependency-upgrade-triage/upgrade.md.\n\
+             2. Read .spark-scenarios/dependency-upgrade-triage/package.json and .spark-scenarios/dependency-upgrade-triage/bun.lock.\n\
+             3. Read .spark-scenarios/dependency-upgrade-triage/docs/time-utils-2.0.md.\n\
+             4. Read .spark-scenarios/dependency-upgrade-triage/src/billingWindow.ts and .spark-scenarios/dependency-upgrade-triage/tests/billingWindow.test.ts.\n\
+             5. Write .spark-scenarios/dependency-upgrade-triage/upgrade-triage.md with the changed package, migration risk, affected code, test gap, and minimal fix plan.\n\
+             6. Read upgrade-triage.md to verify it names @acme/time-utils, 2.0.0, parseBusinessDate, zone: 'utc', src/billingWindow.ts, and tests/billingWindow.test.ts.\n\
+             Finish with the triage path and whether source files were left unchanged."
                 .to_string(),
         ]),
         ProfileScenarioKind::TechnicalEssay => Ok(vec![
@@ -650,8 +834,8 @@ pub(crate) fn profile_scenario_prompts(
              2. Read .spark-scenarios/config-migration/config/app.json.\n\
              3. Read .spark-scenarios/config-migration/src/config.ts.\n\
              4. Read .spark-scenarios/config-migration/docs/config.md.\n\
-             5. Update all three files for schema version 2 using authentication.method and retry.maxAttempts.\n\
-             6. Use cmd.exec or fs.search to validate the JSON is parseable and verify old authMode/retry.retries references are gone from changed files.\n\
+             5. Update all three files for schema version 2 using the new authentication/method object and maxAttempts retry field. Do not keep the old key names in rewritten docs or code.\n\
+             6. Before finalizing, make an actual cmd.exec or fs.search tool call to validate the JSON is parseable and verify stale authMode/retry.retries references are gone from changed files. If this validation finds a stale reference and you edit again, rerun validation after the final edit before answering. If using cmd.exec from the scenario directory, use paths like config/app.json, src/config.ts, and docs/config.md rather than prefixing .spark-scenarios/config-migration again. If using PowerShell Select-String, do not combine these terms into one -SimpleMatch alternation; check each stale term separately or use a real regex match. Do not replace this tool call with a prose claim in the final answer.\n\
              Finish with files changed, validation result, and any migration risks."
                 .to_string(),
         ]),
@@ -663,7 +847,7 @@ pub(crate) fn profile_scenario_prompts(
              2. Read .spark-scenarios/ops-report/data/tickets.csv.\n\
              3. Compute total ticket rows excluding the CSV header, open tickets, open P1 tickets, and average minutes for open tickets.\n\
              4. Write .spark-scenarios/ops-report/metrics.json with totalTickets, openTickets, p1Open, and averageOpenMinutes.\n\
-             5. Write .spark-scenarios/ops-report/report.md with a concise operational readout and the highest-risk team.\n\
+             5. Write .spark-scenarios/ops-report/report.md with a concise operational readout and the highest-risk team. Rank highest risk by open P1 count, then oldest open P1 age; do not count P2 tickets as P1 tickets.\n\
              6. Read both outputs to verify the numbers and narrative.\n\
              Finish with the computed metrics and risk summary."
                 .to_string(),
@@ -839,6 +1023,20 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
                 .to_string()
         }
+        ProfileScenarioKind::MergeConflictResolution => {
+            "Benchmark scenario: merge-conflict-resolution.\n\
+             Work only under .spark-scenarios/merge-conflict-resolution.\n\
+             Treat issue.md like a merge conflict assigned to you. This is a scoped fixture task; do not inspect unrelated repository files unless a concrete blocker requires it.\n\
+             Use bun for JavaScript validation.\n\
+             Required actions:\n\
+             1. Read issue.md, src/featureFlags.ts, and tests/featureFlags.test.ts.\n\
+             2. Resolve the conflict markers in src/featureFlags.ts with the smallest reasonable edit.\n\
+             3. Preserve dashboard-v2 for enterprise accounts and beta tenants, and preserve data-residency for EU accounts.\n\
+             4. Run bun test from .spark-scenarios/merge-conflict-resolution.\n\
+             5. Verify src/featureFlags.ts no longer contains <<<<<<<, =======, or >>>>>>>.\n\
+             Finish with the conflict resolution summary, changed file, test result, and whether the patch stayed scoped."
+                .to_string()
+        }
         ProfileScenarioKind::GithubIssueTriage => {
             "Benchmark scenario: github-issue-triage.\n\
              Work only under .spark-scenarios/github-issue-triage.\n\
@@ -849,6 +1047,42 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              3. Write .spark-scenarios/github-issue-triage/triage.md with likely root cause, evidence, reproduction steps, and fix plan.\n\
              4. Verify triage.md names /api/items, src/cachePolicy.ts, Cache-Control, max-age=300, and stale-while-revalidate=30.\n\
              Finish with a concise triage summary and confidence level."
+                .to_string()
+        }
+        ProfileScenarioKind::CiFailureTriage => {
+            "Benchmark scenario: ci-failure-triage.\n\
+             Work only under .spark-scenarios/ci-failure-triage.\n\
+             Triage the failing CI run and write a grounded diagnosis; do not modify source files or inspect unrelated repository files unless a concrete blocker requires it.\n\
+             Required actions:\n\
+             1. Read issue.md, .github/workflows/frontend.yml, logs/frontend-tests.log, src/discount.ts, and tests/discount.test.ts.\n\
+             2. Write ci-triage.md with the failing command, failing test/assertion, likely root cause, and minimal fix plan.\n\
+             3. Identify the SAVE20 path in applyDiscount as the likely production gap.\n\
+             4. Verify ci-triage.md names bun test, SAVE20, applyDiscount, src/discount.ts, and tests/discount.test.ts.\n\
+             Finish with the triage path and whether source files were left unchanged."
+                .to_string()
+        }
+        ProfileScenarioKind::PullRequestReview => {
+            "Benchmark scenario: pull-request-review.\n\
+             Work only under .spark-scenarios/pull-request-review.\n\
+             Review the PR like a code reviewer; do not modify source files or inspect unrelated repository files unless a concrete blocker requires it.\n\
+             Required actions:\n\
+             1. Read pr.md, diff.patch, src/checkout.ts, and tests/checkout.test.ts.\n\
+             2. Write review.md with severity, blocking finding, evidence, and a minimal test/fix recommendation.\n\
+             3. Identify that role.includes('admin') lets read-only-admin users receive a full comp discount even though the product rule allows only role exactly admin.\n\
+             4. Verify review.md names read-only-admin, includes('admin'), discountFor, src/checkout.ts, and tests/checkout.test.ts.\n\
+             Finish with the review path and whether source files were left unchanged."
+                .to_string()
+        }
+        ProfileScenarioKind::DependencyUpgradeTriage => {
+            "Benchmark scenario: dependency-upgrade-triage.\n\
+             Work only under .spark-scenarios/dependency-upgrade-triage.\n\
+             Triage the dependency upgrade like a maintainer; do not modify source files or inspect unrelated repository files unless a concrete blocker requires it.\n\
+             Required actions:\n\
+             1. Read upgrade.md, package.json, bun.lock, docs/time-utils-2.0.md, src/billingWindow.ts, and tests/billingWindow.test.ts.\n\
+             2. Write upgrade-triage.md with the changed package, migration risk, affected code, test gap, and minimal fix plan.\n\
+             3. Identify that @acme/time-utils 2.0.0 changed parseBusinessDate date-only defaults from UTC to local time, so src/billingWindow.ts should pass { zone: 'utc' } to preserve billing cutoff behavior.\n\
+             4. Verify upgrade-triage.md names @acme/time-utils, 2.0.0, parseBusinessDate, zone: 'utc', src/billingWindow.ts, and tests/billingWindow.test.ts.\n\
+             Finish with the triage path and whether source files were left unchanged."
                 .to_string()
         }
         ProfileScenarioKind::TechnicalEssay => {
@@ -868,8 +1102,8 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Work only under .spark-scenarios/config-migration.\n\
              Required actions:\n\
              1. Read .spark-scenarios/config-migration/migration.md plus the JSON, TypeScript, and docs files in that fixture.\n\
-             2. Update config/app.json, src/config.ts, and docs/config.md for schema version 2 using authentication.method and retry.maxAttempts.\n\
-             3. Validate the JSON is parseable and verify old authMode/retry.retries references are gone.\n\
+             2. Update config/app.json, src/config.ts, and docs/config.md for schema version 2 using the new authentication/method object and maxAttempts retry field. Do not keep the old key names in rewritten docs or code.\n\
+             3. Before finalizing, make an actual cmd.exec or fs.search tool call to validate the JSON is parseable and verify stale authMode/retry.retries references are gone. If this validation finds a stale reference and you edit again, rerun validation after the final edit before answering. If using cmd.exec from the scenario directory, use paths like config/app.json, src/config.ts, and docs/config.md rather than prefixing .spark-scenarios/config-migration again. If using PowerShell Select-String, do not combine these terms into one -SimpleMatch alternation; check each stale term separately or use a real regex match. Do not replace this tool call with a prose claim in the final answer.\n\
              Finish with files changed, validation result, and any migration risks."
                 .to_string()
         }
@@ -881,7 +1115,7 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              1. Read .spark-scenarios/ops-report/brief.md.\n\
              2. Read .spark-scenarios/ops-report/data/tickets.csv.\n\
              3. Write .spark-scenarios/ops-report/metrics.json with totalTickets, openTickets, p1Open, and averageOpenMinutes.\n\
-             4. Write .spark-scenarios/ops-report/report.md with the operational readout and highest-risk team.\n\
+             4. Write .spark-scenarios/ops-report/report.md with the operational readout and highest-risk team. Rank highest risk by open P1 count, then oldest open P1 age; do not count P2 tickets as P1 tickets.\n\
              5. Verify both outputs before finishing.\n\
              Finish with the computed metrics and risk summary."
                 .to_string()
@@ -977,6 +1211,15 @@ pub(crate) fn profile_scenario_validation_command(
             program: "bun",
             args: &["test"],
         }),
+        ProfileScenarioKind::MergeConflictResolution => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/merge-conflict-resolution",
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $source = Get-Content -LiteralPath 'src/featureFlags.ts' -Raw; foreach ($marker in @('<<<<<<<','=======','>>>>>>>')) { if ($source -like \"*$marker*\") { throw \"unresolved conflict marker $marker\" } }; foreach ($term in @('dashboard-v2','data-residency','startsWith(''beta-'')','region === ''eu''')) { if ($source -notlike \"*$term*\") { throw \"missing $term\" } }; bun test",
+            ],
+        }),
         ProfileScenarioKind::GithubIssueTriage => Some(ProfileScenarioValidationCommand {
             workdir: ".spark-scenarios/github-issue-triage",
             program: "powershell",
@@ -984,6 +1227,33 @@ pub(crate) fn profile_scenario_validation_command(
                 "-NoProfile",
                 "-Command",
                 "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'triage.md' -Raw; foreach ($term in @('/api/items','Cache-Control','max-age=300','stale-while-revalidate=30','src/cachePolicy.ts')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }",
+            ],
+        }),
+        ProfileScenarioKind::CiFailureTriage => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/ci-failure-triage",
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'ci-triage.md' -Raw; foreach ($term in @('bun test','SAVE20','applyDiscount','src/discount.ts','tests/discount.test.ts')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }; if ($content -notmatch '(?i)(Expected:\\s*80|expected\\s+80)') { throw 'missing expected 80 assertion evidence' }; if ($content -notmatch '(?i)(Received:\\s*100|received\\s+100)') { throw 'missing received 100 assertion evidence' }",
+            ],
+        }),
+        ProfileScenarioKind::PullRequestReview => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/pull-request-review",
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'review.md' -Raw; foreach ($term in @('read-only-admin','discountFor','src/checkout.ts','tests/checkout.test.ts')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }; if ($content -notmatch \"includes\\s*\\(\\s*[''`\"]admin[''`\"]\\s*\\)\") { throw 'missing includes admin evidence' }; if ($content -notmatch '(?i)(blocking|must fix|p1|p0)') { throw 'missing blocking severity' }; if ($content -notmatch '(?i)(exactly\\s+admin|role\\s+exactly\\s+admin|===\\s*[''`\"]admin[''`\"]|==\\s*[''`\"]admin[''`\"]|strict equality)') { throw 'missing exact admin fix recommendation' }",
+            ],
+        }),
+        ProfileScenarioKind::DependencyUpgradeTriage => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/dependency-upgrade-triage",
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; foreach ($term in @('@acme/time-utils','2.0.0','parseBusinessDate','src/billingWindow.ts','tests/billingWindow.test.ts')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }; if ($content -notmatch '(?i)\\bUTC\\b') { throw 'missing UTC risk' }; if ($content -notmatch '(?i)\\blocal\\b') { throw 'missing local timezone change' }; if ($content -notmatch \"zone\\s*:\\s*[''`\"]utc[''`\"]\") { throw 'missing zone utc fix' }; if ($content -notmatch '(?i)(test gap|missing test|add.*test|regression test)') { throw 'missing test gap recommendation' }",
             ],
         }),
         ProfileScenarioKind::TechnicalEssay => Some(ProfileScenarioValidationCommand {
@@ -1010,7 +1280,7 @@ pub(crate) fn profile_scenario_validation_command(
             args: &[
                 "-NoProfile",
                 "-Command",
-                "$ErrorActionPreference='Stop'; $metrics = Get-Content -LiteralPath 'metrics.json' -Raw | ConvertFrom-Json; if ($metrics.totalTickets -ne 8) { throw 'totalTickets must be 8' }; if ($metrics.openTickets -ne 5) { throw 'openTickets must be 5' }; if ($metrics.p1Open -ne 2) { throw 'p1Open must be 2' }; if ([math]::Abs([double]$metrics.averageOpenMinutes - 51.4) -gt 0.01) { throw 'averageOpenMinutes must be 51.4' }; $report = Get-Content -LiteralPath 'report.md' -Raw; if ($report -notlike '*billing*') { throw 'report must mention billing as highest-risk team' }",
+                "$ErrorActionPreference='Stop'; $metrics = Get-Content -LiteralPath 'metrics.json' -Raw | ConvertFrom-Json; if ($metrics.totalTickets -ne 8) { throw 'totalTickets must be 8' }; if ($metrics.openTickets -ne 5) { throw 'openTickets must be 5' }; if ($metrics.p1Open -ne 2) { throw 'p1Open must be 2' }; if ([math]::Abs([double]$metrics.averageOpenMinutes - 51.4) -gt 0.01) { throw 'averageOpenMinutes must be 51.4' }; $report = Get-Content -LiteralPath 'report.md' -Raw; $plain = (($report -replace '[*`#_]', '') -replace '\\s+', ' ').Trim(); if ($plain -notmatch '(?i)(highest-risk team\\s*(:|-|is)?\\s*billing|billing\\s+(is\\s+)?(the\\s+)?highest-risk team)') { throw 'report must identify billing as highest-risk team' }; if ($plain -match '(?i)(highest-risk team\\s*(:|-|is)?\\s*api|api\\s+(is\\s+)?(the\\s+)?highest-risk team)') { throw 'report incorrectly identifies api as highest-risk team' }; if ($plain -notmatch '95') { throw 'report must explain billing risk with the 95 minute open P1 age' }",
             ],
         }),
         ProfileScenarioKind::ShellRecovery => Some(ProfileScenarioValidationCommand {
@@ -1129,7 +1399,18 @@ pub(crate) fn profile_scenario_expected_tool_groups(
                 vec!["cmd.exec"],
             ]
         }
+        ProfileScenarioKind::MergeConflictResolution => {
+            vec![
+                vec!["fs.read"],
+                vec!["fs.edit", "fs.replace"],
+                vec!["cmd.exec"],
+                vec!["fs.search", "fs.read"],
+            ]
+        }
         ProfileScenarioKind::GithubIssueTriage => vec![vec!["fs.read"], vec!["fs.write"]],
+        ProfileScenarioKind::CiFailureTriage => vec![vec!["fs.read"], vec!["fs.write"]],
+        ProfileScenarioKind::PullRequestReview => vec![vec!["fs.read"], vec!["fs.write"]],
+        ProfileScenarioKind::DependencyUpgradeTriage => vec![vec!["fs.read"], vec!["fs.write"]],
         ProfileScenarioKind::TechnicalEssay => vec![vec!["fs.read"], vec!["fs.write"]],
         ProfileScenarioKind::ConfigMigration => {
             vec![
@@ -1255,6 +1536,10 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
                 "path": ".spark-scenarios/multi-file-patch/docs/routes.md",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": ".spark-scenarios/multi-file-patch",
             }),
             json!({
                 "tool": "fs.search",
@@ -1487,6 +1772,32 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "command": "bun test",
             }),
         ],
+        ProfileScenarioKind::MergeConflictResolution => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/merge-conflict-resolution/issue.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/merge-conflict-resolution/tests/featureFlags.test.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts",
+            }),
+            json!({
+                "tool": "cmd.exec",
+                "command": "bun test",
+            }),
+            json!({
+                "tools": ["fs.search", "fs.read"],
+                "path": ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts",
+            }),
+        ],
         ProfileScenarioKind::GithubIssueTriage => vec![
             json!({
                 "tool": "fs.read",
@@ -1503,6 +1814,84 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.write",
                 "path": ".spark-scenarios/github-issue-triage/triage.md",
+            }),
+        ],
+        ProfileScenarioKind::CiFailureTriage => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/ci-failure-triage/issue.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/ci-failure-triage/.github/workflows/frontend.yml",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/ci-failure-triage/logs/frontend-tests.log",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/ci-failure-triage/src/discount.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/ci-failure-triage/tests/discount.test.ts",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/ci-failure-triage/ci-triage.md",
+            }),
+        ],
+        ProfileScenarioKind::PullRequestReview => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/pull-request-review/pr.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/pull-request-review/diff.patch",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/pull-request-review/src/checkout.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/pull-request-review/tests/checkout.test.ts",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/pull-request-review/review.md",
+            }),
+        ],
+        ProfileScenarioKind::DependencyUpgradeTriage => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/dependency-upgrade-triage/upgrade.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/dependency-upgrade-triage/package.json",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/dependency-upgrade-triage/bun.lock",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/dependency-upgrade-triage/docs/time-utils-2.0.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/dependency-upgrade-triage/src/billingWindow.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/dependency-upgrade-triage/tests/billingWindow.test.ts",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/dependency-upgrade-triage/upgrade-triage.md",
             }),
         ],
         ProfileScenarioKind::TechnicalEssay => vec![
@@ -1578,6 +1967,60 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "path": ".spark-scenarios/ops-report/report.md",
             }),
         ],
+    }
+}
+
+pub(crate) fn profile_scenario_optional_tool_calls(scenario: ProfileScenarioKind) -> Vec<Value> {
+    match scenario {
+        ProfileScenarioKind::GithubIssueBugfix => vec![json!({
+            "tool": "fs.read",
+            "path": ".spark-scenarios/github-issue-bugfix/src/quote.ts",
+        })],
+        ProfileScenarioKind::RustFailingTestBugfix => vec![json!({
+            "tool": "fs.read",
+            "path": ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
+        })],
+        ProfileScenarioKind::TypeScriptReducerBugfix => vec![json!({
+            "tool": "fs.read",
+            "path": ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
+        })],
+        ProfileScenarioKind::ConfigMigration => vec![
+            json!({
+                "tool": "fs.search",
+                "path": ".spark-scenarios/config-migration",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": ".spark-scenarios/config-migration",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/config-migration/config/app.json",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/config-migration/src/config.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/config-migration/docs/config.md",
+            }),
+        ],
+        ProfileScenarioKind::MultiFilePatch => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/multi-file-patch/src/routes.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/multi-file-patch/src/navigation.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/multi-file-patch/docs/routes.md",
+            }),
+        ],
+        _ => Vec::new(),
     }
 }
 

@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agent::{
     AgentDisplayEvent, AgentRunner, SharedDisplayEvents, take_shared_display_events,
 };
-use crate::{chat, session, skill, tools};
+use crate::{chat, prompt_commands, session, skill, tools};
 
 mod markdown;
 
@@ -251,6 +251,11 @@ impl ChatTui {
                 self.input.pop();
             }
             KeyCode::Esc => self.input.clear(),
+            KeyCode::Tab => {
+                if let Some(completed) = complete_slash_command_input(&self.input) {
+                    self.input = completed;
+                }
+            }
             KeyCode::Enter => {
                 let input = self.input.trim().trim_start_matches('\u{feff}').to_string();
                 self.input.clear();
@@ -277,18 +282,31 @@ impl ChatTui {
             return Ok(());
         }
 
-        self.push_user(&input);
+        let agent_input = match prompt_commands::expand_slash_command(&self.cwd, &input)? {
+            Some(prompt) => {
+                self.push_user(&input);
+                self.push_system(format!(
+                    "expanded command: {}",
+                    chat::slash_command_token(&input).unwrap_or(input.as_str())
+                ));
+                prompt
+            }
+            None => {
+                self.push_user(&input);
+                input
+            }
+        };
         self.running = true;
         self.last_running_escape = None;
         terminal.draw(|frame| self.draw(frame))?;
         let events = runner.use_shared_display();
 
         let run_result = if let Err(error) =
-            skill::commands::load_skill_mentions(runner, &self.cwd, &input).await
+            skill::commands::load_skill_mentions(runner, &self.cwd, &agent_input).await
         {
             Err(error)
         } else {
-            self.run_agent_with_redraw(runner, terminal, &events, &input)
+            self.run_agent_with_redraw(runner, terminal, &events, &agent_input)
                 .await
         };
 
@@ -385,6 +403,19 @@ impl ChatTui {
             skill::commands::handle_skill_command(runner, &self.cwd, "list").await?;
             return Ok(true);
         }
+        if input == "/commands" {
+            for command in prompt_commands::discover_commands(&self.cwd)? {
+                if command.description.is_empty() {
+                    self.push_system(format!("{} ({})", command.name, command.source_path));
+                } else {
+                    self.push_system(format!(
+                        "{} - {} ({})",
+                        command.name, command.description, command.source_path
+                    ));
+                }
+            }
+            return Ok(true);
+        }
         if let Some(command) = chat::command_args(input, "/skill") {
             skill::commands::handle_skill_command(runner, &self.cwd, command.trim()).await?;
             if let Some(name) = &self.session_name {
@@ -433,8 +464,9 @@ impl ChatTui {
             }
             "/help" => {
                 self.push_system(
-                    "Commands: /help, /status, /mode, /reasoning, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /save, /clear, /exit\n\
+                    "Commands: /help, /status, /mode, /reasoning, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
 Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>\n\
+Prompt commands: /commands lists .agents/commands, .spark/commands, and .claude/commands; /<name> [args] expands and runs a Markdown prompt.\n\
 Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc clears the composer, double Esc stops a running agent, Ctrl+C exits.",
                 );
                 Ok(true)
@@ -512,8 +544,13 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                 Ok(true)
             }
             _ if input.starts_with('/') => {
-                self.push_warning(chat::unknown_slash_command_warning(input));
-                Ok(true)
+                match prompt_commands::expand_slash_command(&self.cwd, input)? {
+                    Some(_) => Ok(false),
+                    None => {
+                        self.push_warning(chat::unknown_slash_command_warning(input));
+                        Ok(true)
+                    }
+                }
             }
             _ => Ok(false),
         }
@@ -689,7 +726,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                 Style::new().fg(MUTED),
             )))
         } else {
-            Text::from(self.input.as_str())
+            Text::from(input_line(&self.input))
         };
         let composer_widget = Paragraph::new(composer_text)
             .block(
@@ -763,10 +800,11 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             muted_span("  activity "),
             Span::styled(
                 self.activity.live_label(),
-                self.activity.header_style().add_modifier(Modifier::BOLD),
+                self.activity.live_style().add_modifier(Modifier::BOLD),
             ),
             muted_span(" · "),
             Span::styled(self.activity.detail.clone(), Style::new().fg(SOFT_TEXT)),
+            self.activity.meter_span(),
             self.activity
                 .turn
                 .map(|turn| muted_owned(format!(" · turn {turn}")))
@@ -807,6 +845,9 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                 key_span("Enter"),
                 Span::raw(" run command"),
                 muted_span("  ·  "),
+                key_span("Tab"),
+                Span::raw(" complete"),
+                muted_span("  Â·  "),
                 key_span("Esc"),
                 Span::raw(" clear palette"),
                 muted_span("  ·  "),
@@ -858,7 +899,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                     Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" is not a Spark command", Style::new().fg(SOFT_TEXT)),
-                Span::styled("  Enter shows warning", Style::new().fg(MUTED)),
+                Span::styled("  Enter checks prompt commands", Style::new().fg(MUTED)),
             ])]);
         }
 
@@ -894,7 +935,8 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         for (index, message) in self.messages.iter().enumerate() {
             lines.push(role_line(message.role));
             let body_lines = match message.role {
-                MessageRole::Assistant | MessageRole::User => render_markdown_lines(&message.body),
+                MessageRole::Assistant => render_markdown_lines(&message.body),
+                MessageRole::User => render_user_lines(&message.body),
                 MessageRole::Tool => render_tool_lines(
                     &message.body,
                     self.activity_details_expanded,
@@ -1287,6 +1329,21 @@ impl ActivityState {
         }
     }
 
+    fn meter_span(&self) -> Span<'static> {
+        if !matches!(self.phase, ActivityPhase::Tools) || self.total_tools == 0 {
+            return muted_span("");
+        }
+        let width = 10usize;
+        let complete = self.finished_tools.min(self.total_tools) * width / self.total_tools.max(1);
+        let mut meter = String::with_capacity(width + 4);
+        meter.push_str("  [");
+        for index in 0..width {
+            meter.push(if index < complete { '=' } else { '-' });
+        }
+        meter.push(']');
+        Span::styled(meter, Style::new().fg(TOOL_COLOR))
+    }
+
     fn header_style(&self) -> Style {
         match self.phase {
             ActivityPhase::Idle => Style::new().fg(Color::DarkGray),
@@ -1296,12 +1353,20 @@ impl ActivityState {
         }
     }
 
+    fn live_style(&self) -> Style {
+        match self.phase {
+            ActivityPhase::Thinking | ActivityPhase::Receiving => {
+                Style::new().fg(shimmer_color(self.tick))
+            }
+            _ => self.header_style(),
+        }
+    }
+
     fn spinner(&self) -> &'static str {
         if matches!(self.phase, ActivityPhase::Idle) {
             return "";
         }
-        const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
-        FRAMES[self.tick % FRAMES.len()]
+        spinner_frame_for_activity(self.phase, self.current_tool.as_deref(), self.tick)
     }
 }
 
@@ -1332,6 +1397,99 @@ fn layout_constraints(
     constraints.push(Constraint::Length(3));
     constraints.push(Constraint::Length(1));
     constraints
+}
+
+fn input_line(input: &str) -> Line<'static> {
+    const KEYWORDS: [&str; 2] = ["ultrathink", "ultraplan"];
+    let lower = input.to_ascii_lowercase();
+    let mut spans = Vec::new();
+    let mut cursor = 0usize;
+
+    while cursor < input.len() {
+        let next = KEYWORDS
+            .iter()
+            .filter_map(|keyword| {
+                lower[cursor..]
+                    .find(keyword)
+                    .map(|offset| (cursor + offset, *keyword))
+            })
+            .min_by_key(|(index, _)| *index);
+
+        let Some((start, keyword)) = next else {
+            spans.push(Span::raw(input[cursor..].to_string()));
+            break;
+        };
+        if start > cursor {
+            spans.push(Span::raw(input[cursor..start].to_string()));
+        }
+        let end = start + keyword.len();
+        push_rainbow_spans(&mut spans, &input[start..end]);
+        cursor = end;
+    }
+
+    Line::from(spans)
+}
+
+fn push_rainbow_spans(spans: &mut Vec<Span<'static>>, text: &str) {
+    for (index, ch) in text.chars().enumerate() {
+        spans.push(Span::styled(
+            ch.to_string(),
+            Style::new()
+                .fg(rainbow_color(index))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+}
+
+fn rainbow_color(index: usize) -> Color {
+    const COLORS: [Color; 7] = [
+        Color::Red,
+        Color::Rgb(255, 151, 48),
+        Color::Yellow,
+        Color::Green,
+        Color::Cyan,
+        Color::Blue,
+        Color::Magenta,
+    ];
+    COLORS[index % COLORS.len()]
+}
+
+fn shimmer_color(tick: usize) -> Color {
+    const COLORS: [Color; 4] = [
+        Color::Cyan,
+        Color::LightCyan,
+        Color::LightBlue,
+        Color::LightMagenta,
+    ];
+    COLORS[tick % COLORS.len()]
+}
+
+fn spark_spinner_frame(tick: usize) -> &'static str {
+    spinner_frame_for_phase(ActivityPhase::Thinking, tick)
+}
+
+fn spinner_frame_for_activity(
+    phase: ActivityPhase,
+    current_tool: Option<&str>,
+    tick: usize,
+) -> &'static str {
+    if matches!(phase, ActivityPhase::Tools) && current_tool == Some("web.search") {
+        let symbols = throbber_widgets_tui::OGHAM_A.symbols;
+        return symbols[tick % symbols.len()];
+    }
+    spinner_frame_for_phase(phase, tick)
+}
+
+fn spinner_frame_for_phase(phase: ActivityPhase, tick: usize) -> &'static str {
+    let symbols = match phase {
+        ActivityPhase::Idle | ActivityPhase::Thinking => {
+            throbber_widgets_tui::BRAILLE_DOUBLE.symbols
+        }
+        ActivityPhase::Receiving => throbber_widgets_tui::HORIZONTAL_BLOCK.symbols,
+        ActivityPhase::Compacting => throbber_widgets_tui::WHITE_CIRCLE.symbols,
+        ActivityPhase::Tools => throbber_widgets_tui::BRAILLE_SIX.symbols,
+    };
+    symbols[tick % symbols.len()]
 }
 
 fn key_span(text: &'static str) -> Span<'static> {
@@ -1371,6 +1529,10 @@ fn role_line(role: MessageRole) -> Line<'static> {
             Style::new().fg(color).add_modifier(Modifier::BOLD),
         ),
     ])
+}
+
+fn render_user_lines(text: &str) -> Vec<Line<'static>> {
+    text.lines().map(input_line).collect()
 }
 
 fn render_tool_lines(
@@ -1658,8 +1820,7 @@ fn summarize_compaction_text(text: &str) -> CompactionSummary {
 }
 
 fn activity_row_spinner(tick: usize) -> &'static str {
-    const FRAMES: [&str; 4] = ["|", "/", "-", "\\"];
-    FRAMES[tick % FRAMES.len()]
+    spark_spinner_frame(tick)
 }
 
 fn plain_lines(text: &str) -> Vec<Line<'static>> {
@@ -1866,6 +2027,19 @@ fn next_reasoning_effort(current: &str) -> &'static str {
     }
 }
 
+fn complete_slash_command_input(input: &str) -> Option<String> {
+    if !input.trim_start().starts_with('/') {
+        return None;
+    }
+    let command = chat::matching_slash_commands(input).into_iter().next()?;
+    let token = command
+        .usage
+        .split_whitespace()
+        .next()
+        .unwrap_or(command.name);
+    Some(format!("{token} "))
+}
+
 fn adjust_removed_index(value: Option<usize>, removed: usize) -> Option<usize> {
     match value {
         Some(index) if index == removed => None,
@@ -1895,9 +2069,10 @@ mod tests {
     use crate::agent::AgentDisplayEvent;
 
     use super::{
-        ActivityPhase, ChatTui, MessageRole, compact_inline, format_tool_args,
-        is_cycle_reasoning_effort_key, next_reasoning_effort, register_escape_tap,
-        should_handle_key_event, wrapped_line_count,
+        ActivityPhase, ChatTui, MessageRole, activity_row_spinner, compact_inline,
+        complete_slash_command_input, format_tool_args, input_line, is_cycle_reasoning_effort_key,
+        next_reasoning_effort, register_escape_tap, should_handle_key_event, spark_spinner_frame,
+        spinner_frame_for_activity, spinner_frame_for_phase, wrapped_line_count,
     };
 
     #[test]
@@ -1967,6 +2142,79 @@ mod tests {
     }
 
     #[test]
+    fn input_line_rainbow_highlights_deep_thinking_keywords() {
+        let line = input_line("ultrathink before changing src/chat/tui.rs");
+        let rendered = flatten_lines(&[line.clone()]);
+        assert!(rendered.contains("ultrathink"));
+
+        let rainbow_spans = line
+            .spans
+            .iter()
+            .filter(|span| span.content.len() == 1 && span.style.fg.is_some())
+            .count();
+        assert!(
+            rainbow_spans >= "ultrathink".len(),
+            "expected each keyword letter to receive rainbow styling"
+        );
+    }
+
+    #[test]
+    fn spark_spinner_has_more_than_four_frames_for_smoother_motion() {
+        let frames = (0..12).map(spark_spinner_frame).collect::<Vec<_>>();
+        let unique = frames
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert!(unique.len() >= 6);
+        assert!(frames.contains(&throbber_widgets_tui::BRAILLE_DOUBLE.symbols[0]));
+        assert!(frames.contains(&throbber_widgets_tui::BRAILLE_DOUBLE.symbols[5]));
+    }
+
+    #[test]
+    fn spark_spinner_uses_throbber_widget_symbol_sets() {
+        let expected = throbber_widgets_tui::BRAILLE_DOUBLE.symbols;
+        let frames = (0..expected.len())
+            .map(spark_spinner_frame)
+            .collect::<Vec<_>>();
+
+        assert_eq!(frames, expected);
+        assert_eq!(activity_row_spinner(expected.len()), expected[0]);
+    }
+
+    #[test]
+    fn activity_phases_use_distinct_throbber_sets() {
+        assert_eq!(
+            spinner_frame_for_phase(ActivityPhase::Thinking, 0),
+            throbber_widgets_tui::BRAILLE_DOUBLE.symbols[0]
+        );
+        assert_eq!(
+            spinner_frame_for_phase(ActivityPhase::Tools, 0),
+            throbber_widgets_tui::BRAILLE_SIX.symbols[0]
+        );
+        assert_eq!(
+            spinner_frame_for_phase(ActivityPhase::Compacting, 0),
+            throbber_widgets_tui::WHITE_CIRCLE.symbols[0]
+        );
+        assert_eq!(
+            spinner_frame_for_phase(ActivityPhase::Receiving, 0),
+            throbber_widgets_tui::HORIZONTAL_BLOCK.symbols[0]
+        );
+    }
+
+    #[test]
+    fn web_search_uses_ogham_spinner_while_other_tools_use_braille_six() {
+        assert_eq!(
+            spinner_frame_for_activity(ActivityPhase::Tools, Some("web.search"), 0),
+            throbber_widgets_tui::OGHAM_A.symbols[0]
+        );
+        assert_eq!(
+            spinner_frame_for_activity(ActivityPhase::Tools, Some("fs.search"), 0),
+            throbber_widgets_tui::BRAILLE_SIX.symbols[0]
+        );
+    }
+
+    #[test]
     fn assistant_deltas_append_to_current_assistant_message() {
         let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
 
@@ -2027,6 +2275,20 @@ mod tests {
         let rendered = flatten_lines(&tui.command_menu_lines().expect("unknown menu"));
         assert!(rendered.contains("is not a Spark command"));
         assert!(rendered.contains("/wat"));
+    }
+
+    #[test]
+    fn tab_completion_expands_first_matching_slash_command() {
+        assert_eq!(
+            complete_slash_command_input("/rea").as_deref(),
+            Some("/reasoning ")
+        );
+        assert_eq!(
+            complete_slash_command_input("/sk").as_deref(),
+            Some("/skill ")
+        );
+        assert_eq!(complete_slash_command_input("hello"), None);
+        assert_eq!(complete_slash_command_input("/wat"), None);
     }
 
     #[test]

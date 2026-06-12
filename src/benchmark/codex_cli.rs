@@ -1,6 +1,8 @@
 use std::{
     collections::BTreeMap,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
+    process::Command as StdCommand,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -10,7 +12,14 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 
 use crate::{
-    benchmark::workspace,
+    benchmark::{
+        expected_scenario_artifacts,
+        infrastructure::{
+            contains_external_infrastructure_failure_signal, external_infrastructure_retry_hint,
+            failure_points_contain,
+        },
+        workspace,
+    },
     cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind},
     profile::{scenarios, validation},
 };
@@ -37,6 +46,10 @@ pub(crate) struct CodexCliBenchmarkRow {
     pub(crate) scenario: String,
     pub(crate) repeat_index: usize,
     pub(crate) model: String,
+    #[serde(default)]
+    pub(crate) command_path: String,
+    #[serde(default)]
+    pub(crate) command_version: String,
     #[serde(default = "default_reasoning_effort")]
     pub(crate) reasoning_effort: String,
     pub(crate) score: f64,
@@ -75,6 +88,8 @@ pub(crate) struct CodexCliBenchmarkRow {
     pub(crate) source_bytes: u64,
     pub(crate) final_message_chars: u64,
     pub(crate) run_dir: String,
+    #[serde(default)]
+    pub(crate) provider_retry_hint: String,
     pub(crate) failure_points: String,
 }
 
@@ -99,6 +114,8 @@ pub(crate) async fn run_codex_cli_benchmark(
     let started_at = unix_millis();
     let mut rows = Vec::new();
     let scenarios = selected_scenarios(options.suite, &options.scenarios)?;
+    let codex_command_path = resolve_executable_path(&options.codex_bin);
+    let codex_command_version = command_version(&options.codex_bin);
     for scenario in scenarios {
         for repeat_index in 1..=options.repeat {
             let scenario_cwd = workspace::create_benchmark_workspace(
@@ -113,9 +130,16 @@ pub(crate) async fn run_codex_cli_benchmark(
                 scenario_cwd.display()
             );
             scenarios::prepare_profile_scenario(&scenario_cwd, scenario)?;
-            let row =
-                run_codex_cli_scenario(&options, &scenario_cwd, scenario, repeat_index, started_at)
-                    .await?;
+            let row = run_codex_cli_scenario(
+                &options,
+                &scenario_cwd,
+                scenario,
+                repeat_index,
+                started_at,
+                &codex_command_path,
+                &codex_command_version,
+            )
+            .await?;
             println!(
                 "codex_cli scenario={} repeat={}/{} score={:.1} success={} duration_ms={} failure_points={}",
                 row.scenario,
@@ -141,6 +165,9 @@ pub(crate) async fn run_codex_cli_benchmark(
             "suite": options.suite.name(),
             "runner": "codex-cli",
             "reasoning_effort": options.reasoning_effort.as_str(),
+            "codex_bin": options.codex_bin.display().to_string(),
+            "codex_command_path": codex_command_path,
+            "codex_command_version": codex_command_version,
             "generated_at_unix_ms": started_at,
             "rows": rows,
             "aggregate": aggregate,
@@ -161,6 +188,8 @@ async fn run_codex_cli_scenario(
     scenario: ProfileScenarioKind,
     repeat_index: usize,
     batch_stamp: u128,
+    codex_command_path: &str,
+    codex_command_version: &str,
 ) -> Result<CodexCliBenchmarkRow> {
     let scenario_name = scenario.name();
     let run_dir = options
@@ -251,13 +280,20 @@ async fn run_codex_cli_scenario(
     let final_message = std::fs::read_to_string(&final_message_path).unwrap_or_default();
     let metrics = parse_codex_json_events(&stdout);
     let stderr_metrics = classify_stderr(&stderr);
-    let expected_artifacts = expected_artifacts(scenario);
+    let request_failure =
+        contains_external_infrastructure_failure_signal(&format!("{stdout}\n{stderr}"));
+    let provider_retry_hint =
+        external_infrastructure_retry_hint(&format!("{stdout}\n{stderr}")).unwrap_or_default();
+    let expected_artifacts = expected_scenario_artifacts(scenario);
     let present_artifacts = expected_artifacts
         .iter()
         .filter(|path| scenario_cwd.join(path).exists())
         .count() as u64;
-    let validation =
-        validation::run_and_write_scenario_validation(scenario_cwd, &run_dir, scenario).await?;
+    let validation = if request_failure {
+        None
+    } else {
+        validation::run_and_write_scenario_validation(scenario_cwd, &run_dir, scenario).await?
+    };
     let validation_exit_code = validation.as_ref().and_then(|result| result.exit_code);
     let validation_timed_out = validation.as_ref().is_some_and(|result| result.timed_out);
     let browser_validation = validation
@@ -285,6 +321,7 @@ async fn run_codex_cli_scenario(
         browser_validation_present,
         browser_validation_exit_code,
         browser_validation_timed_out,
+        request_failure,
     );
 
     let mut row = CodexCliBenchmarkRow {
@@ -293,6 +330,8 @@ async fn run_codex_cli_scenario(
         scenario: scenario_name.to_string(),
         repeat_index,
         model: options.model.clone(),
+        command_path: codex_command_path.to_string(),
+        command_version: codex_command_version.to_string(),
         reasoning_effort: options.reasoning_effort.clone(),
         score: 0.0,
         success: exit_code == Some(0)
@@ -337,6 +376,7 @@ async fn run_codex_cli_scenario(
             .unwrap_or(0),
         final_message_chars: final_message.chars().count() as u64,
         run_dir: run_dir.display().to_string(),
+        provider_retry_hint,
         failure_points: failure_points.join(";"),
     };
     row.score = codex_score(&row);
@@ -345,6 +385,107 @@ async fn run_codex_cli_scenario(
 
 fn default_reasoning_effort() -> String {
     "unknown".to_string()
+}
+
+fn resolve_executable_path(command: &Path) -> String {
+    if command_has_directory_component(command) {
+        return canonical_display(command).unwrap_or_else(|| command.display().to_string());
+    }
+
+    let Some(file_name) = command.file_name() else {
+        return String::new();
+    };
+    let candidates = executable_candidate_names(file_name);
+    let Some(path) = std::env::var_os("PATH") else {
+        return String::new();
+    };
+    for dir in std::env::split_paths(&path) {
+        for candidate in &candidates {
+            let executable = dir.join(candidate);
+            if executable.is_file() {
+                return canonical_display(&executable)
+                    .unwrap_or_else(|| executable.display().to_string());
+            }
+        }
+    }
+    String::new()
+}
+
+fn command_has_directory_component(command: &Path) -> bool {
+    command.is_absolute() || command.components().count() > 1
+}
+
+fn canonical_display(path: &Path) -> Option<String> {
+    std::fs::canonicalize(path)
+        .ok()
+        .map(|path| display_path(&path))
+}
+
+fn display_path(path: &Path) -> String {
+    clean_display_path(path.display().to_string())
+}
+
+#[cfg(windows)]
+fn clean_display_path(path: String) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn clean_display_path(path: String) -> String {
+    path
+}
+
+#[cfg(windows)]
+fn executable_candidate_names(file_name: &OsStr) -> Vec<OsString> {
+    let mut names = vec![file_name.to_os_string()];
+    if Path::new(file_name).extension().is_some() {
+        return names;
+    }
+
+    let pathext =
+        std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+    for extension in pathext.to_string_lossy().split(';') {
+        let extension = extension.trim();
+        if extension.is_empty() {
+            continue;
+        }
+        let mut name = file_name.to_os_string();
+        name.push(extension);
+        names.push(name);
+    }
+    names
+}
+
+#[cfg(not(windows))]
+fn executable_candidate_names(file_name: &OsStr) -> Vec<OsString> {
+    vec![file_name.to_os_string()]
+}
+
+fn command_version(command: &Path) -> String {
+    let Ok(output) = StdCommand::new(command).arg("--version").output() else {
+        return String::new();
+    };
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(normalized_version_line)
+        .unwrap_or_default()
+}
+
+fn normalized_version_line(line: &str) -> String {
+    let normalized = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized.chars().take(200).collect()
 }
 
 fn external_benchmark_prompt(
@@ -497,12 +638,18 @@ fn actionable_stderr_line(line: &str) -> bool {
         " WARN codex_core_skills::",
         " WARN codex_core::shell_snapshot:",
         " WARN codex_mcp::rmcp_client:",
+        " WARN codex_rmcp_client::rmcp_client:",
+        " WARN rmcp::transport::auth:",
         " ERROR rmcp::transport::worker:",
         "AuthRequired(",
         "Auth required",
+        "Auth(AuthorizationRequired)",
+        "AuthorizationRequired",
+        "OAuth authorization required",
         "plugin MCP server uses an unknown transport type",
         "failed to parse plugin MCP server",
         "failed to load plugin",
+        "ignoring interface.defaultPrompt",
         "ignoring interface.",
         "Failed to create shell snapshot for powershell",
         "failed to initialize MCP client during shutdown",
@@ -510,41 +657,6 @@ fn actionable_stderr_line(line: &str) -> bool {
     !benign_fragments
         .iter()
         .any(|fragment| line.contains(fragment))
-}
-
-fn expected_artifacts(scenario: ProfileScenarioKind) -> Vec<&'static str> {
-    match scenario {
-        ProfileScenarioKind::ReactCalculatorScaffold => vec![
-            ".spark-scenarios/react-calculator/package.json",
-            ".spark-scenarios/react-calculator/index.html",
-            ".spark-scenarios/react-calculator/src/main.tsx",
-            ".spark-scenarios/react-calculator/src/App.tsx",
-            ".spark-scenarios/react-calculator/src/App.test.tsx",
-            ".spark-scenarios/react-calculator/src/styles.css",
-        ],
-        ProfileScenarioKind::RustLogAnalyzerScaffold => vec![
-            ".spark-scenarios/rust-log-analyzer/Cargo.toml",
-            ".spark-scenarios/rust-log-analyzer/src/lib.rs",
-            ".spark-scenarios/rust-log-analyzer/src/main.rs",
-        ],
-        ProfileScenarioKind::GithubIssueBugfix => {
-            vec![".spark-scenarios/github-issue-bugfix/src/quote.ts"]
-        }
-        ProfileScenarioKind::GithubIssueTriage => {
-            vec![".spark-scenarios/github-issue-triage/triage.md"]
-        }
-        ProfileScenarioKind::TechnicalEssay => vec![".spark-scenarios/technical-essay/essay.md"],
-        ProfileScenarioKind::ConfigMigration => vec![
-            ".spark-scenarios/config-migration/config/app.json",
-            ".spark-scenarios/config-migration/src/config.ts",
-            ".spark-scenarios/config-migration/docs/config.md",
-        ],
-        ProfileScenarioKind::OpsReport => vec![
-            ".spark-scenarios/ops-report/metrics.json",
-            ".spark-scenarios/ops-report/report.md",
-        ],
-        _ => Vec::new(),
-    }
 }
 
 fn codex_failure_points(
@@ -560,8 +672,22 @@ fn codex_failure_points(
     browser_validation_present: bool,
     browser_validation_exit_code: Option<i32>,
     browser_validation_timed_out: bool,
+    request_failure: bool,
 ) -> Vec<String> {
     let mut points = Vec::new();
+    if request_failure {
+        points.push("request_failure".to_string());
+        if timed_out {
+            points.push("timeout".to_string());
+        }
+        if exit_code != Some(0) {
+            points.push("nonzero_exit".to_string());
+        }
+        if metrics.non_json_stdout_lines > 0 {
+            points.push("non_json_stdout_noise".to_string());
+        }
+        return points;
+    }
     if timed_out {
         points.push("timeout".to_string());
     }
@@ -589,13 +715,25 @@ fn codex_failure_points(
     if metrics.non_json_stdout_lines > 0 {
         points.push("non_json_stdout_noise".to_string());
     }
-    if stderr_metrics.actionable_lines > 0 {
+    let unrecovered_failure = timed_out
+        || exit_code != Some(0)
+        || final_message.trim().is_empty()
+        || present_artifacts < expected_artifacts
+        || validation_timed_out
+        || validation_exit_code.is_some_and(|code| code != 0)
+        || browser_validation_timed_out
+        || (browser_validation_present && browser_validation_exit_code != Some(0))
+        || request_failure;
+    if stderr_metrics.actionable_lines > 0 && unrecovered_failure {
         points.push("tool_execution_error".to_string());
     }
     points
 }
 
 fn codex_score(row: &CodexCliBenchmarkRow) -> f64 {
+    if failure_points_contain(&row.failure_points, "request_failure") {
+        return 0.0;
+    }
     let mut quality_penalty = 0.0;
     if row.timed_out {
         quality_penalty += 35.0;
@@ -655,6 +793,17 @@ fn aggregate_rows(suite: &str, rows: &[CodexCliBenchmarkRow]) -> Value {
     } else {
         rows.iter().map(|row| row.score).sum::<f64>() / rows.len() as f64
     };
+    let comparable_rows = rows
+        .iter()
+        .filter(|row| !failure_points_contain(&row.failure_points, "request_failure"))
+        .collect::<Vec<_>>();
+    let comparable_average_score = if comparable_rows.is_empty() {
+        None
+    } else {
+        Some(round1(
+            comparable_rows.iter().map(|row| row.score).sum::<f64>() / comparable_rows.len() as f64,
+        ))
+    };
     let failure_points = rows
         .iter()
         .flat_map(|row| {
@@ -666,12 +815,40 @@ fn aggregate_rows(suite: &str, rows: &[CodexCliBenchmarkRow]) -> Value {
             *counts.entry(item.to_string()).or_default() += 1;
             counts
         });
+    let request_failure_scenarios = rows
+        .iter()
+        .filter(|row| failure_points_contain(&row.failure_points, "request_failure"))
+        .fold(BTreeMap::<String, usize>::new(), |mut counts, row| {
+            *counts.entry(row.scenario.clone()).or_default() += 1;
+            counts
+        });
+    let request_failure_retry_hints = rows
+        .iter()
+        .filter(|row| failure_points_contain(&row.failure_points, "request_failure"))
+        .filter(|row| !row.provider_retry_hint.trim().is_empty())
+        .fold(BTreeMap::<String, String>::new(), |mut hints, row| {
+            hints
+                .entry(row.scenario.clone())
+                .or_insert_with(|| row.provider_retry_hint.clone());
+            hints
+        });
+    let diagnostics = json!({
+        "request_failure": rows
+            .iter()
+            .filter(|row| failure_points_contain(&row.failure_points, "request_failure"))
+            .count(),
+        "request_failure_scenarios": request_failure_scenarios,
+        "request_failure_retry_hints": request_failure_retry_hints,
+    });
     json!({
         "suite": suite,
         "runner": "codex-cli",
         "runs": rows.len(),
         "successful_runs": rows.iter().filter(|row| row.success).count(),
+        "comparable_runs": comparable_rows.len(),
+        "successful_comparable_runs": comparable_rows.iter().filter(|row| row.success).count(),
         "average_score": round1(average_score),
+        "comparable_average_score": comparable_average_score,
         "min_score": rows.iter().map(|row| row.score).fold(100.0, f64::min),
         "max_score": rows.iter().map(|row| row.score).fold(0.0, f64::max),
         "total_duration_ms": rows.iter().map(|row| row.duration_ms).sum::<u128>(),
@@ -682,6 +859,7 @@ fn aggregate_rows(suite: &str, rows: &[CodexCliBenchmarkRow]) -> Value {
         "total_stderr_lines": rows.iter().map(|row| row.stderr_lines).sum::<u64>(),
         "total_actionable_stderr_lines": rows.iter().map(|row| row.actionable_stderr_lines).sum::<u64>(),
         "failure_points": failure_points,
+        "diagnostics": diagnostics,
     })
 }
 
@@ -750,6 +928,75 @@ mod tests {
     }
 
     #[test]
+    fn version_line_is_normalized_and_bounded() {
+        let long_version = format!(" codex-cli   {}\t{}", "0.139.0", "x".repeat(240));
+
+        let normalized = normalized_version_line(&long_version);
+
+        assert!(normalized.starts_with("codex-cli 0.139.0 "));
+        assert_eq!(normalized.chars().count(), 200);
+    }
+
+    #[test]
+    fn display_path_keeps_non_verbatim_paths() {
+        assert_eq!(
+            clean_display_path(r"C:\Users\ghost\.bun\bin\codex.exe".to_string()),
+            r"C:\Users\ghost\.bun\bin\codex.exe"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn display_path_strips_windows_verbatim_prefixes() {
+        assert_eq!(
+            clean_display_path(r"\\?\C:\Users\ghost\.bun\bin\codex.exe".to_string()),
+            r"C:\Users\ghost\.bun\bin\codex.exe"
+        );
+        assert_eq!(
+            clean_display_path(r"\\?\UNC\server\share\codex.exe".to_string()),
+            r"\\server\share\codex.exe"
+        );
+    }
+
+    #[test]
+    fn missing_command_provenance_deserializes_as_empty_strings() {
+        let row: CodexCliBenchmarkRow = serde_json::from_value(json!({
+            "runner": "codex-cli",
+            "suite": "real-world",
+            "scenario": "config-migration",
+            "repeat_index": 1,
+            "model": "gpt-test",
+            "score": 100.0,
+            "success": true,
+            "exit_code": 0,
+            "timed_out": false,
+            "duration_ms": 10000,
+            "json_events": 1,
+            "non_json_stdout_lines": 0,
+            "stderr_lines": 0,
+            "turns": 1,
+            "completed_items": 1,
+            "agent_messages": 1,
+            "tool_items": 1,
+            "input_tokens": 1000,
+            "cached_input_tokens": 0,
+            "output_tokens": 100,
+            "reasoning_output_tokens": 0,
+            "expected_artifacts": 0,
+            "present_artifacts": 0,
+            "validation_exit_code": 0,
+            "validation_timed_out": false,
+            "final_message_chars": 100,
+            "run_dir": "run",
+            "failure_points": ""
+        }))
+        .expect("legacy row should deserialize");
+
+        assert_eq!(row.command_path, "");
+        assert_eq!(row.command_version, "");
+    }
+
+    #[test]
     fn codex_score_penalizes_missing_artifacts_and_noise() {
         let row = CodexCliBenchmarkRow {
             runner: "codex-cli".to_string(),
@@ -757,6 +1004,8 @@ mod tests {
             scenario: "react-calculator-scaffold".to_string(),
             repeat_index: 1,
             model: "gpt-5.3-codex-spark".to_string(),
+            command_path: String::new(),
+            command_version: String::new(),
             reasoning_effort: "medium".to_string(),
             score: 0.0,
             success: false,
@@ -787,6 +1036,7 @@ mod tests {
             source_bytes: 0,
             final_message_chars: 20,
             run_dir: "run".to_string(),
+            provider_retry_hint: String::new(),
             failure_points: "missing_expected_artifact".to_string(),
         };
 
@@ -799,11 +1049,16 @@ mod tests {
 2026-06-04T06:55:39.703102Z  WARN codex_core_plugins::loader: plugin MCP server uses an unknown transport type plugin=C:\Users\ghost\.codex\plugins\cache\bars-local\codex-memory\2.1.0 transport="local"
 2026-06-04T06:56:11.358255Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path with '..' must resolve under plugin assets/
 2026-06-04T06:55:41.120472Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { error="invalid_token" })
+2026-06-09T22:33:59.864877Z  WARN codex_rmcp_client::rmcp_client: failed to refresh OAuth tokens: failed to refresh OAuth tokens for server context7
+2026-06-09T22:34:30.221724Z  WARN codex_core_plugins::manifest: ignoring interface.defaultPrompt[0]: prompt must be at most 128 characters path=C:\Users\ghost\.codex\.tmp\plugins\plugins\ngs-analysis\.codex-plugin/plugin.json
+2026-06-09T22:45:18.521013Z  WARN rmcp::transport::auth: Token refresh not possible, re-authorization required. error=OAuth token refresh failed: Server returned error response: invalid_grant: Invalid refresh token
+2026-06-09T22:45:18.825115Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)
+2026-06-09T22:46:15.630294Z  WARN codex_mcp::rmcp_client: failed to initialize MCP client during shutdown: MCP startup failed: handshaking with MCP server failed: Auth error: OAuth authorization required, when send initialize request
 "#;
 
         let metrics = classify_stderr(stderr);
 
-        assert_eq!(metrics.non_empty_lines, 4);
+        assert_eq!(metrics.non_empty_lines, 9);
         assert_eq!(metrics.actionable_lines, 0);
     }
 
@@ -816,12 +1071,168 @@ mod tests {
     }
 
     #[test]
+    fn recovered_codex_stderr_does_not_become_tool_failure_point() {
+        let points = codex_failure_points(
+            Some(0),
+            false,
+            &CodexEventMetrics::default(),
+            &StderrMetrics {
+                non_empty_lines: 1,
+                actionable_lines: 1,
+            },
+            "done",
+            3,
+            3,
+            Some(0),
+            false,
+            false,
+            None,
+            false,
+            false,
+        );
+
+        assert!(!points.contains(&"tool_execution_error".to_string()));
+    }
+
+    #[test]
+    fn unrecovered_codex_stderr_still_becomes_tool_failure_point() {
+        let points = codex_failure_points(
+            Some(0),
+            false,
+            &CodexEventMetrics::default(),
+            &StderrMetrics {
+                non_empty_lines: 1,
+                actionable_lines: 1,
+            },
+            "done",
+            3,
+            3,
+            Some(1),
+            false,
+            false,
+            None,
+            false,
+            false,
+        );
+
+        assert!(points.contains(&"validation_failed".to_string()));
+        assert!(points.contains(&"tool_execution_error".to_string()));
+    }
+
+    #[test]
+    fn codex_usage_limits_are_request_failures() {
+        let text = r#"{"type":"error","message":"You've hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again at 5:38 PM."}"#;
+
+        assert!(contains_external_infrastructure_failure_signal(text));
+
+        let points = codex_failure_points(
+            Some(1),
+            false,
+            &CodexEventMetrics::default(),
+            &StderrMetrics::default(),
+            "",
+            3,
+            3,
+            Some(1),
+            false,
+            false,
+            None,
+            false,
+            true,
+        );
+
+        assert!(points.contains(&"request_failure".to_string()));
+        assert!(points.contains(&"nonzero_exit".to_string()));
+        assert!(!points.contains(&"missing_final_message".to_string()));
+        assert!(!points.contains(&"validation_failed".to_string()));
+    }
+
+    #[test]
+    fn codex_aggregate_separates_infrastructure_runs_from_comparable_runs() {
+        let mut row = CodexCliBenchmarkRow {
+            runner: "codex-cli".to_string(),
+            suite: "real-world".to_string(),
+            scenario: "config-migration".to_string(),
+            repeat_index: 1,
+            model: "gpt-test".to_string(),
+            command_path: String::new(),
+            command_version: String::new(),
+            reasoning_effort: "medium".to_string(),
+            score: 0.0,
+            success: false,
+            exit_code: Some(1),
+            timed_out: false,
+            duration_ms: 10_000,
+            json_events: 4,
+            non_json_stdout_lines: 0,
+            stderr_lines: 0,
+            actionable_stderr_lines: 0,
+            turns: 0,
+            completed_items: 0,
+            agent_messages: 0,
+            tool_items: 0,
+            input_tokens: 0,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+            expected_artifacts: 3,
+            present_artifacts: 3,
+            validation_exit_code: None,
+            validation_timed_out: false,
+            browser_validation_present: false,
+            browser_validation_exit_code: None,
+            browser_validation_timed_out: false,
+            browser_screenshot: String::new(),
+            source_files: 2,
+            source_bytes: 376,
+            final_message_chars: 0,
+            run_dir: "run".to_string(),
+            provider_retry_hint: "try again at 5:38 PM".to_string(),
+            failure_points: "request_failure;nonzero_exit".to_string(),
+        };
+
+        let infrastructure_only = aggregate_rows("real-world", &[row.clone()]);
+
+        assert_eq!(infrastructure_only["runs"], 1);
+        assert_eq!(infrastructure_only["comparable_runs"], 0);
+        assert_eq!(infrastructure_only["successful_comparable_runs"], 0);
+        assert_eq!(infrastructure_only["diagnostics"]["request_failure"], 1);
+        assert_eq!(
+            infrastructure_only["diagnostics"]["request_failure_scenarios"]["config-migration"],
+            1
+        );
+        assert_eq!(
+            infrastructure_only["diagnostics"]["request_failure_retry_hints"]["config-migration"],
+            "try again at 5:38 PM"
+        );
+        assert_eq!(infrastructure_only["average_score"], 0.0);
+        assert!(infrastructure_only["comparable_average_score"].is_null());
+        assert_eq!(codex_score(&row), 0.0);
+
+        row.success = true;
+        row.score = 100.0;
+        row.validation_exit_code = Some(0);
+        row.provider_retry_hint = String::new();
+        row.failure_points = String::new();
+        let mixed = aggregate_rows("real-world", &[row]);
+
+        assert_eq!(mixed["runs"], 1);
+        assert_eq!(mixed["comparable_runs"], 1);
+        assert_eq!(mixed["successful_comparable_runs"], 1);
+        assert_eq!(mixed["comparable_average_score"], 100.0);
+    }
+
+    #[test]
     fn scaffold_scenarios_have_artifact_expectations() {
         assert_eq!(
-            expected_artifacts(ProfileScenarioKind::RustLogAnalyzerScaffold).len(),
+            expected_scenario_artifacts(ProfileScenarioKind::RustLogAnalyzerScaffold).len(),
             3
         );
-        assert!(expected_artifacts(ProfileScenarioKind::RepoSurvey).is_empty());
+        assert_eq!(
+            expected_scenario_artifacts(ProfileScenarioKind::MergeConflictResolution),
+            &[".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"]
+        );
+        assert!(expected_scenario_artifacts(ProfileScenarioKind::RepoSurvey).is_empty());
     }
 
     #[test]

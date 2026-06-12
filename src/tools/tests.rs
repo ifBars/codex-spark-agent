@@ -717,6 +717,60 @@ fn fs_replace_accepts_line_ending_equivalent_old_text() {
 }
 
 #[test]
+fn fs_replace_accepts_display_line_number_prefixed_blocks() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.json");
+    std::fs::write(
+        &path,
+        "{\n  \"schemaVersion\": 1,\n  \"authMode\": \"password\"\n}\n",
+    )
+    .expect("write sample");
+
+    let result = fs_replace(
+        dir.path(),
+        json!({
+            "path": "config.json",
+            "old": "1: {\n2:   \"schemaVersion\": 1,\n3:   \"authMode\": \"password\"\n4: }",
+            "new": "1: {\n2:   \"schemaVersion\": 2,\n3:   \"authentication\": {\n4:     \"method\": \"password\"\n5:   }\n6: }",
+            "expected_replacements": 1
+        }),
+    )
+    .expect("replace");
+
+    assert!(result.ok);
+    assert_eq!(result.data["display_line_numbers_stripped"], true);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "{\n  \"schemaVersion\": 2,\n  \"authentication\": {\n    \"method\": \"password\"\n  }\n}\n"
+    );
+}
+
+#[test]
+fn fs_replace_prefers_exact_literal_numbered_text_before_stripping_prefixes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("numbered.txt");
+    std::fs::write(&path, "1: alpha\n2: beta\n").expect("write sample");
+
+    let result = fs_replace(
+        dir.path(),
+        json!({
+            "path": "numbered.txt",
+            "old": "1: alpha\n2: beta",
+            "new": "1: ALPHA\n2: BETA",
+            "expected_replacements": 1
+        }),
+    )
+    .expect("replace");
+
+    assert!(result.ok);
+    assert_eq!(result.data["display_line_numbers_stripped"], false);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "1: ALPHA\n2: BETA\n"
+    );
+}
+
+#[test]
 fn fs_replace_accepts_leading_indent_equivalent_block() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("routes.ts");
@@ -822,6 +876,88 @@ fn fs_edit_expected_old_accepts_line_ending_equivalent_text() {
     assert_eq!(
         std::fs::read_to_string(&path).expect("read updated"),
         "ONE\nTWO\nthree\n"
+    );
+}
+
+#[test]
+fn fs_edit_expected_old_accepts_trailing_newline_for_selected_range() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.md");
+    std::fs::write(&path, "# Config\n\nVersion 1 uses old keys.\n").expect("write sample");
+
+    let result = fs_edit(
+        dir.path(),
+        json!({
+            "path": "sample.md",
+            "start_line": 1,
+            "end_line": 3,
+            "replacement": "# Config\n\nVersion 2 uses new keys.\nAdds a second detail line.",
+            "expected_old": "# Config\n\nVersion 1 uses old keys.\n"
+        }),
+    )
+    .expect("edit");
+
+    assert!(result.ok);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "# Config\n\nVersion 2 uses new keys.\nAdds a second detail line.\n"
+    );
+}
+
+#[test]
+fn fs_edit_expected_old_accepts_display_line_number_prefix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.ts");
+    std::fs::write(
+        &path,
+        "switch (status) {\n  case 'queued':\n    return 'Unknown';\n}\n",
+    )
+    .expect("write sample");
+
+    let result = fs_edit(
+        dir.path(),
+        json!({
+            "path": "sample.ts",
+            "start_line": 3,
+            "end_line": 3,
+            "replacement": "return 'Queued';",
+            "expected_old": "3: return 'Unknown';"
+        }),
+    )
+    .expect("edit");
+
+    assert!(result.ok);
+    assert_eq!(result.data["expected_old_line_numbers_stripped"], true);
+    assert_eq!(result.data["expected_old_indent_adjusted"], true);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "switch (status) {\n  case 'queued':\n    return 'Queued';\n}\n"
+    );
+}
+
+#[test]
+fn fs_edit_expected_old_rejects_wrong_display_line_number_prefix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.txt");
+    std::fs::write(&path, "one\ntwo\nthree\n").expect("write sample");
+
+    let result = fs_edit(
+        dir.path(),
+        json!({
+            "path": "sample.txt",
+            "start_line": 2,
+            "end_line": 2,
+            "replacement": "TWO",
+            "expected_old": "9: two"
+        }),
+    )
+    .expect("expected failed observation");
+
+    assert!(!result.ok);
+    assert_eq!(result.data["error_kind"], "expected_old_mismatch");
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read unchanged"),
+        "one\ntwo\nthree\n"
     );
 }
 

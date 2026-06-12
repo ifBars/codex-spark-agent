@@ -255,6 +255,88 @@ fn analyze_trace_reports_extra_calls_after_expected_calls_satisfied() {
 }
 
 #[test]
+fn analyze_trace_allows_optional_calls_after_expected_calls_satisfied() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_trace_metadata_with_expected_and_optional_tool_calls(
+        dir.path(),
+        json!([
+            {
+                "tool": "fs.read",
+                "path": "src/quote.ts"
+            },
+            {
+                "tool": "cmd.exec",
+                "command": "bun test"
+            }
+        ]),
+        json!([
+            {
+                "tool": "fs.read",
+                "path": "src/quote.ts"
+            }
+        ]),
+    );
+    for (turn, (tool_name, arguments)) in [
+        ("fs_read", "{\"path\":\"src/quote.ts\"}"),
+        ("cmd_exec", "{\"command\":\"bun test\"}"),
+        ("fs_read", "{\"path\":\"src/quote.ts\"}"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let turn = turn + 1;
+        std::fs::write(
+            dir.path().join(format!("{turn:03}-response.json")),
+            serde_json::to_vec_pretty(&json!({
+                "raw": {
+                    "events": [{
+                        "type": "response.output_item.done",
+                        "output_index": 0,
+                        "item": {
+                            "type": "function_call",
+                            "name": tool_name,
+                            "arguments": arguments
+                        }
+                    }]
+                }
+            }))
+            .expect("serialize response"),
+        )
+        .expect("write response");
+    }
+
+    let summary = analyze_trace(dir.path()).expect("analyze trace");
+
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["satisfied_calls"],
+        2
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["optional_calls_satisfied"],
+        1
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["extra_calls_after_satisfied"],
+        0
+    );
+    assert_eq!(
+        summary["profile_scenario_call_expectations"]["extra_tool_calls"],
+        json!([])
+    );
+    assert!(
+        !summary["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| {
+                diagnostic["kind"] == "profile_scenario_extra_calls_after_expected"
+            })
+    );
+    assert!(format_trace_summary_row(".spark-runs/run-1", &summary).contains("scenario_calls=2/2"));
+    assert!(!format_trace_summary_row(".spark-runs/run-1", &summary).contains("extra_calls="));
+}
+
+#[test]
 fn analyze_trace_consumes_expected_calls_in_order() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_trace_metadata_with_expected_tool_calls(

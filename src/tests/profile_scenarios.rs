@@ -3,7 +3,8 @@ use crate::profile::scenarios::{
     benchmark_profile_prompts, benchmark_task_prompt, codex_cli_benchmark_prompt,
     prepare_profile_scenario, profile_scenario_expected_skills,
     profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
-    profile_scenario_prompts, profile_scenario_validation_command,
+    profile_scenario_optional_tool_calls, profile_scenario_prompts,
+    profile_scenario_validation_command,
 };
 use crate::{APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS};
 use serde_json::json;
@@ -259,12 +260,17 @@ fn precise_patch_scenario_exercises_minimal_code_edit() {
     let prompts =
         profile_scenario_prompts(ProfileScenarioKind::PrecisePatch, 45_000).expect("scenario");
     let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::PrecisePatch);
     let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::PrecisePatch);
     let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::PrecisePatch);
 
     assert!(prompt.contains("Profile scenario: precise-patch"));
     assert!(prompt.contains("without over-editing"));
     assert!(prompt.contains("default branch still returns Unknown"));
+    assert!(prompt.contains("appears in more than one branch"));
+    assert!(prompt.contains("do not replace that bare line globally"));
+    assert!(prompt.contains("branch label is preserved"));
+    assert!(benchmark_prompt.contains("do not replace that bare line globally"));
     assert_eq!(
         groups,
         vec![
@@ -328,7 +334,7 @@ fn multi_file_patch_scenario_exercises_coordinated_updates() {
             vec!["fs.search"]
         ]
     );
-    assert_eq!(calls.len(), 7);
+    assert_eq!(calls.len(), 8);
     assert_eq!(
         calls[0]["path"],
         ".spark-scenarios/multi-file-patch/src/routes.ts"
@@ -358,7 +364,27 @@ fn multi_file_patch_scenario_exercises_coordinated_updates() {
         ".spark-scenarios/multi-file-patch/docs/routes.md"
     );
     assert_eq!(calls[6]["path"], ".spark-scenarios/multi-file-patch");
+    assert_eq!(calls[7]["path"], ".spark-scenarios/multi-file-patch");
     assert!(profile_scenario_validation_command(ProfileScenarioKind::MultiFilePatch).is_some());
+}
+
+#[test]
+fn multi_file_patch_allows_optional_final_artifact_verification() {
+    let calls = profile_scenario_optional_tool_calls(ProfileScenarioKind::MultiFilePatch);
+
+    assert_eq!(calls.len(), 3);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/multi-file-patch/src/routes.ts"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/multi-file-patch/src/navigation.ts"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/multi-file-patch/docs/routes.md"
+    );
 }
 
 #[test]
@@ -733,6 +759,81 @@ fn rust_notes_tui_scaffold_declares_project_file_expectations() {
 }
 
 #[test]
+fn github_issue_bugfix_declares_validation_expectations() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::GithubIssueBugfix, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::GithubIssueBugfix);
+
+    assert!(prompt.contains("only finalize after the post-patch run passes"));
+    assert_eq!(calls.len(), 5);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/github-issue-bugfix/issue.md"
+    );
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/github-issue-bugfix/src/quote.ts"
+    );
+    assert_eq!(
+        calls[3]["tools"],
+        json!(["fs.edit", "fs.replace", "fs.write"])
+    );
+    assert_eq!(calls[4]["tool"], "cmd.exec");
+    assert_eq!(calls[4]["command"], "bun test");
+}
+
+#[test]
+fn bugfix_scenarios_allow_optional_final_source_verification() {
+    let cases = [
+        (
+            ProfileScenarioKind::GithubIssueBugfix,
+            ".spark-scenarios/github-issue-bugfix/src/quote.ts",
+        ),
+        (
+            ProfileScenarioKind::RustFailingTestBugfix,
+            ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
+        ),
+        (
+            ProfileScenarioKind::TypeScriptReducerBugfix,
+            ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
+        ),
+    ];
+
+    for (scenario, path) in cases {
+        let calls = profile_scenario_optional_tool_calls(scenario);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["tool"], "fs.read");
+        assert_eq!(calls[0]["path"], path);
+    }
+}
+
+#[test]
+fn config_migration_allows_optional_final_artifact_verification() {
+    let calls = profile_scenario_optional_tool_calls(ProfileScenarioKind::ConfigMigration);
+
+    assert_eq!(calls.len(), 5);
+    assert_eq!(calls[0]["tool"], "fs.search");
+    assert_eq!(calls[0]["path"], ".spark-scenarios/config-migration");
+    assert_eq!(calls[1]["tool"], "fs.search");
+    assert_eq!(calls[1]["path"], ".spark-scenarios/config-migration");
+    assert_eq!(calls[2]["tool"], "fs.read");
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/config-migration/config/app.json"
+    );
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/config-migration/src/config.ts"
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/config-migration/docs/config.md"
+    );
+}
+
+#[test]
 fn rust_failing_test_bugfix_declares_cargo_validation_expectations() {
     let prompts = profile_scenario_prompts(ProfileScenarioKind::RustFailingTestBugfix, 45_000)
         .expect("scenario");
@@ -746,6 +847,7 @@ fn rust_failing_test_bugfix_declares_cargo_validation_expectations() {
 
     assert!(prompt.contains("Profile scenario: rust-failing-test-bugfix"));
     assert!(benchmark_prompt.contains("Do not set CARGO_TARGET_DIR"));
+    assert!(prompt.contains("only finalize after the post-patch run passes"));
     assert_eq!(
         validation.workdir,
         ".spark-scenarios/rust-failing-test-bugfix"
@@ -800,6 +902,7 @@ fn typescript_reducer_bugfix_declares_bun_validation_expectations() {
 
     assert!(prompt.contains("Profile scenario: typescript-reducer-bugfix"));
     assert!(benchmark_prompt.contains("Use bun for JavaScript package management"));
+    assert!(prompt.contains("only finalize after the post-patch run passes"));
     assert_eq!(
         validation.workdir,
         ".spark-scenarios/typescript-reducer-bugfix"
@@ -840,6 +943,118 @@ fn typescript_reducer_bugfix_declares_bun_validation_expectations() {
 }
 
 #[test]
+fn merge_conflict_resolution_declares_conflict_and_validation_expectations() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::MergeConflictResolution, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::MergeConflictResolution);
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::MergeConflictResolution)
+            .expect("validation");
+    let groups =
+        profile_scenario_expected_tool_groups(ProfileScenarioKind::MergeConflictResolution);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::MergeConflictResolution);
+    let command = validation.args.join(" ");
+
+    assert!(prompt.contains("Profile scenario: merge-conflict-resolution"));
+    assert!(prompt.contains("conflict markers"));
+    assert!(prompt.contains("dashboard-v2 and data-residency"));
+    assert!(benchmark_prompt.contains("Preserve dashboard-v2"));
+    assert!(benchmark_prompt.contains("Run bun test"));
+    assert_eq!(
+        validation.workdir,
+        ".spark-scenarios/merge-conflict-resolution"
+    );
+    assert_eq!(validation.program, "powershell");
+    assert!(command.contains("unresolved conflict marker"));
+    assert!(command.contains("dashboard-v2"));
+    assert!(command.contains("data-residency"));
+    assert!(command.contains("bun test"));
+    assert_eq!(
+        groups,
+        vec![
+            vec!["fs.read"],
+            vec!["fs.edit", "fs.replace"],
+            vec!["cmd.exec"],
+            vec!["fs.search", "fs.read"]
+        ]
+    );
+    assert_eq!(calls.len(), 6);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/merge-conflict-resolution/issue.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/merge-conflict-resolution/tests/featureFlags.test.ts"
+    );
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"
+    );
+    assert_eq!(
+        calls[3]["tools"],
+        json!(["fs.edit", "fs.replace", "fs.write"])
+    );
+    assert_eq!(calls[4]["tool"], "cmd.exec");
+    assert_eq!(calls[4]["command"], "bun test");
+    assert_eq!(
+        calls[5]["path"],
+        ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn merge_conflict_resolution_validation_accepts_resolved_both_sides() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::MergeConflictResolution)
+        .expect("prepare merge conflict");
+    let root = dir
+        .path()
+        .join(".spark-scenarios/merge-conflict-resolution");
+    std::fs::write(
+        root.join("src").join("featureFlags.ts"),
+        "export type Account = {\n  plan: 'free' | 'team' | 'enterprise';\n  tenant: string;\n  region: 'us' | 'eu';\n};\n\nexport function enabledFlags(account: Account): string[] {\n  const flags = ['core'];\n  if (account.plan === 'enterprise' || account.tenant.startsWith('beta-')) {\n    flags.push('dashboard-v2');\n  }\n  if (account.region === 'eu') {\n    flags.push('data-residency');\n  }\n  return flags;\n}\n",
+    )
+    .expect("write resolved source");
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::MergeConflictResolution)
+            .expect("validation");
+
+    let good = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        good.status.success(),
+        "expected resolved merge conflict to pass\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&good.stdout),
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    std::fs::write(
+        root.join("src").join("featureFlags.ts"),
+        "export type Account = {\n  plan: 'free' | 'team' | 'enterprise';\n  tenant: string;\n  region: 'us' | 'eu';\n};\n\nexport function enabledFlags(account: Account): string[] {\n  const flags = ['core'];\n  if (account.plan === 'enterprise' || account.tenant.startsWith('beta-')) {\n    flags.push('dashboard-v2');\n  }\n  return flags;\n}\n",
+    )
+    .expect("write incomplete source");
+    let bad = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        !bad.status.success(),
+        "expected missing incoming branch to fail"
+    );
+}
+
+#[test]
 fn config_migration_declares_ordered_mutation_and_validation_expectations() {
     let prompts =
         profile_scenario_prompts(ProfileScenarioKind::ConfigMigration, 45_000).expect("scenario");
@@ -850,7 +1065,33 @@ fn config_migration_declares_ordered_mutation_and_validation_expectations() {
     let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::ConfigMigration);
 
     assert!(prompt.contains("Profile scenario: config-migration"));
-    assert!(prompt.contains("Use cmd.exec or fs.search"));
+    assert!(prompt.contains("Do not keep the old key names in rewritten docs or code"));
+    assert!(prompt.contains("make an actual cmd.exec or fs.search tool call"));
+    assert!(prompt.contains("Do not replace this tool call with a prose claim"));
+    assert!(prompt.contains("verify stale authMode/retry.retries references are gone"));
+    assert!(prompt.contains("rerun validation after the final edit before answering"));
+    assert!(prompt.contains("use paths like config/app.json, src/config.ts, and docs/config.md"));
+    assert!(prompt.contains("do not combine these terms into one -SimpleMatch alternation"));
+    assert!(
+        benchmark_task_prompt(ProfileScenarioKind::ConfigMigration)
+            .contains("Do not keep the old key names in rewritten docs or code")
+    );
+    assert!(
+        benchmark_task_prompt(ProfileScenarioKind::ConfigMigration)
+            .contains("make an actual cmd.exec or fs.search tool call")
+    );
+    assert!(
+        benchmark_task_prompt(ProfileScenarioKind::ConfigMigration)
+            .contains("rerun validation after the final edit before answering")
+    );
+    assert!(
+        benchmark_task_prompt(ProfileScenarioKind::ConfigMigration)
+            .contains("do not combine these terms into one -SimpleMatch alternation")
+    );
+    assert!(
+        benchmark_task_prompt(ProfileScenarioKind::ConfigMigration)
+            .contains("use paths like config/app.json, src/config.ts, and docs/config.md")
+    );
     assert_eq!(validation.program, "powershell");
     assert_eq!(
         groups,
@@ -930,6 +1171,7 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::GithubIssueBugfix,
             ProfileScenarioKind::RustFailingTestBugfix,
             ProfileScenarioKind::TypeScriptReducerBugfix,
+            ProfileScenarioKind::MergeConflictResolution,
             ProfileScenarioKind::ConfigMigration
         ]
     );
@@ -976,7 +1218,27 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
     assert!(
         ProfileBenchmarkSuiteKind::RealWorld
             .scenarios()
+            .contains(&ProfileScenarioKind::MergeConflictResolution)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
             .contains(&ProfileScenarioKind::TechnicalEssay)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::CiFailureTriage)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::PullRequestReview)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::DependencyUpgradeTriage)
     );
     assert!(
         ProfileBenchmarkSuiteKind::RealWorld
@@ -1014,9 +1276,29 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
             "subtotal ignores inactive restored lines",
         ),
         (
+            ProfileScenarioKind::MergeConflictResolution,
+            ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts",
+            "<<<<<<< HEAD",
+        ),
+        (
             ProfileScenarioKind::GithubIssueTriage,
             ".spark-scenarios/github-issue-triage/src/cachePolicy.ts",
             "stale-while-revalidate=30",
+        ),
+        (
+            ProfileScenarioKind::CiFailureTriage,
+            ".spark-scenarios/ci-failure-triage/logs/frontend-tests.log",
+            "Expected: 80",
+        ),
+        (
+            ProfileScenarioKind::PullRequestReview,
+            ".spark-scenarios/pull-request-review/src/checkout.ts",
+            "includes('admin')",
+        ),
+        (
+            ProfileScenarioKind::DependencyUpgradeTriage,
+            ".spark-scenarios/dependency-upgrade-triage/docs/time-utils-2.0.md",
+            "parseBusinessDate(input, { zone: 'utc' })",
         ),
         (
             ProfileScenarioKind::TechnicalEssay,
@@ -1044,14 +1326,17 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
             "{scenario:?} fixture missing {expected}"
         );
         if scenario == ProfileScenarioKind::OpsReport {
+            let ops_brief =
+                std::fs::read_to_string(dir.path().join(".spark-scenarios/ops-report/brief.md"))
+                    .expect("ops brief");
             assert!(
                 content.contains("Treat the first CSV line as the header, not a ticket")
-                    || std::fs::read_to_string(
-                        dir.path().join(".spark-scenarios/ops-report/brief.md")
-                    )
-                    .expect("ops brief")
-                    .contains("Treat the first CSV line as the header, not a ticket"),
+                    || ops_brief.contains("Treat the first CSV line as the header, not a ticket"),
                 "ops-report fixture should make header handling explicit"
+            );
+            assert!(
+                ops_brief.contains("Do not count P2 tickets as P1 tickets"),
+                "ops-report fixture should make risk ranking deterministic"
             );
         }
         assert!(
@@ -1059,6 +1344,330 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
             "{scenario:?} should have deterministic validation"
         );
     }
+}
+
+#[test]
+fn ci_failure_triage_declares_log_source_and_validation_expectations() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::CiFailureTriage, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::CiFailureTriage);
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::CiFailureTriage)
+        .expect("validation");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::CiFailureTriage);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::CiFailureTriage);
+    let command = validation.args.join(" ");
+
+    assert!(prompt.contains("Profile scenario: ci-failure-triage"));
+    assert!(prompt.contains("logs/frontend-tests.log"));
+    assert!(prompt.contains("do not modify source files"));
+    assert!(benchmark_prompt.contains("SAVE20 path in applyDiscount"));
+    assert_eq!(validation.workdir, ".spark-scenarios/ci-failure-triage");
+    assert_eq!(validation.program, "powershell");
+    assert!(command.contains("bun test"));
+    assert!(command.contains("Expected:\\s*80"));
+    assert!(command.contains("Received:\\s*100"));
+    assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
+    assert_eq!(calls.len(), 6);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/ci-failure-triage/issue.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/ci-failure-triage/.github/workflows/frontend.yml"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/ci-failure-triage/logs/frontend-tests.log"
+    );
+    assert_eq!(
+        calls[5]["path"],
+        ".spark-scenarios/ci-failure-triage/ci-triage.md"
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn ci_failure_triage_validation_accepts_grounded_report() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::CiFailureTriage)
+        .expect("prepare ci triage");
+    let root = dir.path().join(".spark-scenarios/ci-failure-triage");
+    std::fs::write(
+        root.join("ci-triage.md"),
+        "# CI Triage\n\nThe failing command is `bun test` from `.github/workflows/frontend.yml`.\n\nThe failure is in `tests/discount.test.ts`: SAVE20 expects **Expected: 80** but got **Received: 100**. The likely root cause is that `src/discount.ts` `applyDiscount` handles SAVE10 but not SAVE20. Minimal fix plan: add the SAVE20 branch and rerun bun test.\n",
+    )
+    .expect("write triage");
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::CiFailureTriage)
+        .expect("validation");
+
+    let good = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        good.status.success(),
+        "expected grounded CI triage to pass: {}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    std::fs::write(
+        root.join("ci-triage.md"),
+        "# CI Triage\n\nThe job failed in tests, but the cause is unclear.\n",
+    )
+    .expect("write incomplete triage");
+    let bad = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(!bad.status.success(), "expected incomplete triage to fail");
+}
+
+#[test]
+fn pull_request_review_declares_diff_source_and_validation_expectations() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::PullRequestReview, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::PullRequestReview);
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::PullRequestReview)
+        .expect("validation");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::PullRequestReview);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::PullRequestReview);
+    let command = validation.args.join(" ");
+
+    assert!(prompt.contains("Profile scenario: pull-request-review"));
+    assert!(prompt.contains("diff.patch"));
+    assert!(prompt.contains("do not modify source files"));
+    assert!(benchmark_prompt.contains("role.includes('admin')"));
+    assert!(benchmark_prompt.contains("read-only-admin users"));
+    assert_eq!(validation.workdir, ".spark-scenarios/pull-request-review");
+    assert_eq!(validation.program, "powershell");
+    assert!(command.contains("read-only-admin"));
+    assert!(command.contains("includes\\s*\\("));
+    assert!(command.contains("strict equality"));
+    assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
+    assert_eq!(calls.len(), 5);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/pull-request-review/pr.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/pull-request-review/diff.patch"
+    );
+    assert_eq!(
+        calls[2]["path"],
+        ".spark-scenarios/pull-request-review/src/checkout.ts"
+    );
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/pull-request-review/tests/checkout.test.ts"
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/pull-request-review/review.md"
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn pull_request_review_validation_accepts_blocking_finding() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::PullRequestReview)
+        .expect("prepare pr review");
+    let root = dir.path().join(".spark-scenarios/pull-request-review");
+    std::fs::write(
+        root.join("review.md"),
+        "# Review\n\n**Blocking**: `src/checkout.ts` changes `discountFor` to use `role.includes('admin')`, so a `read-only-admin` user receives the full cart comp even though the PR rule says only a role exactly admin can discount. The missing coverage is in `tests/checkout.test.ts`. Add a read-only-admin regression test and change the check to strict equality against 'admin'.\n",
+    )
+    .expect("write review");
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::PullRequestReview)
+        .expect("validation");
+
+    let good = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        good.status.success(),
+        "expected grounded PR review to pass: {}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    std::fs::write(
+        root.join("review.md"),
+        "# Review\n\nThe PR needs more tests before merging.\n",
+    )
+    .expect("write incomplete review");
+    let bad = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(!bad.status.success(), "expected incomplete review to fail");
+}
+
+#[test]
+fn dependency_upgrade_triage_declares_migration_source_and_validation_expectations() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::DependencyUpgradeTriage, 45_000)
+        .expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::DependencyUpgradeTriage);
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::DependencyUpgradeTriage)
+            .expect("validation");
+    let groups =
+        profile_scenario_expected_tool_groups(ProfileScenarioKind::DependencyUpgradeTriage);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::DependencyUpgradeTriage);
+    let command = validation.args.join(" ");
+
+    assert!(prompt.contains("Profile scenario: dependency-upgrade-triage"));
+    assert!(prompt.contains("docs/time-utils-2.0.md"));
+    assert!(prompt.contains("do not modify source files"));
+    assert!(benchmark_prompt.contains("@acme/time-utils 2.0.0"));
+    assert!(benchmark_prompt.contains("date-only defaults from UTC to local time"));
+    assert_eq!(
+        validation.workdir,
+        ".spark-scenarios/dependency-upgrade-triage"
+    );
+    assert_eq!(validation.program, "powershell");
+    assert!(command.contains("@acme/time-utils"));
+    assert!(command.contains("zone\\s*:\\s*"));
+    assert!(command.contains("missing test gap recommendation"));
+    assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
+    assert_eq!(calls.len(), 7);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/dependency-upgrade-triage/upgrade.md"
+    );
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/dependency-upgrade-triage/package.json"
+    );
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/dependency-upgrade-triage/docs/time-utils-2.0.md"
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/dependency-upgrade-triage/src/billingWindow.ts"
+    );
+    assert_eq!(
+        calls[6]["path"],
+        ".spark-scenarios/dependency-upgrade-triage/upgrade-triage.md"
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn dependency_upgrade_triage_validation_accepts_grounded_report() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::DependencyUpgradeTriage)
+        .expect("prepare dependency upgrade");
+    let root = dir
+        .path()
+        .join(".spark-scenarios/dependency-upgrade-triage");
+    std::fs::write(
+        root.join("upgrade-triage.md"),
+        "# Upgrade Triage\n\n`@acme/time-utils` is upgraded to **2.0.0**. Blocking risk: `parseBusinessDate` now parses date-only strings in the local timezone instead of UTC, while billing cutoffs must stay UTC. `src/billingWindow.ts` calls `parseBusinessDate(input)` without options, so use `parseBusinessDate(input, { zone: 'utc' })`. Test gap: `tests/billingWindow.test.ts` should add a regression test around a timezone boundary.\n",
+    )
+    .expect("write triage");
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::DependencyUpgradeTriage)
+            .expect("validation");
+
+    let good = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        good.status.success(),
+        "expected grounded upgrade triage to pass: {}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    std::fs::write(
+        root.join("upgrade-triage.md"),
+        "# Upgrade Triage\n\nThe package update looks safe after reading package.json.\n",
+    )
+    .expect("write incomplete triage");
+    let bad = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(!bad.status.success(), "expected incomplete triage to fail");
+}
+
+#[test]
+fn ops_report_validation_requires_billing_as_highest_risk_team() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::OpsReport, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::OpsReport);
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::OpsReport).expect("validation");
+    let command = validation.args.join(" ");
+
+    assert!(prompt.contains("do not count P2 tickets as P1 tickets"));
+    assert!(benchmark_prompt.contains("do not count P2 tickets as P1 tickets"));
+    assert!(command.contains("report must identify billing as highest-risk team"));
+    assert!(command.contains("report incorrectly identifies api as highest-risk team"));
+    assert!(command.contains("95 minute open P1 age"));
+}
+
+#[test]
+#[cfg(windows)]
+fn ops_report_validation_accepts_billing_colon_form_and_rejects_api() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::OpsReport).expect("prepare ops");
+    let root = dir.path().join(".spark-scenarios/ops-report");
+    std::fs::write(
+        root.join("metrics.json"),
+        "{\n  \"totalTickets\": 8,\n  \"openTickets\": 5,\n  \"p1Open\": 2,\n  \"averageOpenMinutes\": 51.4\n}\n",
+    )
+    .expect("write metrics");
+    std::fs::write(
+        root.join("report.md"),
+        "# Ops Report\n\n## Highest-Risk Team\n- **billing** is the highest-risk team because its open P1 is **95** minutes old.\n",
+    )
+    .expect("write good report");
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::OpsReport).expect("validation");
+
+    let good = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        good.status.success(),
+        "expected good report to pass: {}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    std::fs::write(
+        root.join("report.md"),
+        "# Ops Report\n\n## Highest-Risk Team\n- **api** is the highest-risk team. billing has a 95 minute open P1.\n",
+    )
+    .expect("write bad report");
+    let bad = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(!bad.status.success(), "expected api report to fail");
+    assert!(
+        String::from_utf8_lossy(&bad.stderr).contains("report must identify billing")
+            || String::from_utf8_lossy(&bad.stderr).contains("incorrectly identifies api"),
+        "unexpected validation error: {}",
+        String::from_utf8_lossy(&bad.stderr)
+    );
 }
 
 #[test]

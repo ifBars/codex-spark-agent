@@ -111,6 +111,21 @@ pub(crate) enum Command {
         #[arg(long)]
         refresh: bool,
     },
+    /// List or expand reusable prompt commands from .agents/commands, .spark/commands, and .claude/commands.
+    Commands {
+        /// Workspace root containing command directories.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Print discovered commands as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Command name to expand. Omit to list commands.
+        name: Option<String>,
+        /// Arguments injected into the command prompt.
+        args: Vec<String>,
+    },
+    /// Browse available TUI spinner sets in a live terminal preview.
+    SpinnerPreview,
     /// List saved trace runs under .spark-runs/.
     Traces {
         /// Maximum number of trace directories to print.
@@ -268,6 +283,9 @@ pub(crate) enum Command {
         /// Include every matching run instead of only the newest run per scenario.
         #[arg(long)]
         all_runs: bool,
+        /// Report exact profile-benchmark run manifest(s) instead of scanning for latest traces.
+        #[arg(long = "run-manifest")]
+        run_manifests: Vec<PathBuf>,
         /// Directory where JSON, CSV, and HTML report files are written.
         #[arg(long, default_value = ".spark-profile/benchmarks")]
         output_dir: PathBuf,
@@ -355,7 +373,7 @@ pub(crate) enum Command {
         /// Include every matching harness run instead of only the newest run per scenario.
         #[arg(long)]
         all_runs: bool,
-        /// Optional Spark harness benchmark manifest(s) to include. Repeat to merge reports.
+        /// Optional Spark harness run manifest or saved benchmark report JSON. Repeat to merge inputs.
         #[arg(long)]
         harness_report: Vec<PathBuf>,
         /// Codex CLI benchmark JSON report(s) to compare against. Repeat to merge reports.
@@ -373,6 +391,9 @@ pub(crate) enum Command {
         /// Split runner labels by recorded model, e.g. codex-cli/gpt-5.5.
         #[arg(long)]
         group_by_model: bool,
+        /// Exit nonzero after writing artifacts when inputs or provider skips make the headline directional.
+        #[arg(long)]
+        fail_on_directional_comparison: bool,
         /// Directory where comparison JSON, CSV, and HTML files are written.
         #[arg(long, default_value = ".spark-profile/benchmarks")]
         output_dir: PathBuf,
@@ -464,8 +485,16 @@ pub(crate) enum ProfileScenarioKind {
         alias = "type-script-reducer-bugfix"
     )]
     TypeScriptReducerBugfix,
+    /// Merge conflict resolution task with objective Bun validation.
+    MergeConflictResolution,
     /// GitHub-style issue triage task that writes a grounded investigation note.
     GithubIssueTriage,
+    /// CI failure triage task that diagnoses failing logs against source and tests.
+    CiFailureTriage,
+    /// Pull request review task that reports a regression from diff, source, and tests.
+    PullRequestReview,
+    /// Dependency upgrade triage task that reviews package, migration, source, and tests.
+    DependencyUpgradeTriage,
     /// Sourced essay task that checks long-form writing from provided materials.
     TechnicalEssay,
     /// Config migration task that coordinates JSON, TypeScript, and docs.
@@ -563,7 +592,11 @@ impl ProfileScenarioKind {
             Self::GithubIssueBugfix => "github-issue-bugfix",
             Self::RustFailingTestBugfix => "rust-failing-test-bugfix",
             Self::TypeScriptReducerBugfix => "typescript-reducer-bugfix",
+            Self::MergeConflictResolution => "merge-conflict-resolution",
             Self::GithubIssueTriage => "github-issue-triage",
+            Self::CiFailureTriage => "ci-failure-triage",
+            Self::PullRequestReview => "pull-request-review",
+            Self::DependencyUpgradeTriage => "dependency-upgrade-triage",
             Self::TechnicalEssay => "technical-essay",
             Self::ConfigMigration => "config-migration",
             Self::OpsReport => "ops-report",
@@ -597,6 +630,9 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::RepoArchitectureSurvey,
                 ProfileScenarioKind::BenchmarkDesignSurvey,
                 ProfileScenarioKind::GithubIssueTriage,
+                ProfileScenarioKind::CiFailureTriage,
+                ProfileScenarioKind::PullRequestReview,
+                ProfileScenarioKind::DependencyUpgradeTriage,
                 ProfileScenarioKind::TechnicalEssay,
                 ProfileScenarioKind::SteamNetworkLibSurvey,
                 ProfileScenarioKind::S1ApiSurvey,
@@ -612,6 +648,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::GithubIssueBugfix,
                 ProfileScenarioKind::RustFailingTestBugfix,
                 ProfileScenarioKind::TypeScriptReducerBugfix,
+                ProfileScenarioKind::MergeConflictResolution,
                 ProfileScenarioKind::ConfigMigration,
             ],
             Self::RealWorld => &[
@@ -619,6 +656,9 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::RepoArchitectureSurvey,
                 ProfileScenarioKind::BenchmarkDesignSurvey,
                 ProfileScenarioKind::GithubIssueTriage,
+                ProfileScenarioKind::CiFailureTriage,
+                ProfileScenarioKind::PullRequestReview,
+                ProfileScenarioKind::DependencyUpgradeTriage,
                 ProfileScenarioKind::TechnicalEssay,
                 ProfileScenarioKind::ShellRecovery,
                 ProfileScenarioKind::PrecisePatch,
@@ -626,6 +666,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::GithubIssueBugfix,
                 ProfileScenarioKind::RustFailingTestBugfix,
                 ProfileScenarioKind::TypeScriptReducerBugfix,
+                ProfileScenarioKind::MergeConflictResolution,
                 ProfileScenarioKind::ConfigMigration,
                 ProfileScenarioKind::ReactCalculatorScaffold,
                 ProfileScenarioKind::RustLogAnalyzerScaffold,

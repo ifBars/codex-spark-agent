@@ -131,76 +131,111 @@ impl AgentRunner {
             let request_started = std::time::Instant::now();
             let client = self.client.clone();
             let request_input = self.input.clone();
-            let mut streamed_text = String::new();
-            let mut hosted_search_starts = HashMap::<String, Instant>::new();
-            let mut hosted_search_queries = HashMap::<String, Option<String>>::new();
-            let mut hosted_search_displayed = HashSet::<String>::new();
-            let (response, raw) = match client
-                .responses_create_with_event_handler(&request_input, &tools, |event| {
-                    if let Some(update) = reasoning_display_update(event) {
-                        match update {
-                            ReasoningDisplayUpdate::Started => self.emit_reasoning_start(),
-                            ReasoningDisplayUpdate::Summary(text) => {
-                                self.emit_reasoning_summary(&text);
-                            }
-                            ReasoningDisplayUpdate::Finished => self.emit_reasoning_finish(),
-                        }
-                    }
-                    if let Some(update) = web_search_display_update(event) {
-                        match update {
-                            WebSearchDisplayUpdate::Started { id, query } => {
-                                hosted_search_starts.insert(id.clone(), Instant::now());
-                                hosted_search_queries.insert(id.clone(), query.clone());
-                                if query.is_some() {
-                                    hosted_search_displayed.insert(id);
-                                    self.emit_tool_batch_start(1);
-                                    self.emit_tool_call(
-                                        "web.search",
-                                        &web_search_display_args(query),
-                                    );
+            let streamed_text;
+            let mut response_retry_used = false;
+            let (response, raw) = loop {
+                let mut attempt_streamed_text = String::new();
+                let mut hosted_search_starts = HashMap::<String, Instant>::new();
+                let mut hosted_search_queries = HashMap::<String, Option<String>>::new();
+                let mut hosted_search_displayed = HashSet::<String>::new();
+                let response_result = client
+                    .responses_create_with_event_handler(&request_input, &tools, |event| {
+                        if let Some(update) = reasoning_display_update(event) {
+                            match update {
+                                ReasoningDisplayUpdate::Started => self.emit_reasoning_start(),
+                                ReasoningDisplayUpdate::Summary(text) => {
+                                    self.emit_reasoning_summary(&text);
                                 }
-                            }
-                            WebSearchDisplayUpdate::Query { id, query } => {
-                                hosted_search_queries.insert(id.clone(), Some(query.clone()));
-                                if hosted_search_displayed.insert(id) {
-                                    self.emit_tool_batch_start(1);
-                                    self.emit_tool_call(
-                                        "web.search",
-                                        &web_search_display_args(Some(query)),
-                                    );
-                                }
-                            }
-                            WebSearchDisplayUpdate::Finished { id, query, ok } => {
-                                let started = hosted_search_starts.remove(&id);
-                                let query = query.or_else(|| {
-                                    hosted_search_queries.remove(&id).and_then(|query| query)
-                                });
-                                if hosted_search_displayed.insert(id) {
-                                    self.emit_tool_batch_start(1);
-                                    self.emit_tool_call(
-                                        "web.search",
-                                        &web_search_display_args(query.clone()),
-                                    );
-                                }
-                                let duration_ms = started
-                                    .map(|started| started.elapsed().as_millis() as u64)
-                                    .unwrap_or(0);
-                                let error = (!ok).then_some("hosted web search did not complete");
-                                self.emit_tool_result("web.search", ok, duration_ms, 0, error);
+                                ReasoningDisplayUpdate::Finished => self.emit_reasoning_finish(),
                             }
                         }
+                        if let Some(update) = web_search_display_update(event) {
+                            match update {
+                                WebSearchDisplayUpdate::Started { id, query } => {
+                                    hosted_search_starts.insert(id.clone(), Instant::now());
+                                    hosted_search_queries.insert(id.clone(), query.clone());
+                                    if query.is_some() {
+                                        hosted_search_displayed.insert(id);
+                                        self.emit_tool_batch_start(1);
+                                        self.emit_tool_call(
+                                            "web.search",
+                                            &web_search_display_args(query),
+                                        );
+                                    }
+                                }
+                                WebSearchDisplayUpdate::Query { id, query } => {
+                                    hosted_search_queries.insert(id.clone(), Some(query.clone()));
+                                    if hosted_search_displayed.insert(id) {
+                                        self.emit_tool_batch_start(1);
+                                        self.emit_tool_call(
+                                            "web.search",
+                                            &web_search_display_args(Some(query)),
+                                        );
+                                    }
+                                }
+                                WebSearchDisplayUpdate::Finished { id, query, ok } => {
+                                    let started = hosted_search_starts.remove(&id);
+                                    let query = query.or_else(|| {
+                                        hosted_search_queries.remove(&id).and_then(|query| query)
+                                    });
+                                    if hosted_search_displayed.insert(id) {
+                                        self.emit_tool_batch_start(1);
+                                        self.emit_tool_call(
+                                            "web.search",
+                                            &web_search_display_args(query.clone()),
+                                        );
+                                    }
+                                    let duration_ms = started
+                                        .map(|started| started.elapsed().as_millis() as u64)
+                                        .unwrap_or(0);
+                                    let error =
+                                        (!ok).then_some("hosted web search did not complete");
+                                    self.emit_tool_result("web.search", ok, duration_ms, 0, error);
+                                }
+                            }
+                        }
+                        if let Some(delta) = output_text_delta(event) {
+                            attempt_streamed_text.push_str(delta);
+                            self.emit_assistant_delta(delta);
+                        }
+                    })
+                    .await;
+                match response_result {
+                    Ok(result) => {
+                        streamed_text = attempt_streamed_text;
+                        break result;
                     }
-                    if let Some(delta) = output_text_delta(event) {
-                        streamed_text.push_str(delta);
-                        self.emit_assistant_delta(delta);
+                    Err(error)
+                        if !response_retry_used
+                            && should_retry_response_stream_error(&error)
+                            && attempt_streamed_text.is_empty() =>
+                    {
+                        response_retry_used = true;
+                        self.emit_warning(
+                            "response stream ended without completion; retrying request once"
+                                .to_string(),
+                        );
+                        if let Some(trace) = &mut self.trace {
+                            trace.write(
+                                self.request_seq,
+                                "response-retry",
+                                &json!({
+                                    "stage": "response",
+                                    "error": error.to_string(),
+                                    "retry": 1,
+                                }),
+                            )?;
+                        }
+                        continue;
                     }
-                })
-                .await
-            {
-                Ok(result) => result,
-                Err(error) => {
-                    self.record_terminal_error(self.request_seq, "response", &error.to_string())?;
-                    return Err(error);
+                    Err(error) => {
+                        self.record_terminal_error(
+                            self.request_seq,
+                            "response",
+                            &error.to_string(),
+                        )?;
+                        return Err(error);
+                    }
                 }
             };
             let request_duration_ms = request_started.elapsed().as_millis() as u64;
@@ -352,6 +387,12 @@ fn web_search_display_args(query: Option<String>) -> String {
     }
 }
 
+fn should_retry_response_stream_error(error: &anyhow::Error) -> bool {
+    error
+        .to_string()
+        .contains("Spark stream ended without response.completed")
+}
+
 fn tool_only_notice_interval(compact_after_tool_only_turns: usize) -> usize {
     if compact_after_tool_only_turns == 0 {
         0
@@ -364,7 +405,7 @@ fn tool_only_notice_interval(compact_after_tool_only_turns: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::tool_only_notice_interval;
+    use super::{should_retry_response_stream_error, tool_only_notice_interval};
 
     #[test]
     fn tool_only_notice_arrives_before_compaction_threshold() {
@@ -372,5 +413,14 @@ mod tests {
         assert_eq!(tool_only_notice_interval(8), 4);
         assert_eq!(tool_only_notice_interval(3), 3);
         assert_eq!(tool_only_notice_interval(0), 0);
+    }
+
+    #[test]
+    fn response_stream_retry_is_limited_to_missing_completed() {
+        let retryable = anyhow::anyhow!("Spark stream ended without response.completed");
+        let other = anyhow::anyhow!("request input is too large");
+
+        assert!(should_retry_response_stream_error(&retryable));
+        assert!(!should_retry_response_stream_error(&other));
     }
 }

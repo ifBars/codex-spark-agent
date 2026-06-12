@@ -184,6 +184,16 @@ pub(super) fn scenario_tool_call_expectation_report(
         .iter()
         .filter_map(required_action_from_value)
         .collect::<Vec<_>>();
+    let optional_calls = metadata
+        .and_then(|metadata| metadata.pointer("/context/profile_scenario/optional_tool_calls"))
+        .and_then(Value::as_array)
+        .map(|calls| {
+            calls
+                .iter()
+                .filter_map(required_action_from_value)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     if expected_calls.is_empty() {
         return None;
     }
@@ -205,45 +215,45 @@ pub(super) fn scenario_tool_call_expectation_report(
     } else {
         None
     };
-    let extra_calls_after_satisfied = first_satisfied_call_index
-        .map(|index| calls.len().saturating_sub(index + 1))
-        .unwrap_or(0);
+    let (extra_calls_after_satisfied, extra_calls, optional_satisfied, optional_matched_indices) =
+        post_satisfaction_call_report(first_satisfied_call_index, &optional_calls, calls, results);
     let first_satisfied_turn = first_satisfied_call_index.map(|index| calls[index].turn);
     let final_tool_call_turn = calls.last().map(|call| call.turn);
-    let extra_turns_after_satisfied = match (first_satisfied_turn, final_tool_call_turn) {
+    let final_unexpected_tool_call_turn = extra_calls
+        .last()
+        .and_then(|call| call.get("turn").and_then(Value::as_u64))
+        .map(|turn| turn as usize);
+    let extra_turns_after_satisfied = match (first_satisfied_turn, final_unexpected_tool_call_turn)
+    {
         (Some(first), Some(final_turn)) => final_turn.saturating_sub(first),
         _ => 0,
     };
-    let input_chars_at_satisfaction =
-        first_satisfied_turn.and_then(|turn| request_input_chars_for_turn(timeline, turn));
-    let final_request_input_chars = latest_request_input_chars(timeline);
-    let context_growth_after_satisfied_chars =
+    let input_chars_at_satisfaction = extra_calls_after_satisfied
+        .gt(&0)
+        .then(|| first_satisfied_turn.and_then(|turn| request_input_chars_for_turn(timeline, turn)))
+        .flatten();
+    let final_request_input_chars = extra_calls_after_satisfied
+        .gt(&0)
+        .then(|| latest_request_input_chars(timeline))
+        .flatten();
+    let context_growth_after_satisfied_chars = if extra_calls_after_satisfied > 0 {
         match (input_chars_at_satisfaction, final_request_input_chars) {
             (Some(first), Some(final_chars)) => final_chars.saturating_sub(first),
             _ => 0,
-        };
-    let extra_calls = first_satisfied_call_index
-        .map(|index| {
-            calls
-                .iter()
-                .skip(index + 1)
-                .map(|call| {
-                    json!({
-                        "turn": call.turn,
-                        "tool": &call.tool_name,
-                        "signature": tool_signature(&call.tool_name, &call.args),
-                    })
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        }
+    } else {
+        0
+    };
 
     Some(json!({
         "expected_calls": expected_calls,
+        "optional_calls": optional_calls,
         "total_calls": satisfied.len() + missing.len(),
         "satisfied_calls": satisfied.len(),
         "missing_calls": missing,
         "satisfied_tool_calls": satisfied,
+        "satisfied_optional_calls": optional_satisfied,
+        "optional_calls_satisfied": optional_matched_indices.len(),
         "first_satisfied_call_index": first_satisfied_call_index,
         "first_satisfied_turn": first_satisfied_turn,
         "final_tool_call_turn": final_tool_call_turn,
@@ -254,6 +264,49 @@ pub(super) fn scenario_tool_call_expectation_report(
         "context_growth_after_satisfied_chars": context_growth_after_satisfied_chars,
         "extra_tool_calls": extra_calls,
     }))
+}
+
+fn post_satisfaction_call_report(
+    first_satisfied_call_index: Option<usize>,
+    optional_calls: &[super::RequiredAction],
+    calls: &[ObservedToolCall],
+    results: &[ObservedToolResult],
+) -> (u64, Vec<Value>, Vec<super::RequiredAction>, BTreeSet<usize>) {
+    let Some(first_satisfied_call_index) = first_satisfied_call_index else {
+        return (0, Vec::new(), Vec::new(), BTreeSet::new());
+    };
+    let post_calls = calls
+        .iter()
+        .skip(first_satisfied_call_index + 1)
+        .cloned()
+        .collect::<Vec<_>>();
+    let optional_matches = ordered_expected_call_matches(optional_calls, &post_calls, results);
+    let mut optional_satisfied = Vec::new();
+    let mut optional_matched_indices = BTreeSet::new();
+    for (optional_call, matched_index) in optional_calls.iter().zip(optional_matches) {
+        if let Some(index) = matched_index {
+            optional_satisfied.push(optional_call.clone());
+            optional_matched_indices.insert(index);
+        }
+    }
+    let extra_calls = post_calls
+        .iter()
+        .enumerate()
+        .filter(|(index, _call)| !optional_matched_indices.contains(index))
+        .map(|(_index, call)| {
+            json!({
+                "turn": call.turn,
+                "tool": &call.tool_name,
+                "signature": tool_signature(&call.tool_name, &call.args),
+            })
+        })
+        .collect::<Vec<_>>();
+    (
+        extra_calls.len() as u64,
+        extra_calls,
+        optional_satisfied,
+        optional_matched_indices,
+    )
 }
 
 fn ordered_expected_call_matches(
@@ -329,7 +382,10 @@ fn latest_request_input_chars(timeline: &BTreeMap<usize, Map<String, Value>>) ->
         .find_map(|entry| entry.get("request_input_chars").and_then(Value::as_u64))
 }
 
-pub(super) fn tool_failure_recovery_report(results: &[ObservedToolResult]) -> Option<Value> {
+pub(super) fn tool_failure_recovery_report(
+    results: &[ObservedToolResult],
+    validation_success: bool,
+) -> Option<Value> {
     let failures = results
         .iter()
         .enumerate()
@@ -348,7 +404,14 @@ pub(super) fn tool_failure_recovery_report(results: &[ObservedToolResult]) -> Op
         let recovery = results
             .iter()
             .skip(index + 1)
-            .find(|candidate| candidate.ok && candidate.tool_name == failure.tool_name);
+            .find(|candidate| candidate.ok && tool_result_recovers_failure(failure, candidate));
+        let recovered_by_validation = recovery.is_none()
+            && validation_success
+            && failure.tool_name == "cmd.exec"
+            && results
+                .iter()
+                .skip(index + 1)
+                .any(successful_file_mutation_result);
         let record = json!({
             "turn": failure.turn,
             "tool": failure.tool_name,
@@ -358,7 +421,16 @@ pub(super) fn tool_failure_recovery_report(results: &[ObservedToolResult]) -> Op
             recovered.push(json!({
                 "turn": failure.turn,
                 "tool": failure.tool_name,
+                "recovered_by_tool": recovery.tool_name,
                 "recovered_at_turn": recovery.turn,
+            }));
+        } else if recovered_by_validation {
+            entry.0 += 1;
+            recovered.push(json!({
+                "turn": failure.turn,
+                "tool": failure.tool_name,
+                "recovered_by_tool": "scenario-validation",
+                "recovered_at_turn": Value::Null,
             }));
         } else {
             unrecovered.push(record);
@@ -387,4 +459,27 @@ pub(super) fn tool_failure_recovery_report(results: &[ObservedToolResult]) -> Op
         "unrecovered": unrecovered,
         "by_tool": by_tool,
     }))
+}
+
+fn tool_result_recovers_failure(
+    failure: &ObservedToolResult,
+    candidate: &ObservedToolResult,
+) -> bool {
+    if candidate.tool_name == failure.tool_name {
+        return true;
+    }
+    file_mutation_path(&failure.tool_name, &failure.args).is_some_and(|failure_path| {
+        file_mutation_path(&candidate.tool_name, &candidate.args) == Some(failure_path)
+    })
+}
+
+fn file_mutation_path<'a>(tool_name: &str, args: &'a Value) -> Option<&'a str> {
+    match tool_name {
+        "fs.edit" | "fs.replace" | "fs.write" => args.get("path").and_then(Value::as_str),
+        _ => None,
+    }
+}
+
+fn successful_file_mutation_result(result: &ObservedToolResult) -> bool {
+    result.ok && file_mutation_path(&result.tool_name, &result.args).is_some()
 }
