@@ -1,5 +1,5 @@
 use crate::chat::{
-    command_args, matching_slash_commands, parse_mode, slash_command_token,
+    command_args, matching_slash_commands, parse_mode, parse_subagent_command, slash_command_token,
     unknown_slash_command_warning,
 };
 mod profile_scenarios;
@@ -65,6 +65,33 @@ fn chat_cli_accepts_custom_system_prompt_flag() {
 
     assert_eq!(system_prompt.as_deref(), Some("You are Relay in Discord."));
     assert_eq!(prompt, vec!["answer from relay"]);
+}
+
+#[test]
+fn chat_cli_accepts_goal_flags() {
+    let cli = <Cli as clap::Parser>::try_parse_from([
+        "spark",
+        "chat",
+        "--goal",
+        "Finish release prep",
+        "--goal-checkpoints",
+        "2",
+    ])
+    .expect("parse chat goal flags");
+
+    let Command::Chat {
+        goal,
+        goal_checkpoints,
+        prompt,
+        ..
+    } = cli.command
+    else {
+        panic!("expected chat command");
+    };
+
+    assert_eq!(goal.as_deref(), Some("Finish release prep"));
+    assert_eq!(goal_checkpoints, 2);
+    assert!(prompt.is_empty());
 }
 
 #[test]
@@ -1020,6 +1047,17 @@ fn slash_commands_match_exactly_or_with_whitespace() {
     assert_eq!(command_args("/compact", "/compact"), Some(""));
     assert_eq!(command_args("/compact now", "/compact"), Some("now"));
     assert_eq!(command_args("/compaction", "/compact"), None);
+    assert_eq!(command_args("/goal", "/goal"), Some(""));
+    assert_eq!(
+        command_args("/goal Finish migration", "/goal"),
+        Some("Finish migration")
+    );
+    assert_eq!(command_args("/goals", "/goal"), None);
+    assert_eq!(
+        command_args("/subagent explore src", "/subagent"),
+        Some("explore src")
+    );
+    assert_eq!(command_args("/subagents", "/subagent"), None);
     assert_eq!(command_args("/profile", "/profile"), Some(""));
     assert_eq!(command_args("/profiles", "/profile"), None);
     assert_eq!(command_args("/skills", "/skill"), None);
@@ -1034,7 +1072,31 @@ fn slash_command_helpers_match_menu_and_unknown_warning() {
     let matches = matching_slash_commands("/sk");
     assert!(matches.iter().any(|command| command.name == "/skill"));
     assert!(matches.iter().any(|command| command.name == "/skills"));
+    assert!(
+        matching_slash_commands("/go")
+            .iter()
+            .any(|command| command.name == "/goal")
+    );
+    assert!(
+        matching_slash_commands("/sub")
+            .iter()
+            .any(|command| command.name == "/subagent")
+    );
     assert!(unknown_slash_command_warning("/wat now").contains("unknown command: /wat"));
+}
+
+#[test]
+fn subagent_command_parser_accepts_model_reasoning_and_budget_flags() {
+    let (kind, task, options) = parse_subagent_command(
+        "research --model parent --reasoning high --max-turns 2 Find current docs",
+    )
+    .expect("parse subagent command");
+
+    assert_eq!(kind, crate::agent::SubagentKind::Research);
+    assert_eq!(task, "Find current docs");
+    assert_eq!(options.model.as_deref(), Some("parent"));
+    assert_eq!(options.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(options.max_turns, Some(2));
 }
 
 #[test]

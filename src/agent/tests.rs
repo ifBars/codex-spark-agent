@@ -6,7 +6,9 @@ use super::*;
 
 mod cache;
 mod compaction;
+mod goal;
 mod snapshot;
+mod subagent;
 mod trace;
 
 #[tokio::test]

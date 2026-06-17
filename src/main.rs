@@ -5,6 +5,7 @@ mod chat;
 mod cli;
 mod client;
 mod config;
+mod mcp;
 mod profile;
 mod profiler;
 mod prompt_commands;
@@ -94,6 +95,8 @@ async fn run_command(command: Command) -> Result<()> {
             model,
             reasoning_effort,
             system_prompt,
+            goal,
+            goal_checkpoints,
             mode,
             max_turns,
             trace,
@@ -107,7 +110,7 @@ async fn run_command(command: Command) -> Result<()> {
             max_input_chars,
             max_input_tokens,
         } => {
-            let interactive = prompt_file.is_none() && prompt.is_empty();
+            let interactive = prompt_file.is_none() && prompt.is_empty() && goal.is_none();
             let prompt = if let Some(path) = prompt_file {
                 Some(std::fs::read_to_string(&path).map_err(|error| {
                     anyhow::anyhow!("failed to read {}: {error}", path.display())
@@ -167,20 +170,43 @@ async fn run_command(command: Command) -> Result<()> {
                 skill::commands::load_skill_into_runner(&mut runner, &cwd, &skill_name, false)
                     .await?;
             }
+            let goal_requested = goal.is_some();
+            if let Some(goal) = goal {
+                runner.set_goal(&goal)?;
+                if let Some(name) = &session_name {
+                    runner.save_session_named(name)?;
+                }
+            }
             if interactive {
                 chat::run_interactive_chat(&mut runner, session_name, cwd).await?;
             } else {
                 let prompt = prompt.unwrap_or_default();
-                if prompt.trim().is_empty() {
+                let has_prompt = !prompt.trim().is_empty();
+                if !has_prompt && runner.goal().is_none() {
                     anyhow::bail!("prompt is required");
                 }
-                let prompt = if prompt.starts_with('/') {
-                    prompt_commands::expand_slash_command(&cwd, &prompt)?.unwrap_or(prompt)
-                } else {
-                    prompt
-                };
-                skill::commands::load_skill_mentions(&mut runner, &cwd, &prompt).await?;
-                runner.run(&prompt).await?;
+                if has_prompt {
+                    let prompt = if prompt.starts_with('/') {
+                        prompt_commands::expand_slash_command(&cwd, &prompt)?.unwrap_or(prompt)
+                    } else {
+                        prompt
+                    };
+                    skill::commands::load_skill_mentions(&mut runner, &cwd, &prompt).await?;
+                    runner.run(&prompt).await?;
+                }
+                if runner.goal().is_some() && (goal_requested || !has_prompt) {
+                    let report = runner
+                        .run_goal_checkpoints(
+                            goal_checkpoints,
+                            tokio_util::sync::CancellationToken::new(),
+                        )
+                        .await?;
+                    println!(
+                        "Goal checkpoints: {} status={}",
+                        report.checkpoints_run,
+                        report.status.name()
+                    );
+                }
                 if let Some(name) = &session_name {
                     runner.save_session_named(name)?;
                     println!("Saved session: {name}");

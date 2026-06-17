@@ -11,12 +11,14 @@ fn builtin_tools_do_not_include_synthetic_completion_tool() {
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
 
-    assert_eq!(names.len(), 10);
+    assert_eq!(names.len(), 12);
     assert!(!names.iter().any(|name| name == "agent.complete"));
     assert!(names.iter().any(|name| name == "fs.stat"));
     assert!(names.iter().any(|name| name == "fs.rename"));
     assert!(names.iter().any(|name| name == "cmd.exec"));
+    assert!(names.iter().any(|name| name == "browser.run"));
     assert!(names.iter().any(|name| name == "web.search"));
+    assert!(names.iter().any(|name| name == "subagent.run"));
 }
 
 #[test]
@@ -28,8 +30,31 @@ fn ask_mode_advertises_only_readonly_tools() {
 
     assert_eq!(
         names,
-        vec!["fs.read", "fs.list", "fs.stat", "fs.search", "web.search"]
+        vec![
+            "fs.read",
+            "fs.list",
+            "fs.stat",
+            "fs.search",
+            "web.search",
+            "subagent.run"
+        ]
     );
+}
+
+#[tokio::test]
+async fn invoke_blocks_browser_run_in_ask_mode() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let result = invoke(
+        dir.path(),
+        AgentMode::Ask,
+        "browser.run",
+        json!({"url": "https://example.com"}),
+    )
+    .await;
+
+    assert!(!result.ok);
+    assert!(result.error.as_deref().expect("error").contains("ask mode"));
 }
 
 #[tokio::test]

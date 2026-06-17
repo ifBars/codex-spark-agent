@@ -13,6 +13,9 @@ fn agent_snapshot_round_trips_history_and_profile() {
         loaded_skills: vec!["demo".to_string()],
         mode: crate::tools::AgentMode::Ask,
         reasoning_effort: "high".to_string(),
+        goal: Some(crate::agent::goal::GoalState::new(
+            "Keep benchmark quality above 95",
+        )),
     };
 
     let encoded = serde_json::to_string(&snapshot).expect("serialize snapshot");
@@ -24,6 +27,10 @@ fn agent_snapshot_round_trips_history_and_profile() {
     assert_eq!(decoded.loaded_skills, vec!["demo"]);
     assert_eq!(decoded.mode, crate::tools::AgentMode::Ask);
     assert_eq!(decoded.reasoning_effort, "high");
+    assert_eq!(
+        decoded.goal.expect("goal").objective,
+        "Keep benchmark quality above 95"
+    );
     assert_eq!(decoded.profiler.to_json()["requests"], 0);
 }
 
@@ -47,4 +54,5 @@ fn agent_snapshot_defaults_schema_version_for_existing_sessions() {
         decoded.reasoning_effort,
         crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT
     );
+    assert!(decoded.goal.is_none());
 }

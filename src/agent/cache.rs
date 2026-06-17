@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::agent::AgentRunner;
+use crate::mcp::McpRegistry;
 use crate::profiler::tool_signature;
 use crate::tools::{ToolResult, invoke_with_read_roots, is_readonly_tool};
 
@@ -13,6 +14,16 @@ pub(super) struct CachedToolObservation {
 
 impl AgentRunner {
     pub(super) async fn invoke_with_cache(&mut self, tool_name: &str, args: Value) -> ToolResult {
+        if tool_name == "subagent.run" {
+            return Box::pin(self.invoke_subagent_tool(args)).await;
+        }
+        if McpRegistry::is_mcp_tool(tool_name) {
+            self.ensure_mcp_registry().await;
+            if let Some(registry) = &self.mcp_registry {
+                return registry.invoke(tool_name, args).await;
+            }
+        }
+
         let signature = tool_signature(tool_name, &args);
         if is_cacheable_readonly_tool(tool_name)
             && let Some(cached) = self.readonly_tool_cache.get_mut(&signature)

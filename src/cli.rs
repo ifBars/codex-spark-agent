@@ -64,6 +64,12 @@ pub(crate) enum Command {
         /// Additional system/developer instructions appended to Spark's built-in harness prompt.
         #[arg(long)]
         system_prompt: Option<String>,
+        /// Durable objective to store before this chat run. With no prompt, Spark runs bounded goal checkpoints.
+        #[arg(long)]
+        goal: Option<String>,
+        /// Number of goal checkpoints to run when --goal is provided.
+        #[arg(long, default_value_t = 3)]
+        goal_checkpoints: usize,
         /// Tool access mode. ask is read-only; work allows edits and command execution.
         #[arg(long, value_enum, default_value_t = RunMode::Work)]
         mode: RunMode,

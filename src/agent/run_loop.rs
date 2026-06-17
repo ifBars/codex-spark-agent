@@ -11,7 +11,7 @@ use crate::client::{
     ReasoningDisplayUpdate, WebSearchDisplayUpdate, function_calls, output_items_for_next_input,
     output_text_delta, reasoning_display_update, response_text, web_search_display_update,
 };
-use crate::tools::{builtin_tools, tools_for_mode};
+use crate::tools::{ToolDescriptor, builtin_tools, tools_for_mode};
 
 impl AgentRunner {
     pub(super) fn push_user_message(&mut self, prompt: &str) {
@@ -27,7 +27,8 @@ impl AgentRunner {
     }
 
     pub(super) async fn run_until_idle(&mut self, cancellation: CancellationToken) -> Result<()> {
-        let tools = tools_for_mode(builtin_tools(), self.mode);
+        self.ensure_mcp_registry().await;
+        let tools = self.tools_for_current_loop();
 
         let mut turn = 0usize;
         let mut last_tool_only_compaction_streak = 0usize;
@@ -269,6 +270,7 @@ impl AgentRunner {
                 last_tool_only_notice_streak = 0;
             }
             if calls.is_empty() {
+                self.record_goal_decision_from_assistant(&text);
                 self.emit_profile_summary()?;
                 return Ok(());
             }
@@ -377,6 +379,21 @@ impl AgentRunner {
         }
         self.emit_warning(format!("{stage}: {error}"));
         self.emit_profile_summary()
+    }
+}
+
+impl AgentRunner {
+    fn tools_for_current_loop(&self) -> Vec<ToolDescriptor> {
+        let mut tools = tools_for_mode(builtin_tools(), self.mode)
+            .into_iter()
+            .filter(|tool| self.subagent_depth == 0 || tool.name != "subagent.run")
+            .collect::<Vec<_>>();
+        if self.mode == crate::tools::AgentMode::Work
+            && let Some(registry) = &self.mcp_registry
+        {
+            tools.extend(registry.tools());
+        }
+        tools
     }
 }
 

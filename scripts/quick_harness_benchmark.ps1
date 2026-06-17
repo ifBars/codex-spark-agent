@@ -98,7 +98,18 @@ try {
     }
 
     $sparkRunStartedAt = [datetime]::UtcNow
-    & cargo @benchmarkArgs
+    $previousSparkDisableMcp = $env:SPARK_DISABLE_MCP
+    $env:SPARK_DISABLE_MCP = "1"
+    try {
+        & cargo @benchmarkArgs
+    }
+    finally {
+        if ($null -eq $previousSparkDisableMcp) {
+            Remove-Item Env:\SPARK_DISABLE_MCP -ErrorAction SilentlyContinue
+        } else {
+            $env:SPARK_DISABLE_MCP = $previousSparkDisableMcp
+        }
+    }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

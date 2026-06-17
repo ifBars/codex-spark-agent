@@ -238,10 +238,16 @@ The harness exposes a small tool set:
 - `fs.edit`
 - `fs.rename`
 - `cmd.exec`
+- `browser.run`
+- configured MCP tools
 
 The file tools stay under the selected `--cwd`. Recursive listing and search skip generated folders like `target/`, `.git/`, `node_modules/`, `.spark/`, `.spark-runs/`, and `.spark-profile/` unless you point at them directly.
 
 `cmd.exec` runs through PowerShell on Windows. Output is bounded before it is sent back to Spark, so noisy commands are easier to recover from.
+
+`browser.run` runs a stateless Playwright Chromium pass for browser-backed inspection and local UI smoke checks. It uses Bun to install Playwright under `.spark/browser-tools`, can perform simple CSS-selector actions, and can write screenshots under the workspace when requested.
+
+MCP servers are discovered from global Codex config plus repo-local `.mcp.json` and `.spark/mcp.json` files. The harness supports stdio servers with `command`/`args` and HTTP MCP endpoints with `url`/`http_headers`; disabled servers are skipped, and unavailable servers are reported as warnings without blocking the run. Discovered tools are exposed in work mode as function names like `mcp__context7__resolve-library-id`. Set `SPARK_DISABLE_MCP=1` to skip MCP discovery for benchmark or offline runs.
 
 ## Traces and profiling
 

@@ -162,6 +162,53 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
             hosted_config: None,
         },
         ToolDescriptor {
+            name: "browser.run".to_string(),
+            description: "Run a stateless Playwright Chromium browser pass from the workspace. Opens a URL, optionally performs simple CSS-selector actions, and returns bounded page text, ARIA snapshot, console/page errors, status, final URL, and an optional screenshot path. Use for local web UI smoke checks and browser-backed inspection; prefer cmd.exec for arbitrary scripts.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "actions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["click", "fill", "select", "press", "wait"]
+                                },
+                                "selector": {"type": "string"},
+                                "value": {
+                                    "description": "Text for fill, or option value for select.",
+                                    "type": "string"
+                                },
+                                "key": {"type": "string"},
+                                "ms": {"type": "integer", "minimum": 0, "maximum": 30000},
+                                "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 60000}
+                            },
+                            "required": ["type"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "capture_screenshot": {"type": "boolean"},
+                    "screenshot_path": {"type": "string"},
+                    "headless": {"type": "boolean"},
+                    "viewport_width": {"type": "integer", "minimum": 320, "maximum": 3840},
+                    "viewport_height": {"type": "integer", "minimum": 240, "maximum": 2160},
+                    "wait_until": {
+                        "type": "string",
+                        "enum": ["load", "domcontentloaded", "networkidle", "commit"]
+                    },
+                    "text_limit": {"type": "integer", "minimum": 0, "maximum": 40000},
+                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 120000}
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+            hosted_type: None,
+            hosted_config: None,
+        },
+        ToolDescriptor {
             name: "web.search".to_string(),
             description: "Search the public web through OpenAI's hosted web search tool for current information. Use this when local repo files are insufficient or the user asks for latest/current external facts; cite sources in the final answer.".to_string(),
             input_schema: json!({}),
@@ -169,6 +216,37 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
             hosted_config: Some(json!({
                 "search_context_size": "medium"
             })),
+        },
+        ToolDescriptor {
+            name: "subagent.run".to_string(),
+            description: "Run an isolated read-only helper agent for bounded exploration, research, review, or planning. Use kind=explore for quick local repo inspection, research for source-backed current web/local research, review for independent code-risk review, and plan for phased implementation planning. The harness chooses Spark or gpt-5.5 by task kind unless model is explicitly set. If status is incomplete, continue in the parent loop instead of repeating the same bounded call.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["explore", "research", "review", "plan"]
+                    },
+                    "task": {"type": "string"},
+                    "model": {
+                        "type": "string",
+                        "description": "Optional model override. Use parent to inherit the main thread model, or pass a concrete model such as gpt-5.5."
+                    },
+                    "reasoning_effort": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high", "xhigh"]
+                    },
+                    "max_turns": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 12
+                    }
+                },
+                "required": ["kind", "task"],
+                "additionalProperties": false
+            }),
+            hosted_type: None,
+            hosted_config: None,
         },
     ]
 }

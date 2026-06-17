@@ -1653,6 +1653,22 @@ fn ops_report_validation_accepts_billing_colon_form_and_rejects_api() {
 
     std::fs::write(
         root.join("report.md"),
+        "# Ops Report\n\n## Highest-risk team\nThe **billing** team is highest risk because its open P1 is **95** minutes old.\n",
+    )
+    .expect("write natural report");
+    let natural = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        natural.status.success(),
+        "expected natural report to pass: {}",
+        String::from_utf8_lossy(&natural.stderr)
+    );
+
+    std::fs::write(
+        root.join("report.md"),
         "# Ops Report\n\n## Highest-Risk Team\n- **api** is the highest-risk team. billing has a 95 minute open P1.\n",
     )
     .expect("write bad report");

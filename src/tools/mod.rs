@@ -1,3 +1,4 @@
+mod browser;
 mod command;
 mod descriptors;
 mod errors;
@@ -16,6 +17,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use browser::browser_run;
 use command::cmd_exec;
 use errors::structured_tool_error;
 use fs::{
@@ -74,8 +76,12 @@ async fn invoke_inner(
         "fs.edit" => fs_edit(cwd, args),
         "fs.rename" => fs_rename(cwd, args),
         "cmd.exec" => cmd_exec(cwd, args).await,
+        "browser.run" => browser_run(cwd, args).await,
         "web.search" => anyhow::bail!(
             "tool `web.search` is a hosted Responses tool and is executed by the model provider, not the local harness"
+        ),
+        "subagent.run" => anyhow::bail!(
+            "tool `subagent.run` is executed by the agent harness so it can isolate child context and model policy"
         ),
         _ => anyhow::bail!("unknown tool: {tool_name}"),
     }

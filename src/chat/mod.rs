@@ -36,6 +36,16 @@ pub(crate) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Show or change reasoning effort",
     },
     SlashCommand {
+        name: "/goal",
+        usage: "/goal [run|pause|resume|clear|objective]",
+        description: "Manage a durable multi-turn objective",
+    },
+    SlashCommand {
+        name: "/subagent",
+        usage: "/subagent [flags] [explore|research|review|plan] <task>",
+        description: "Run an isolated read-only helper and save its brief",
+    },
+    SlashCommand {
         name: "/ask",
         usage: "/ask",
         description: "Switch to read-only mode",
@@ -174,11 +184,44 @@ pub(crate) async fn run_line_interactive_chat(
             continue;
         }
 
+        if let Some(command) = command_args(input, "/goal") {
+            match handle_goal_command(runner, command.trim()).await {
+                Ok(message) => {
+                    println!("{message}");
+                    if let Some(name) = &session_name {
+                        runner.save_session_named(name)?;
+                    }
+                }
+                Err(error) => eprintln!("error: {error:#}"),
+            }
+            continue;
+        }
+
+        if let Some(command) = command_args(input, "/subagent") {
+            match handle_subagent_command(runner, command.trim()).await {
+                Ok(report) => {
+                    runner.record_subagent_report(&report);
+                    println!("{}", agent::report_prompt(&report));
+                    if let Some(name) = &session_name {
+                        runner.save_session_named(name)?;
+                    }
+                }
+                Err(error) => eprintln!("error: {error:#}"),
+            }
+            continue;
+        }
+
         match input {
             "/exit" | "/quit" => return Ok(()),
             "/help" => {
                 println!(
-                    "Commands: /help, /status, /mode, /reasoning, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit"
+                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit"
+                );
+                println!(
+                    "Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear"
+                );
+                println!(
+                    "Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] [--max-turns 1..12] explore|research|review|plan <task>"
                 );
                 println!(
                     "Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>"
@@ -383,4 +426,151 @@ pub(crate) fn parse_reasoning_effort(input: &str) -> Option<&'static str> {
         "xhigh" => Some("xhigh"),
         _ => None,
     }
+}
+
+pub(crate) async fn handle_goal_command(
+    runner: &mut agent::AgentRunner,
+    command: &str,
+) -> Result<String> {
+    let command = command.trim();
+    if command.is_empty() {
+        return Ok(runner.goal_status_line());
+    }
+
+    if command == "clear" {
+        runner.clear_goal();
+        return Ok("goal cleared".to_string());
+    }
+    if command == "pause" {
+        runner.pause_goal()?;
+        return Ok(runner.goal_status_line());
+    }
+    if command == "resume" {
+        runner.resume_goal()?;
+        return Ok(runner.goal_status_line());
+    }
+    if let Some(rest) = command_args(command, "run") {
+        let checkpoints = parse_goal_checkpoint_count(rest.trim())?;
+        let report = runner
+            .run_goal_checkpoints(checkpoints, tokio_util::sync::CancellationToken::new())
+            .await?;
+        return Ok(format!(
+            "goal run: checkpoints={} status={}\n{}",
+            report.checkpoints_run,
+            report.status.name(),
+            report.summary
+        ));
+    }
+    if let Some(rest) = command_args(command, "set") {
+        runner.set_goal(rest.trim())?;
+        return Ok(runner.goal_status_line());
+    }
+
+    runner.set_goal(command)?;
+    Ok(runner.goal_status_line())
+}
+
+pub(crate) async fn handle_subagent_command(
+    runner: &mut agent::AgentRunner,
+    command: &str,
+) -> Result<agent::SubagentReport> {
+    let (kind, task, options) = parse_subagent_command(command)?;
+    runner.run_subagent_with_options(kind, task, options).await
+}
+
+fn parse_goal_checkpoint_count(input: &str) -> Result<usize> {
+    if input.is_empty() {
+        return Ok(3);
+    }
+    let count = input
+        .parse::<usize>()
+        .map_err(|_| anyhow::anyhow!("usage: /goal run [checkpoint-count]"))?;
+    if count == 0 || count > 20 {
+        anyhow::bail!("goal checkpoint count must be between 1 and 20");
+    }
+    Ok(count)
+}
+
+pub(crate) fn parse_subagent_command(
+    command: &str,
+) -> Result<(agent::SubagentKind, &str, agent::SubagentRunOptions)> {
+    let command = command.trim();
+    let mut options = agent::SubagentRunOptions::default();
+    let mut search_start = 0usize;
+    let mut kind = None;
+    let mut task_start = None;
+
+    while search_start < command.len() {
+        let rest = command[search_start..].trim_start();
+        search_start = command.len() - rest.len();
+        if rest.is_empty() {
+            break;
+        }
+        let (token, after_token) = split_token(rest);
+        if token == "--model" {
+            let (value, consumed) = parse_flag_value(after_token, "--model")?;
+            options.model = Some(value.to_string());
+            search_start += token.len() + consumed;
+            continue;
+        }
+        if token == "--reasoning" || token == "--reasoning-effort" {
+            let (value, consumed) = parse_flag_value(after_token, "--reasoning")?;
+            options.reasoning_effort = Some(value.to_string());
+            search_start += token.len() + consumed;
+            continue;
+        }
+        if token == "--max-turns" {
+            let (value, consumed) = parse_flag_value(after_token, "--max-turns")?;
+            let max_turns = value
+                .parse::<usize>()
+                .map_err(|_| anyhow::anyhow!("--max-turns must be an integer"))?;
+            options.max_turns = Some(max_turns);
+            search_start += token.len() + consumed;
+            continue;
+        }
+        if kind.is_none() {
+            kind = agent::SubagentKind::parse(token);
+            if kind.is_none() {
+                anyhow::bail!("usage: /subagent [flags] explore|research|review|plan <task>");
+            }
+            search_start += token.len();
+            continue;
+        }
+
+        task_start = Some(search_start);
+        break;
+    }
+
+    let kind = kind.ok_or_else(|| {
+        anyhow::anyhow!("usage: /subagent [flags] explore|research|review|plan <task>")
+    })?;
+    let task = command[task_start.unwrap_or(search_start)..].trim();
+    if task.is_empty() {
+        anyhow::bail!("subagent task is required");
+    }
+    let validation_args = serde_json::json!({
+        "model": options.model,
+        "reasoning_effort": options.reasoning_effort,
+        "max_turns": options.max_turns,
+    });
+    options = agent::SubagentRunOptions::from_tool_args(&validation_args)?;
+    Ok((kind, task, options))
+}
+
+fn split_token(input: &str) -> (&str, &str) {
+    let end = input.find(char::is_whitespace).unwrap_or(input.len());
+    (&input[..end], &input[end..])
+}
+
+fn parse_flag_value<'a>(input: &'a str, flag: &str) -> Result<(&'a str, usize)> {
+    let trimmed = input.trim_start();
+    let skipped = input.len() - trimmed.len();
+    if trimmed.is_empty() {
+        anyhow::bail!("{flag} requires a value");
+    }
+    let (value, rest) = split_token(trimmed);
+    Ok((
+        value,
+        skipped + value.len() + (trimmed.len() - rest.len() - value.len()),
+    ))
 }

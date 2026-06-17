@@ -84,6 +84,24 @@ impl SparkClient {
         &self.reasoning_effort
     }
 
+    pub(crate) fn model(&self) -> &str {
+        &self.model
+    }
+
+    pub(crate) fn clone_with_model_and_reasoning_effort(
+        &self,
+        model: impl Into<String>,
+        reasoning_effort: impl Into<String>,
+    ) -> Self {
+        Self {
+            http: self.http.clone(),
+            auth: self.auth.clone(),
+            model: model.into(),
+            reasoning_effort: reasoning_effort.into(),
+            system_prompt: None,
+        }
+    }
+
     pub(crate) fn set_reasoning_effort(&mut self, reasoning_effort: impl Into<String>) {
         self.reasoning_effort = reasoning_effort.into();
     }
@@ -677,6 +695,8 @@ fn wire_tool_name_to_local(name: &str) -> String {
         "fs_edit" => "fs.edit",
         "fs_rename" => "fs.rename",
         "cmd_exec" => "cmd.exec",
+        "browser_run" => "browser.run",
+        "subagent_run" => "subagent.run",
         other => other,
     }
     .to_string()
@@ -740,6 +760,8 @@ Start from the user's concrete anchor. When a user gives explicit paths, files, 
 Gather enough evidence before writing. Prefer bounded file reads and targeted searches over broad output. Batch independent tool calls in the same turn when possible, especially reads, searches, and writes for a known set of files.
 
 Use hosted web search for current external facts when local files are insufficient, and cite sources when web search informs the answer.
+
+Use `subagent.run` for bounded helper work when parallel-style separation would improve quality without editing: local exploration, current/source-backed research, independent review, or implementation planning. Keep the subagent task concrete. The harness will isolate child context, choose an appropriate model such as Spark or gpt-5.5, enforce a turn budget, and return a compact report. If the result status is `incomplete`, do not repeat the same bounded call; continue in the parent loop or make one larger-budget follow-up only when delegation is still necessary. Do not use subagents for trivial single-file reads or to avoid making the final decision yourself.
 
 # Quality bar
 
@@ -858,6 +880,7 @@ mod tests {
         assert!(prompt.contains("After required evidence is gathered and validation passes"));
         assert!(prompt.contains("Use hosted web search for current external facts"));
         assert!(prompt.contains("cite sources when web search informs the answer"));
+        assert!(prompt.contains("subagent.run"));
     }
 
     #[test]
@@ -903,6 +926,46 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["type"], "web_search_call");
         assert_eq!(items[0]["id"], "ws_test");
+    }
+
+    #[test]
+    fn subagent_wire_tool_name_maps_back_to_local_name() {
+        let response = Response {
+            id: Some("resp_test".to_string()),
+            output: vec![super::ResponseItem::FunctionCall {
+                call_id: "call_subagent".to_string(),
+                name: "subagent_run".to_string(),
+                arguments: json!({"kind": "review", "task": "Check the patch"}),
+                extra: json!({}),
+            }],
+            extra: json!({}),
+        };
+
+        let calls = super::function_calls(&response);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "subagent.run");
+        assert_eq!(calls[0].2["kind"], "review");
+    }
+
+    #[test]
+    fn browser_wire_tool_name_maps_back_to_local_name() {
+        let response = Response {
+            id: Some("resp_test".to_string()),
+            output: vec![super::ResponseItem::FunctionCall {
+                call_id: "call_browser".to_string(),
+                name: "browser_run".to_string(),
+                arguments: json!({"url": "https://example.com"}),
+                extra: json!({}),
+            }],
+            extra: json!({}),
+        };
+
+        let calls = super::function_calls(&response);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "browser.run");
+        assert_eq!(calls[0].2["url"], "https://example.com");
     }
 
     #[test]

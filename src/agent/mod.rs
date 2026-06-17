@@ -10,13 +10,16 @@ use tokio_util::sync::CancellationToken;
 use crate::auth::{self, AuthTokens};
 use crate::client::SparkClient;
 use crate::config;
+use crate::mcp::McpRegistry;
 use crate::profiler::AgentProfiler;
 use crate::session::store::SessionStore;
 use crate::tools::AgentMode;
 
 pub(in crate::agent) mod cache;
 pub(in crate::agent) mod compaction;
+mod goal;
 mod run_loop;
+mod subagent;
 pub(in crate::agent) mod trace;
 
 #[cfg(test)]
@@ -24,6 +27,8 @@ mod tests;
 
 use cache::CachedToolObservation;
 use compaction::context_pressure_json;
+use goal::GoalState;
+pub(crate) use subagent::{SubagentKind, SubagentReport, SubagentRunOptions, report_prompt};
 use trace::{TraceMetadata, TraceWriter};
 
 const AGENT_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -94,6 +99,9 @@ pub struct AgentRunner {
     pub(in crate::agent) readonly_tool_cache: HashMap<String, CachedToolObservation>,
     pub(in crate::agent) loaded_skills: Vec<String>,
     pub(in crate::agent) mode: AgentMode,
+    pub(in crate::agent) goal: Option<GoalState>,
+    pub(in crate::agent) subagent_depth: usize,
+    pub(in crate::agent) mcp_registry: Option<McpRegistry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +117,8 @@ pub struct AgentSnapshot {
     pub mode: AgentMode,
     #[serde(default = "default_reasoning_effort")]
     pub reasoning_effort: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<GoalState>,
 }
 
 impl AgentRunner {
@@ -212,6 +222,9 @@ impl AgentRunner {
             readonly_tool_cache: HashMap::new(),
             loaded_skills: Vec::new(),
             mode,
+            goal: None,
+            subagent_depth: 0,
+            mcp_registry: None,
         })
     }
 
@@ -488,6 +501,9 @@ impl AgentRunner {
                 context_pressure_json(&self.input, self.compact_after_chars, self.max_input_chars)
                     .unwrap_or_else(|error| json!({"error": error.to_string()})),
             );
+            if let Some(goal) = &self.goal {
+                object.insert("goal".to_string(), json!(goal));
+            }
         }
         summary
     }
@@ -501,6 +517,7 @@ impl AgentRunner {
             loaded_skills: self.loaded_skills.clone(),
             mode: self.mode,
             reasoning_effort: self.reasoning_effort().to_string(),
+            goal: self.goal.clone(),
         }
     }
 
@@ -510,6 +527,7 @@ impl AgentRunner {
         self.profiler = snapshot.profiler;
         self.loaded_skills = snapshot.loaded_skills;
         self.mode = snapshot.mode;
+        self.goal = snapshot.goal;
         self.set_reasoning_effort(snapshot.reasoning_effort);
         self.readonly_tool_cache.clear();
     }
@@ -532,6 +550,17 @@ impl AgentRunner {
     pub fn set_read_roots(&mut self, read_roots: Vec<PathBuf>) {
         self.read_roots = read_roots;
         self.readonly_tool_cache.clear();
+    }
+
+    pub(in crate::agent) async fn ensure_mcp_registry(&mut self) {
+        if self.mcp_registry.is_some() {
+            return;
+        }
+        let registry = McpRegistry::discover(&self.cwd).await;
+        for warning in registry.warnings() {
+            self.emit_warning(warning.clone());
+        }
+        self.mcp_registry = Some(registry);
     }
 
     pub fn reasoning_effort(&self) -> &str {

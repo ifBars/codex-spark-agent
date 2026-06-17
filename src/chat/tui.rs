@@ -423,6 +423,31 @@ impl ChatTui {
             }
             return Ok(true);
         }
+        if let Some(command) = chat::command_args(input, "/goal") {
+            match chat::handle_goal_command(runner, command.trim()).await {
+                Ok(message) => {
+                    if let Some(name) = &self.session_name {
+                        runner.save_session_named(name)?;
+                    }
+                    self.push_system(message);
+                }
+                Err(error) => self.push_warning(format!("error: {error:#}")),
+            }
+            return Ok(true);
+        }
+        if let Some(command) = chat::command_args(input, "/subagent") {
+            match chat::handle_subagent_command(runner, command.trim()).await {
+                Ok(report) => {
+                    runner.record_subagent_report(&report);
+                    if let Some(name) = &self.session_name {
+                        runner.save_session_named(name)?;
+                    }
+                    self.push_system(crate::agent::report_prompt(&report));
+                }
+                Err(error) => self.push_warning(format!("error: {error:#}")),
+            }
+            return Ok(true);
+        }
         if let Some(command) = chat::command_args(input, "/mode") {
             match chat::parse_mode(command.trim()) {
                 Some(mode) => {
@@ -464,7 +489,9 @@ impl ChatTui {
             }
             "/help" => {
                 self.push_system(
-                    "Commands: /help, /status, /mode, /reasoning, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
+                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
+Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear\n\
+Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] [--max-turns 1..12] explore|research|review|plan <task>\n\
 Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>\n\
 Prompt commands: /commands lists .agents/commands, .spark/commands, and .claude/commands; /<name> [args] expands and runs a Markdown prompt.\n\
 Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc clears the composer, double Esc stops a running agent, Ctrl+C exits.",
