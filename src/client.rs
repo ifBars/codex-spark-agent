@@ -16,6 +16,7 @@ pub struct SparkClient {
     model: String,
     reasoning_effort: String,
     system_prompt: Option<String>,
+    memory_context: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +78,7 @@ impl SparkClient {
             model,
             reasoning_effort: reasoning_effort.into(),
             system_prompt: None,
+            memory_context: None,
         }
     }
 
@@ -99,6 +101,7 @@ impl SparkClient {
             model: model.into(),
             reasoning_effort: reasoning_effort.into(),
             system_prompt: None,
+            memory_context: self.memory_context.clone(),
         }
     }
 
@@ -110,8 +113,15 @@ impl SparkClient {
         self.system_prompt = system_prompt.into();
     }
 
+    pub(crate) fn set_memory_context(&mut self, memory_context: impl Into<Option<String>>) {
+        self.memory_context = memory_context.into();
+    }
+
     fn instructions(&self) -> String {
-        spark_system_prompt_with_custom(self.system_prompt.as_deref())
+        spark_system_prompt_with_context(
+            self.system_prompt.as_deref(),
+            self.memory_context.as_deref(),
+        )
     }
 
     pub async fn responses_create_with_event_handler(
@@ -795,16 +805,32 @@ When validation is relevant, run the narrowest meaningful check first, then broa
 After required evidence is gathered and validation passes, stop calling tools and provide the final answer. When finished, provide the final answer as a normal assistant message."#
 }
 
-fn spark_system_prompt_with_custom(custom_system_prompt: Option<&str>) -> String {
+fn spark_system_prompt_with_context(
+    custom_system_prompt: Option<&str>,
+    memory_context: Option<&str>,
+) -> String {
     let base = spark_system_prompt();
-    let Some(custom_system_prompt) = custom_system_prompt
+    let memory_context = memory_context
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return base.to_string();
-    };
+        .filter(|value| !value.is_empty());
+    let custom_system_prompt = custom_system_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
 
-    format!("{base}\n\n# Harness instructions\n\n{custom_system_prompt}")
+    if memory_context.is_none() && custom_system_prompt.is_none() {
+        return base.to_string();
+    }
+
+    let mut prompt = base.to_string();
+    if let Some(memory_context) = memory_context {
+        prompt.push_str("\n\n# Spark memory\n\n");
+        prompt.push_str(memory_context);
+    }
+    if let Some(custom_system_prompt) = custom_system_prompt {
+        prompt.push_str("\n\n# Harness instructions\n\n");
+        prompt.push_str(custom_system_prompt);
+    }
+    prompt
 }
 
 fn judge_system_prompt() -> &'static str {
@@ -826,7 +852,7 @@ mod tests {
     use super::{
         DEFAULT_SPARK_AGENT_REASONING_EFFORT, ReasoningDisplayUpdate, Response, SparkClient,
         WebSearchDisplayUpdate, output_items_for_next_input, reasoning_display_update,
-        response_from_stream, response_text, spark_system_prompt, spark_system_prompt_with_custom,
+        response_from_stream, response_text, spark_system_prompt, spark_system_prompt_with_context,
         tool_to_wire, web_search_display_update,
     };
 
@@ -885,11 +911,27 @@ mod tests {
 
     #[test]
     fn spark_system_prompt_appends_custom_harness_instructions() {
-        let prompt = spark_system_prompt_with_custom(Some("You are Relay in Discord."));
+        let prompt = spark_system_prompt_with_context(Some("You are Relay in Discord."), None);
 
         assert!(prompt.contains("You are GPT-5.3-Codex-Spark"));
         assert!(prompt.contains("# Harness instructions"));
         assert!(prompt.contains("You are Relay in Discord."));
+    }
+
+    #[test]
+    fn spark_system_prompt_can_include_memory_context_before_custom_instructions() {
+        let prompt = spark_system_prompt_with_context(
+            Some("Use terse final answers."),
+            Some("Prefer bun for JavaScript tooling."),
+        );
+
+        let memory_index = prompt.find("# Spark memory").expect("memory section");
+        let custom_index = prompt
+            .find("# Harness instructions")
+            .expect("custom section");
+        assert!(memory_index < custom_index);
+        assert!(prompt.contains("Prefer bun for JavaScript tooling."));
+        assert!(prompt.contains("Use terse final answers."));
     }
 
     #[test]

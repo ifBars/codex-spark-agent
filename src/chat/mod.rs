@@ -46,6 +46,11 @@ pub(crate) const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Run an isolated read-only helper and save its brief",
     },
     SlashCommand {
+        name: "/memory",
+        usage: "/memory [on|off|status|path|show|add <note>]",
+        description: "Toggle markdown memory for this session",
+    },
+    SlashCommand {
         name: "/ask",
         usage: "/ask",
         description: "Switch to read-only mode",
@@ -211,17 +216,33 @@ pub(crate) async fn run_line_interactive_chat(
             continue;
         }
 
+        if let Some(command) = command_args(input, "/memory") {
+            match handle_memory_command(runner, command.trim()) {
+                Ok(message) => {
+                    println!("{message}");
+                    if let Some(name) = &session_name {
+                        runner.save_session_named(name)?;
+                    }
+                }
+                Err(error) => eprintln!("error: {error:#}"),
+            }
+            continue;
+        }
+
         match input {
             "/exit" | "/quit" => return Ok(()),
             "/help" => {
                 println!(
-                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit"
+                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /memory, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit"
                 );
                 println!(
                     "Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear"
                 );
                 println!(
                     "Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] [--max-turns 1..12] explore|research|review|plan <task>"
+                );
+                println!(
+                    "Memory commands: /memory, /memory on, /memory off, /memory add <durable note>, /memory show"
                 );
                 println!(
                     "Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>"
@@ -476,6 +497,32 @@ pub(crate) async fn handle_subagent_command(
 ) -> Result<agent::SubagentReport> {
     let (kind, task, options) = parse_subagent_command(command)?;
     runner.run_subagent_with_options(kind, task, options).await
+}
+
+pub(crate) fn handle_memory_command(
+    runner: &mut agent::AgentRunner,
+    command: &str,
+) -> Result<String> {
+    let command = command.trim();
+    if command.is_empty() || command == "status" || command == "path" || command == "paths" {
+        return runner.memory_status();
+    }
+    if command == "on" || command == "enable" {
+        runner.set_memory_enabled(true)?;
+        return Ok(format!("memory enabled\n{}", runner.memory_status()?));
+    }
+    if command == "off" || command == "disable" {
+        runner.set_memory_enabled(false)?;
+        return Ok(format!("memory disabled\n{}", runner.memory_status()?));
+    }
+    if command == "show" {
+        return runner.memory_context_preview();
+    }
+    if let Some(note) = command_args(command, "add") {
+        runner.append_memory_note(note.trim())?;
+        return Ok(format!("memory note added\n{}", runner.memory_status()?));
+    }
+    anyhow::bail!("usage: /memory [on|off|status|path|show|add <note>]")
 }
 
 fn parse_goal_checkpoint_count(input: &str) -> Result<usize> {

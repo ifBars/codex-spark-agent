@@ -209,9 +209,11 @@ impl AgentRunner {
             loaded_skills: Vec::new(),
             mode: spec.mode,
             goal: None,
+            memory_enabled: self.memory_enabled,
             subagent_depth: self.subagent_depth + 1,
             mcp_registry: None,
         };
+        child.refresh_memory_context()?;
         child.set_system_prompt(Some(spec.system_prompt.to_string()));
         child.run(&subagent_prompt(kind, task)).await?;
 

@@ -6,6 +6,7 @@ mod cli;
 mod client;
 mod config;
 mod mcp;
+mod memory;
 mod profile;
 mod profiler;
 mod prompt_commands;

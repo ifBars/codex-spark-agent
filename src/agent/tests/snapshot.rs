@@ -16,6 +16,7 @@ fn agent_snapshot_round_trips_history_and_profile() {
         goal: Some(crate::agent::goal::GoalState::new(
             "Keep benchmark quality above 95",
         )),
+        memory_enabled: true,
     };
 
     let encoded = serde_json::to_string(&snapshot).expect("serialize snapshot");
@@ -31,6 +32,7 @@ fn agent_snapshot_round_trips_history_and_profile() {
         decoded.goal.expect("goal").objective,
         "Keep benchmark quality above 95"
     );
+    assert!(decoded.memory_enabled);
     assert_eq!(decoded.profiler.to_json()["requests"], 0);
 }
 
@@ -55,4 +57,5 @@ fn agent_snapshot_defaults_schema_version_for_existing_sessions() {
         crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT
     );
     assert!(decoded.goal.is_none());
+    assert!(!decoded.memory_enabled);
 }

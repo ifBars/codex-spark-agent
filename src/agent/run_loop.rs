@@ -26,7 +26,10 @@ impl AgentRunner {
         }));
     }
 
-    pub(super) async fn run_until_idle(&mut self, cancellation: CancellationToken) -> Result<()> {
+    pub(super) async fn run_until_idle(
+        &mut self,
+        cancellation: CancellationToken,
+    ) -> Result<String> {
         self.ensure_mcp_registry().await;
         let tools = self.tools_for_current_loop();
 
@@ -272,7 +275,7 @@ impl AgentRunner {
             if calls.is_empty() {
                 self.record_goal_decision_from_assistant(&text);
                 self.emit_profile_summary()?;
-                return Ok(());
+                return Ok(text);
             }
 
             self.emit_tool_batch_start(calls.len());
@@ -320,7 +323,7 @@ impl AgentRunner {
         }
     }
 
-    fn record_cancelled(&mut self, turn: usize, stage: &str) -> Result<()> {
+    fn record_cancelled<T>(&mut self, turn: usize, stage: &str) -> Result<T> {
         let message = "run cancelled";
         self.record_terminal_error(turn, stage, message)?;
         anyhow::bail!(message)

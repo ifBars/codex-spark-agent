@@ -35,6 +35,10 @@ pub fn sessions_db_path() -> Result<PathBuf> {
     Ok(app_dir()?.join("sessions.sqlite3"))
 }
 
+pub fn memory_dir() -> Result<PathBuf> {
+    Ok(app_dir()?.join("memory"))
+}
+
 pub fn save_auth(tokens: &AuthTokens) -> Result<()> {
     let dir = app_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;

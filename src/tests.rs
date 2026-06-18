@@ -1082,6 +1082,11 @@ fn slash_command_helpers_match_menu_and_unknown_warning() {
             .iter()
             .any(|command| command.name == "/subagent")
     );
+    assert!(
+        matching_slash_commands("/mem")
+            .iter()
+            .any(|command| command.name == "/memory")
+    );
     assert!(unknown_slash_command_warning("/wat now").contains("unknown command: /wat"));
 }
 

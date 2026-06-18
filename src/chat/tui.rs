@@ -448,6 +448,18 @@ impl ChatTui {
             }
             return Ok(true);
         }
+        if let Some(command) = chat::command_args(input, "/memory") {
+            match chat::handle_memory_command(runner, command.trim()) {
+                Ok(message) => {
+                    if let Some(name) = &self.session_name {
+                        runner.save_session_named(name)?;
+                    }
+                    self.push_system(message);
+                }
+                Err(error) => self.push_warning(format!("error: {error:#}")),
+            }
+            return Ok(true);
+        }
         if let Some(command) = chat::command_args(input, "/mode") {
             match chat::parse_mode(command.trim()) {
                 Some(mode) => {
@@ -489,9 +501,10 @@ impl ChatTui {
             }
             "/help" => {
                 self.push_system(
-                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
+                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /memory, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
 Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear\n\
 Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] [--max-turns 1..12] explore|research|review|plan <task>\n\
+Memory commands: /memory, /memory on, /memory off, /memory add <durable note>, /memory show\n\
 Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>\n\
 Prompt commands: /commands lists .agents/commands, .spark/commands, and .claude/commands; /<name> [args] expands and runs a Markdown prompt.\n\
 Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc clears the composer, double Esc stops a running agent, Ctrl+C exits.",
@@ -2298,6 +2311,11 @@ mod tests {
         assert!(rendered.contains("/reasoning"));
         assert!(rendered.contains("Show or change reasoning effort"));
 
+        tui.input = "/mem".to_string();
+        let rendered = flatten_lines(&tui.command_menu_lines().expect("menu"));
+        assert!(rendered.contains("/memory"));
+        assert!(rendered.contains("Toggle markdown memory"));
+
         tui.input = "/wat".to_string();
         let rendered = flatten_lines(&tui.command_menu_lines().expect("unknown menu"));
         assert!(rendered.contains("is not a Spark command"));
@@ -2313,6 +2331,10 @@ mod tests {
         assert_eq!(
             complete_slash_command_input("/sk").as_deref(),
             Some("/skill ")
+        );
+        assert_eq!(
+            complete_slash_command_input("/mem").as_deref(),
+            Some("/memory ")
         );
         assert_eq!(complete_slash_command_input("hello"), None);
         assert_eq!(complete_slash_command_input("/wat"), None);

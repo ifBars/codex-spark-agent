@@ -100,6 +100,7 @@ pub struct AgentRunner {
     pub(in crate::agent) loaded_skills: Vec<String>,
     pub(in crate::agent) mode: AgentMode,
     pub(in crate::agent) goal: Option<GoalState>,
+    pub(in crate::agent) memory_enabled: bool,
     pub(in crate::agent) subagent_depth: usize,
     pub(in crate::agent) mcp_registry: Option<McpRegistry>,
 }
@@ -119,6 +120,8 @@ pub struct AgentSnapshot {
     pub reasoning_effort: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal: Option<GoalState>,
+    #[serde(default)]
+    pub memory_enabled: bool,
 }
 
 impl AgentRunner {
@@ -223,6 +226,7 @@ impl AgentRunner {
             loaded_skills: Vec::new(),
             mode,
             goal: None,
+            memory_enabled: false,
             subagent_depth: 0,
             mcp_registry: None,
         })
@@ -237,8 +241,11 @@ impl AgentRunner {
         prompt: &str,
         cancellation: CancellationToken,
     ) -> Result<()> {
+        self.refresh_memory_context()?;
         self.push_user_message(prompt);
-        self.run_until_idle(cancellation).await
+        let assistant_text = self.run_until_idle(cancellation).await?;
+        self.record_memory_exchange(prompt, &assistant_text)?;
+        Ok(())
     }
 
     pub(crate) fn use_buffered_display(&mut self) {
@@ -475,10 +482,11 @@ impl AgentRunner {
             .and_then(Value::as_f64)
             .unwrap_or_default();
         format!(
-            "{}; mode={}, reasoning={}, live_input_chars={}, live_approx_input_tokens={} ({:.1}% of 128k), compact_after_chars={}, compact_after_tool_only_turns={}, max_input_chars={}",
+            "{}; mode={}, reasoning={}, memory={}, live_input_chars={}, live_approx_input_tokens={} ({:.1}% of 128k), compact_after_chars={}, compact_after_tool_only_turns={}, max_input_chars={}",
             self.profiler.status_line(),
             self.mode.name(),
             self.reasoning_effort(),
+            if self.memory_enabled() { "on" } else { "off" },
             live_input_chars,
             live_approx_tokens,
             live_context_pct,
@@ -496,6 +504,7 @@ impl AgentRunner {
                 "reasoning_effort".to_string(),
                 json!(self.reasoning_effort()),
             );
+            object.insert("memory_enabled".to_string(), json!(self.memory_enabled));
             object.insert(
                 "live_context".to_string(),
                 context_pressure_json(&self.input, self.compact_after_chars, self.max_input_chars)
@@ -518,6 +527,7 @@ impl AgentRunner {
             mode: self.mode,
             reasoning_effort: self.reasoning_effort().to_string(),
             goal: self.goal.clone(),
+            memory_enabled: self.memory_enabled,
         }
     }
 
@@ -528,7 +538,9 @@ impl AgentRunner {
         self.loaded_skills = snapshot.loaded_skills;
         self.mode = snapshot.mode;
         self.goal = snapshot.goal;
+        self.memory_enabled = snapshot.memory_enabled;
         self.set_reasoning_effort(snapshot.reasoning_effort);
+        let _ = self.refresh_memory_context();
         self.readonly_tool_cache.clear();
     }
 
@@ -573,6 +585,58 @@ impl AgentRunner {
 
     pub fn set_system_prompt(&mut self, system_prompt: impl Into<Option<String>>) {
         self.client.set_system_prompt(system_prompt);
+    }
+
+    pub fn memory_enabled(&self) -> bool {
+        self.memory_enabled
+    }
+
+    pub fn set_memory_enabled(&mut self, enabled: bool) -> Result<()> {
+        self.memory_enabled = enabled;
+        if enabled {
+            crate::memory::MemoryStore::open_default()?.ensure_files()?;
+        }
+        self.refresh_memory_context()
+    }
+
+    pub fn memory_status(&self) -> Result<String> {
+        let paths = crate::memory::MemoryStore::open_default()?.paths();
+        Ok(format!(
+            "memory: {}\nMEMORY.md: {}\nchronicle.md: {}",
+            if self.memory_enabled { "on" } else { "off" },
+            paths.memory.display(),
+            paths.chronicle.display()
+        ))
+    }
+
+    pub fn memory_context_preview(&self) -> Result<String> {
+        Ok(crate::memory::MemoryStore::open_default()?
+            .read_context()?
+            .unwrap_or_else(|| "memory is empty".to_string()))
+    }
+
+    pub fn append_memory_note(&mut self, note: &str) -> Result<()> {
+        crate::memory::MemoryStore::open_default()?.append_note(note)?;
+        self.refresh_memory_context()
+    }
+
+    fn refresh_memory_context(&mut self) -> Result<()> {
+        if self.memory_enabled {
+            let context = crate::memory::MemoryStore::open_default()?.read_context()?;
+            self.client.set_memory_context(context);
+        } else {
+            self.client.set_memory_context(None);
+        }
+        Ok(())
+    }
+
+    fn record_memory_exchange(&mut self, prompt: &str, assistant_text: &str) -> Result<()> {
+        if !self.memory_enabled || assistant_text.trim().is_empty() {
+            return Ok(());
+        }
+        crate::memory::MemoryStore::open_default()?
+            .append_chronicle_entry(prompt, assistant_text)?;
+        self.refresh_memory_context()
     }
 
     pub fn load_skill_context(&mut self, name: &str, summary: &str) -> bool {

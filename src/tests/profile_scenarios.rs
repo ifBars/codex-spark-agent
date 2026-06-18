@@ -1365,8 +1365,8 @@ fn ci_failure_triage_declares_log_source_and_validation_expectations() {
     assert_eq!(validation.workdir, ".spark-scenarios/ci-failure-triage");
     assert_eq!(validation.program, "powershell");
     assert!(command.contains("bun test"));
-    assert!(command.contains("Expected:\\s*80"));
-    assert!(command.contains("Received:\\s*100"));
+    assert!(command.contains("Expected\\s*:[^\\r\\n]*\\b80\\b"));
+    assert!(command.contains("Received\\s*:[^\\r\\n]*\\b100\\b"));
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
     assert_eq!(calls.len(), 6);
     assert_eq!(
@@ -1411,6 +1411,22 @@ fn ci_failure_triage_validation_accepts_grounded_report() {
         good.status.success(),
         "expected grounded CI triage to pass: {}",
         String::from_utf8_lossy(&good.stderr)
+    );
+
+    std::fs::write(
+        root.join("ci-triage.md"),
+        "# CI Triage\n\n## Failing command\n`bun test` (from `.github/workflows/frontend.yml`)\n\n## Failing test / assertion\n`tests/discount.test.ts` -> `applies SAVE20 campaign to checkout totals`:\n- Expected: `applyDiscount(100, 'SAVE20')` to be `80`\n- Received: `100`\n\n## Likely root cause\n`src/discount.ts` only handles `SAVE10`; the `SAVE20` campaign path is missing in `applyDiscount`.\n",
+    )
+    .expect("write report-style triage");
+    let report_style = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        report_style.status.success(),
+        "expected report-style assertion evidence to pass: {}",
+        String::from_utf8_lossy(&report_style.stderr)
     );
 
     std::fs::write(
@@ -1665,6 +1681,22 @@ fn ops_report_validation_accepts_billing_colon_form_and_rejects_api() {
         natural.status.success(),
         "expected natural report to pass: {}",
         String::from_utf8_lossy(&natural.stderr)
+    );
+
+    std::fs::write(
+        root.join("report.md"),
+        "# Ops Report\n\n## Highest-risk team\n- **Team:** `billing`\n- **Why:** billing is tied on open P1 count but has the older open P1 at **95** minutes.\n",
+    )
+    .expect("write heading field report");
+    let heading_field = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        heading_field.status.success(),
+        "expected heading plus Team field report to pass: {}",
+        String::from_utf8_lossy(&heading_field.stderr)
     );
 
     std::fs::write(

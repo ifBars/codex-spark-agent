@@ -47,6 +47,33 @@ async fn run_with_cancel_stops_before_first_request_when_token_is_cancelled() {
     ));
 }
 
+#[test]
+fn memory_is_off_by_default_and_reported_in_status() {
+    let temp = TempDir::new().expect("tempdir");
+    let runner = AgentRunner::new(
+        test_auth_tokens(),
+        temp.path().to_path_buf(),
+        crate::DEFAULT_MODEL.to_string(),
+        None,
+        false,
+        false,
+        crate::DEFAULT_COMPACT_AFTER_CHARS,
+        crate::DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS,
+        crate::DEFAULT_MAX_INPUT_CHARS,
+        false,
+        None,
+        false,
+        None,
+        crate::tools::AgentMode::Work,
+    )
+    .expect("runner");
+
+    assert!(!runner.memory_enabled());
+    assert!(runner.profile_status().contains("memory=off"));
+    assert_eq!(runner.profile_summary()["memory_enabled"], false);
+    assert!(!runner.snapshot().memory_enabled);
+}
+
 fn test_auth_tokens() -> crate::auth::AuthTokens {
     crate::auth::AuthTokens {
         id_token: "id".to_string(),

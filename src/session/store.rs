@@ -486,6 +486,7 @@ mod tests {
             mode: AgentMode::Work,
             reasoning_effort: crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT.to_string(),
             goal: None,
+            memory_enabled: false,
         }
     }
 
