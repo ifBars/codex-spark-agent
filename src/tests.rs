@@ -800,7 +800,7 @@ fn quick_comparison_preflight_only_skips_isolated_codex_home() {
     assert_eq!(status["skip_codex_preflight"], false);
     assert_eq!(status["preflight_only"], true);
     assert_eq!(status["fail_on_directional_comparison"], false);
-    assert_eq!(status["scenario_count"], 14);
+    assert_eq!(status["scenario_count"], 15);
     assert_eq!(status["scenarios"][0], "precise-patch");
     let rerun_command = status["rerun_command"]
         .as_str()
@@ -809,6 +809,7 @@ fn quick_comparison_preflight_only_skips_isolated_codex_home() {
     assert!(rerun_command.contains("-Scenario"));
     assert!(rerun_command.contains("precise-patch"));
     assert!(rerun_command.contains("rust-log-analyzer-scaffold"));
+    assert!(rerun_command.contains("rust-notes-tui-scaffold"));
     assert!(rerun_command.contains("-PreflightOnly"));
     assert!(rerun_command.contains("-IsolatedCodexHome"));
     assert!(rerun_command.contains("-CodexBin 'definitely-not-a-real-codex-binary'"));
@@ -819,6 +820,7 @@ fn quick_comparison_preflight_only_skips_isolated_codex_home() {
     assert!(resume_command.contains("-Scenario"));
     assert!(resume_command.contains("precise-patch"));
     assert!(resume_command.contains("rust-log-analyzer-scaffold"));
+    assert!(resume_command.contains("rust-notes-tui-scaffold"));
     assert!(resume_command.contains("-IsolatedCodexHome"));
     assert!(resume_command.contains("-CodexBin 'definitely-not-a-real-codex-binary'"));
     assert!(!resume_command.contains("-PreflightOnly"));
@@ -828,7 +830,7 @@ fn quick_comparison_preflight_only_skips_isolated_codex_home() {
             .expect("scenario array")
             .last()
             .expect("last scenario"),
-        "rust-log-analyzer-scaffold"
+        "rust-notes-tui-scaffold"
     );
     assert!(status["retry_after_seconds"].is_null());
     assert_eq!(status["retry_at_local"], "");
@@ -908,6 +910,7 @@ fn quick_script_default_scenarios_match_and_stay_in_real_world_suite() {
     assert!(scenarios.contains(&"dependency-upgrade-triage".to_string()));
     assert!(scenarios.contains(&"merge-conflict-resolution".to_string()));
     assert!(scenarios.contains(&"rust-log-analyzer-scaffold".to_string()));
+    assert!(scenarios.contains(&"rust-notes-tui-scaffold".to_string()));
     assert!(agents.contains(".\\scripts\\quick_harness_benchmark.ps1 -ListScenarios"));
 }
 

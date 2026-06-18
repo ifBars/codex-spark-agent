@@ -708,6 +708,35 @@ fn survey_extra_calls_are_not_exact_completion_pressure() {
 }
 
 #[test]
+fn bounded_real_world_triage_review_and_merge_penalize_extra_calls_after_satisfied() {
+    for scenario in [
+        "ci-failure-triage",
+        "pull-request-review",
+        "dependency-upgrade-triage",
+        "merge-conflict-resolution",
+    ] {
+        assert!(
+            exact_completion_pressure_scenario(scenario),
+            "{scenario} should penalize unnecessary work after required evidence is satisfied"
+        );
+
+        let mut row = benchmark_row();
+        row.scenario = scenario.to_string();
+        row.success = true;
+        row.completion_score = 100.0;
+        row.quality_score = 100.0;
+        row.extra_calls_after_satisfied = 2;
+        row.extra_turns_after_satisfied = 1;
+        row.max_tool_only_streak = 4;
+
+        assert!(
+            process_score(&row) < 100.0,
+            "{scenario} extra work should reduce process score"
+        );
+    }
+}
+
+#[test]
 fn codex_cli_baseline_average_normalizes_to_100() {
     let rows = indexed(vec![
         comparison_row("codex-cli", "one"),

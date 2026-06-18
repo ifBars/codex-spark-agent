@@ -13,6 +13,7 @@ function Get-QuickRealWorldScenario {
         "technical-essay",
         "config-migration",
         "ops-report",
-        "rust-log-analyzer-scaffold"
+        "rust-log-analyzer-scaffold",
+        "rust-notes-tui-scaffold"
     )
 }
