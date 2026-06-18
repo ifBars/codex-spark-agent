@@ -1405,6 +1405,44 @@ fn process_score_tracks_successful_runs_with_process_pressure() {
 }
 
 #[test]
+fn headline_score_includes_successful_process_pressure() {
+    let mut clean = benchmark_row();
+    clean.completion_score = 100.0;
+    clean.quality_score = 100.0;
+    clean.process_score = 100.0;
+    clean.efficiency_score = 100.0;
+
+    let mut pressured = clean.clone();
+    pressured.process_score = 70.0;
+
+    assert_eq!(benchmark_score(&clean), 100.0);
+    assert_eq!(benchmark_score(&pressured), 97.0);
+}
+
+#[test]
+fn benchmark_index_uses_process_as_quality_gate() {
+    let codex = comparison_row("codex-cli", "one");
+    let mut clean = comparison_row("spark-clean", "one");
+    clean.duration_ms = 2_500;
+    clean.input_tokens = 4_000;
+    clean.tool_or_item_calls = 6;
+
+    let mut pressured = clean.clone();
+    pressured.runner = "spark-pressured".to_string();
+    pressured.process_score = 70.0;
+    pressured.harness_pressure_score = 70.0;
+
+    let rows = indexed(vec![codex, clean, pressured]);
+    let clean = rows.iter().find(|row| row.runner == "spark-clean").unwrap();
+    let pressured = rows
+        .iter()
+        .find(|row| row.runner == "spark-pressured")
+        .unwrap();
+
+    assert!(clean.benchmark_index.unwrap() > pressured.benchmark_index.unwrap());
+}
+
+#[test]
 fn external_process_tracks_long_noisy_successes() {
     let row = CodexCliBenchmarkRow {
         runner: "opencode".to_string(),
@@ -1453,6 +1491,57 @@ fn external_process_tracks_long_noisy_successes() {
 
     assert!(quality >= 96.0);
     assert!(process < 100.0);
+}
+
+#[test]
+fn external_headline_score_includes_process_pressure() {
+    let row = CodexCliBenchmarkRow {
+        runner: "opencode".to_string(),
+        suite: "real-world".to_string(),
+        scenario: "technical-essay".to_string(),
+        repeat_index: 1,
+        model: "opencode-default".to_string(),
+        command_path: String::new(),
+        command_version: String::new(),
+        reasoning_effort: "medium".to_string(),
+        score: 0.0,
+        success: true,
+        exit_code: Some(0),
+        timed_out: false,
+        duration_ms: 10_000,
+        json_events: 20,
+        non_json_stdout_lines: 0,
+        stderr_lines: 0,
+        actionable_stderr_lines: 0,
+        turns: 4,
+        completed_items: 20,
+        agent_messages: 4,
+        tool_items: 6,
+        input_tokens: 4_000,
+        cached_input_tokens: 0,
+        output_tokens: 1_000,
+        reasoning_output_tokens: 0,
+        expected_artifacts: 1,
+        present_artifacts: 1,
+        validation_exit_code: Some(0),
+        validation_timed_out: false,
+        browser_validation_present: false,
+        browser_validation_exit_code: None,
+        browser_validation_timed_out: false,
+        browser_screenshot: String::new(),
+        source_files: 1,
+        source_bytes: 500,
+        final_message_chars: 400,
+        run_dir: "run".to_string(),
+        provider_retry_hint: String::new(),
+        failure_points: String::new(),
+    };
+
+    let clean = codex_score_from_components(&row, 100.0, 100.0, 100.0, 100.0);
+    let pressured = codex_score_from_components(&row, 100.0, 100.0, 70.0, 100.0);
+
+    assert_eq!(clean, 100.0);
+    assert_eq!(pressured, 97.0);
 }
 
 #[test]
