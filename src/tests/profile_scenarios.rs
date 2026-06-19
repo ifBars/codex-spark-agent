@@ -1362,11 +1362,12 @@ fn ci_failure_triage_declares_log_source_and_validation_expectations() {
     assert!(prompt.contains("logs/frontend-tests.log"));
     assert!(prompt.contains("do not modify source files"));
     assert!(benchmark_prompt.contains("SAVE20 path in applyDiscount"));
+    assert!(benchmark_prompt.contains("Expected 80 / Received 100 evidence"));
     assert_eq!(validation.workdir, ".spark-scenarios/ci-failure-triage");
     assert_eq!(validation.program, "powershell");
     assert!(command.contains("bun test"));
-    assert!(command.contains("Expected\\s*:[^\\r\\n]*\\b80\\b"));
-    assert!(command.contains("Received\\s*:[^\\r\\n]*\\b100\\b"));
+    assert!(command.contains("\\bExpected\\b[^\\r\\n]*\\b80\\b"));
+    assert!(command.contains("\\bReceived\\b[^\\r\\n]*\\b100\\b"));
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
     assert_eq!(calls.len(), 6);
     assert_eq!(
@@ -1427,6 +1428,22 @@ fn ci_failure_triage_validation_accepts_grounded_report() {
         report_style.status.success(),
         "expected report-style assertion evidence to pass: {}",
         String::from_utf8_lossy(&report_style.stderr)
+    );
+
+    std::fs::write(
+        root.join("ci-triage.md"),
+        "# CI Triage\n\n- **Failing command:** `bun test`\n- **Failing assertion:** `tests/discount.test.ts` applies SAVE20 campaign to checkout totals: Expected `80`, Received `100`.\n- **Likely root cause:** `applyDiscount` in `src/discount.ts` only handles SAVE10, so the SAVE20 path falls through unchanged.\n",
+    )
+    .expect("write markdown assertion triage");
+    let markdown_assertion = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        markdown_assertion.status.success(),
+        "expected markdown assertion evidence to pass: {}",
+        String::from_utf8_lossy(&markdown_assertion.stderr)
     );
 
     std::fs::write(

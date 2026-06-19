@@ -782,8 +782,8 @@ pub(crate) fn profile_scenario_prompts(
              2. Read .spark-scenarios/ci-failure-triage/.github/workflows/frontend.yml.\n\
              3. Read .spark-scenarios/ci-failure-triage/logs/frontend-tests.log.\n\
              4. Read .spark-scenarios/ci-failure-triage/src/discount.ts and .spark-scenarios/ci-failure-triage/tests/discount.test.ts.\n\
-             5. Write .spark-scenarios/ci-failure-triage/ci-triage.md with the failing command, failing test/assertion, likely root cause, and minimal fix plan.\n\
-             6. Read ci-triage.md to verify it names bun test, SAVE20, applyDiscount, src/discount.ts, and tests/discount.test.ts.\n\
+             5. Write .spark-scenarios/ci-failure-triage/ci-triage.md with the failing command, failing test/assertion, Expected 80 / Received 100 evidence, likely root cause, and minimal fix plan.\n\
+             6. Read ci-triage.md to verify it names bun test, SAVE20, applyDiscount, Expected 80, Received 100, src/discount.ts, and tests/discount.test.ts.\n\
              Finish with the triage path and whether source files were left unchanged."
                 .to_string(),
         ]),
@@ -1055,9 +1055,9 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Triage the failing CI run and write a grounded diagnosis; do not modify source files or inspect unrelated repository files unless a concrete blocker requires it.\n\
              Required actions:\n\
              1. Read issue.md, .github/workflows/frontend.yml, logs/frontend-tests.log, src/discount.ts, and tests/discount.test.ts.\n\
-             2. Write ci-triage.md with the failing command, failing test/assertion, likely root cause, and minimal fix plan.\n\
+             2. Write ci-triage.md with the failing command, failing test/assertion, Expected 80 / Received 100 evidence, likely root cause, and minimal fix plan.\n\
              3. Identify the SAVE20 path in applyDiscount as the likely production gap.\n\
-             4. Verify ci-triage.md names bun test, SAVE20, applyDiscount, src/discount.ts, and tests/discount.test.ts.\n\
+             4. Verify ci-triage.md names bun test, SAVE20, applyDiscount, Expected 80, Received 100, src/discount.ts, and tests/discount.test.ts.\n\
              Finish with the triage path and whether source files were left unchanged."
                 .to_string()
         }
@@ -1235,7 +1235,7 @@ pub(crate) fn profile_scenario_validation_command(
             args: &[
                 "-NoProfile",
                 "-Command",
-                "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'ci-triage.md' -Raw; foreach ($term in @('bun test','SAVE20','applyDiscount','src/discount.ts','tests/discount.test.ts')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }; if ($content -notmatch '(?i)(Expected\\s*:[^\\r\\n]*\\b80\\b|expected\\s+80\\b)') { throw 'missing expected 80 assertion evidence' }; if ($content -notmatch '(?i)(Received\\s*:[^\\r\\n]*\\b100\\b|received\\s+100\\b)') { throw 'missing received 100 assertion evidence' }",
+                "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'ci-triage.md' -Raw; foreach ($term in @('bun test','SAVE20','applyDiscount','src/discount.ts','tests/discount.test.ts')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }; if ($content -notmatch '(?i)\\bExpected\\b[^\\r\\n]*\\b80\\b') { throw 'missing expected 80 assertion evidence' }; if ($content -notmatch '(?i)\\bReceived\\b[^\\r\\n]*\\b100\\b') { throw 'missing received 100 assertion evidence' }",
             ],
         }),
         ProfileScenarioKind::PullRequestReview => Some(ProfileScenarioValidationCommand {
