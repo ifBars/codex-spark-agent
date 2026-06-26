@@ -762,6 +762,7 @@ mod tests {
         assert!(!args.contains(&long_prompt));
     }
 
+    #[cfg(windows)]
     #[test]
     fn opencode_invocation_strips_windows_verbatim_paths_for_cli_url_parsing() {
         let options = OpencodeBenchmarkOptions {
@@ -792,6 +793,15 @@ mod tests {
         assert!(args.windows(2).any(
             |pair| pair[0] == "--file" && pair[1] == r"C:\repo\.spark-profile\runs\prompt.txt"
         ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn opencode_invocation_keeps_paths_unchanged_outside_windows() {
+        assert_eq!(
+            clean_cli_path(r"\\?\C:\repo\.spark-profile\runs\prompt.txt".to_string()),
+            r"\\?\C:\repo\.spark-profile\runs\prompt.txt"
+        );
     }
 
     #[test]
