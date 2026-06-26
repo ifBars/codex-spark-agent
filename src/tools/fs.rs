@@ -892,7 +892,10 @@ pub(super) fn fs_replace(cwd: &Path, args: Value) -> Result<ToolResult> {
     if old.is_empty() {
         anyhow::bail!("old must not be empty");
     }
-    let new = required_str(&args, "new")?;
+    let new = args
+        .get("new")
+        .and_then(Value::as_str)
+        .context("new is required")?;
     let full = resolve_under(cwd, path)?;
     let content = std::fs::read_to_string(&full)
         .with_context(|| format!("failed to read {}", full.display()))?;

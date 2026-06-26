@@ -654,13 +654,27 @@ fn rust_log_analyzer_scaffold_declares_project_file_expectations() {
     let prompts = profile_scenario_prompts(ProfileScenarioKind::RustLogAnalyzerScaffold, 45_000)
         .expect("scenario");
     let prompt = prompts.first().expect("prompt");
+    let benchmark_prompt = benchmark_task_prompt(ProfileScenarioKind::RustLogAnalyzerScaffold);
     let groups =
         profile_scenario_expected_tool_groups(ProfileScenarioKind::RustLogAnalyzerScaffold);
     let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::RustLogAnalyzerScaffold);
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::RustLogAnalyzerScaffold)
+            .expect("validation");
 
     assert!(prompt.contains("Profile scenario: rust-log-analyzer-scaffold"));
+    assert!(benchmark_prompt.contains("Benchmark scenario: rust-log-analyzer-scaffold"));
     assert!(prompt.contains("Do not set CARGO_TARGET_DIR"));
+    assert!(benchmark_prompt.contains("Do not list the scenario directory"));
+    assert!(benchmark_prompt.contains("harness will run the CLI sample-log smoke check"));
+    assert!(benchmark_prompt.contains("Do not run cargo run manually"));
     assert!(prompt.contains("cargo test"));
+    assert_eq!(validation.workdir, ".spark-scenarios/rust-log-analyzer");
+    assert_eq!(validation.program, "powershell");
+    assert!(validation.args.join(" ").contains("cargo test"));
+    assert!(validation.args.join(" ").contains("cargo run"));
+    assert!(validation.args.join(" ").contains("Top error code"));
+    assert!(validation.args.join(" ").contains("E42"));
     assert_eq!(
         groups,
         vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
@@ -688,6 +702,49 @@ fn rust_log_analyzer_scaffold_declares_project_file_expectations() {
     );
     assert_eq!(calls[5]["tool"], "cmd.exec");
     assert_eq!(calls[5]["command"], "cargo test");
+}
+
+#[test]
+fn benchmark_bugfix_prompts_use_exact_files_without_listing() {
+    let cases = [
+        (
+            ProfileScenarioKind::GithubIssueBugfix,
+            ".spark-scenarios/github-issue-bugfix/src/quote.ts",
+            ".spark-scenarios/github-issue-bugfix/tests/quote.test.ts",
+        ),
+        (
+            ProfileScenarioKind::RustFailingTestBugfix,
+            ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
+            ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs",
+        ),
+        (
+            ProfileScenarioKind::TypeScriptReducerBugfix,
+            ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
+            ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts",
+        ),
+    ];
+
+    for (scenario, source, test) in cases {
+        let prompt = benchmark_task_prompt(scenario);
+
+        assert!(prompt.contains(source));
+        assert!(prompt.contains(test));
+        assert!(prompt.contains("Do not list the scenario directory"));
+        assert!(prompt.contains("the paths above are the complete evidence set"));
+    }
+}
+
+#[test]
+fn ci_failure_triage_prompt_delegates_final_artifact_check_to_harness() {
+    let prompt = benchmark_task_prompt(ProfileScenarioKind::CiFailureTriage);
+
+    assert!(prompt.contains("issue.md"));
+    assert!(prompt.contains("logs/frontend-tests.log"));
+    assert!(prompt.contains("src/discount.ts"));
+    assert!(prompt.contains("tests/discount.test.ts"));
+    assert!(prompt.contains("Do not list the scenario directory"));
+    assert!(prompt.contains("Do not re-read ci-triage.md solely to verify terms"));
+    assert!(prompt.contains("the harness validates those required terms after your run"));
 }
 
 #[test]

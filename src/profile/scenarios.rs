@@ -954,6 +954,7 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Build a brand new Rust CLI project only under .spark-scenarios/rust-log-analyzer.\n\
              Do not set CARGO_TARGET_DIR; use Cargo's default target/ directory for this nested project.\n\
              This is a scoped fixture task: start with the listed brief/sample log and do not survey unrelated repository files unless a concrete blocker requires it.\n\
+             Do not list the scenario directory; the required paths below are the complete initial evidence set.\n\
              On Windows, run validation commands separately rather than chaining them with &&.\n\
              Required actions:\n\
              1. Read .spark-scenarios/rust-log-analyzer/brief.md.\n\
@@ -962,7 +963,7 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              4. Create .spark-scenarios/rust-log-analyzer/src/lib.rs.\n\
              5. Create .spark-scenarios/rust-log-analyzer/src/main.rs.\n\
              6. Run cargo test for the nested project.\n\
-             7. Run the CLI against sample.log when possible and verify it reports INFO/WARN/ERROR counts plus top error code E42.\n\
+             7. Do not run cargo run manually; the harness will run the CLI sample-log smoke check after your run completes and verify INFO/WARN/ERROR counts plus top error code E42.\n\
              Finish with the CLI behavior, test result, and any agent behavior that made project scaffolding easier or harder."
                 .to_string()
         }
@@ -989,9 +990,10 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
             "Benchmark scenario: github-issue-bugfix.\n\
              Work only under .spark-scenarios/github-issue-bugfix.\n\
              Treat issue.md like a GitHub issue assigned to you. This is a scoped fixture task; do not inspect unrelated repository files unless a concrete blocker requires it.\n\
+             Do not list the scenario directory; the paths above are the complete evidence set: .spark-scenarios/github-issue-bugfix/issue.md, .spark-scenarios/github-issue-bugfix/src/quote.ts, and .spark-scenarios/github-issue-bugfix/tests/quote.test.ts.\n\
              Required actions:\n\
              1. Read .spark-scenarios/github-issue-bugfix/issue.md.\n\
-             2. Inspect the production code and tests under .spark-scenarios/github-issue-bugfix.\n\
+             2. Read .spark-scenarios/github-issue-bugfix/src/quote.ts and .spark-scenarios/github-issue-bugfix/tests/quote.test.ts.\n\
              3. Patch production code with the smallest reasonable change so annual quotes annualize before discounting.\n\
              4. Run bun test from .spark-scenarios/github-issue-bugfix.\n\
              Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
@@ -1002,9 +1004,10 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Work only under .spark-scenarios/rust-failing-test-bugfix.\n\
              Treat issue.md like a Rust bug report assigned to you. This is a scoped fixture task; do not inspect unrelated repository files unless a concrete blocker requires it.\n\
              Do not set CARGO_TARGET_DIR; use Cargo's default target/ directory for this nested project.\n\
+             Do not list the scenario directory; the paths above are the complete evidence set: .spark-scenarios/rust-failing-test-bugfix/issue.md, .spark-scenarios/rust-failing-test-bugfix/src/lib.rs, and .spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs.\n\
              Required actions:\n\
              1. Read .spark-scenarios/rust-failing-test-bugfix/issue.md.\n\
-             2. Inspect the production code and tests under .spark-scenarios/rust-failing-test-bugfix.\n\
+             2. Read .spark-scenarios/rust-failing-test-bugfix/src/lib.rs and .spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs.\n\
              3. Patch production code with the smallest reasonable change so runnable jobs filter blank ids and sort higher priority values first.\n\
              4. Run cargo test from .spark-scenarios/rust-failing-test-bugfix.\n\
              Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
@@ -1015,9 +1018,10 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Work only under .spark-scenarios/typescript-reducer-bugfix.\n\
              Treat issue.md like a TypeScript bug report assigned to you. This is a scoped fixture task; do not inspect unrelated repository files unless a concrete blocker requires it.\n\
              Use bun for JavaScript package management and validation.\n\
+             Do not list the scenario directory; the paths above are the complete evidence set: .spark-scenarios/typescript-reducer-bugfix/issue.md, .spark-scenarios/typescript-reducer-bugfix/src/cart.ts, and .spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts.\n\
              Required actions:\n\
              1. Read .spark-scenarios/typescript-reducer-bugfix/issue.md.\n\
-             2. Inspect the production code and tests under .spark-scenarios/typescript-reducer-bugfix.\n\
+             2. Read .spark-scenarios/typescript-reducer-bugfix/src/cart.ts and .spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts.\n\
              3. Patch production code with the smallest reasonable change so inactive lines are ignored by subtotal and non-positive quantities remove the line.\n\
              4. Run bun test from .spark-scenarios/typescript-reducer-bugfix.\n\
              Finish with the root cause, changed file, test result, and whether the patch stayed scoped."
@@ -1053,11 +1057,12 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
             "Benchmark scenario: ci-failure-triage.\n\
              Work only under .spark-scenarios/ci-failure-triage.\n\
              Triage the failing CI run and write a grounded diagnosis; do not modify source files or inspect unrelated repository files unless a concrete blocker requires it.\n\
+             Do not list the scenario directory; the paths below are the complete evidence set.\n\
              Required actions:\n\
              1. Read issue.md, .github/workflows/frontend.yml, logs/frontend-tests.log, src/discount.ts, and tests/discount.test.ts.\n\
              2. Write ci-triage.md with the failing command, failing test/assertion, Expected 80 / Received 100 evidence, likely root cause, and minimal fix plan.\n\
              3. Identify the SAVE20 path in applyDiscount as the likely production gap.\n\
-             4. Verify ci-triage.md names bun test, SAVE20, applyDiscount, Expected 80, Received 100, src/discount.ts, and tests/discount.test.ts.\n\
+             4. Do not re-read ci-triage.md solely to verify terms; the harness validates those required terms after your run.\n\
              Finish with the triage path and whether source files were left unchanged."
                 .to_string()
         }
@@ -1188,8 +1193,12 @@ pub(crate) fn profile_scenario_validation_command(
         }),
         ProfileScenarioKind::RustLogAnalyzerScaffold => Some(ProfileScenarioValidationCommand {
             workdir: ".spark-scenarios/rust-log-analyzer",
-            program: "cargo",
-            args: &["test"],
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                "$ErrorActionPreference='Stop'; cargo test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $out = cargo run --quiet -- .\\sample.log; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $text = $out -join \"`n\"; foreach ($term in @('INFO','WARN','ERROR','Top error code','E42')) { if ($text -notlike \"*$term*\") { throw \"missing $term\" } }",
+            ],
         }),
         ProfileScenarioKind::RustNotesTuiScaffold => Some(ProfileScenarioValidationCommand {
             workdir: ".spark-scenarios/rust-notes-tui",

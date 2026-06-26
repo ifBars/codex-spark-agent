@@ -716,6 +716,31 @@ fn fs_replace_updates_exact_text() {
 }
 
 #[test]
+fn fs_replace_accepts_empty_new_text_for_deletions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("sample.txt");
+    std::fs::write(&path, "alpha\nremove me\nomega\n").expect("write sample");
+
+    let result = fs_replace(
+        dir.path(),
+        json!({
+            "path": "sample.txt",
+            "old": "remove me\n",
+            "new": "",
+            "expected_replacements": 1
+        }),
+    )
+    .expect("replace");
+
+    assert!(result.ok);
+    assert_eq!(result.data["replacements"], 1);
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read updated"),
+        "alpha\nomega\n"
+    );
+}
+
+#[test]
 fn fs_replace_accepts_line_ending_equivalent_old_text() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("sample.txt");

@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -124,27 +125,12 @@ async fn run_opencode_scenario(
         )
     })?;
     let prompt = external_benchmark_prompt(&options.cwd, scenario_cwd, scenario);
-    std::fs::write(run_dir.join("prompt.txt"), &prompt)
+    let prompt_path = run_dir.join("prompt.txt");
+    std::fs::write(&prompt_path, &prompt)
         .map_err(|error| anyhow::anyhow!("failed to write opencode prompt: {error}"))?;
 
     let mut command = Command::new(&options.opencode_bin);
-    command
-        .arg("run")
-        .arg("--format")
-        .arg("json")
-        .arg("--dir")
-        .arg(scenario_cwd)
-        .arg("--dangerously-skip-permissions");
-    if options.pure {
-        command.arg("--pure");
-    }
-    if let Some(model) = &options.model {
-        command.arg("--model").arg(model);
-    }
-    command
-        .arg("--variant")
-        .arg(opencode_reasoning_variant_arg(&options.reasoning_effort));
-    command.arg(prompt);
+    command.args(opencode_command_args(options, scenario_cwd, &prompt_path));
     command.kill_on_drop(true);
 
     let started = std::time::Instant::now();
@@ -280,6 +266,59 @@ async fn run_opencode_scenario(
     };
     row.score = external_agent_score(&row);
     Ok(row)
+}
+
+const OPENCODE_PROMPT_FILE_MESSAGE: &str =
+    "Run the benchmark task described in the attached prompt file.";
+
+fn opencode_command_args(
+    options: &OpencodeBenchmarkOptions,
+    scenario_cwd: &Path,
+    prompt_path: &Path,
+) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("run"),
+        OsString::from("--format"),
+        OsString::from("json"),
+        OsString::from("--dir"),
+        opencode_cli_path_arg(scenario_cwd),
+        OsString::from("--dangerously-skip-permissions"),
+    ];
+    if options.pure {
+        args.push(OsString::from("--pure"));
+    }
+    if let Some(model) = &options.model {
+        args.push(OsString::from("--model"));
+        args.push(OsString::from(model));
+    }
+    args.push(OsString::from("--variant"));
+    args.push(OsString::from(opencode_reasoning_variant_arg(
+        &options.reasoning_effort,
+    )));
+    args.push(OsString::from(OPENCODE_PROMPT_FILE_MESSAGE));
+    args.push(OsString::from("--file"));
+    args.push(opencode_cli_path_arg(prompt_path));
+    args
+}
+
+fn opencode_cli_path_arg(path: &Path) -> OsString {
+    OsString::from(clean_cli_path(path.display().to_string()))
+}
+
+#[cfg(windows)]
+fn clean_cli_path(path: String) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn clean_cli_path(path: String) -> String {
+    path
 }
 
 fn external_benchmark_prompt(
@@ -685,6 +724,74 @@ mod tests {
     #[test]
     fn opencode_reasoning_effort_is_passed_as_variant() {
         assert_eq!(opencode_reasoning_variant_arg("high"), "high");
+    }
+
+    #[test]
+    fn opencode_invocation_uses_prompt_file_instead_of_long_positional_prompt() {
+        let options = OpencodeBenchmarkOptions {
+            cwd: PathBuf::from("repo"),
+            suite: ProfileBenchmarkSuiteKind::RealWorld,
+            model: Some("openai/gpt-5.3-codex-spark".to_string()),
+            reasoning_effort: "high".to_string(),
+            repeat: 1,
+            scenarios: Vec::new(),
+            timeout_seconds: 60,
+            opencode_bin: PathBuf::from("opencode"),
+            pure: true,
+            output_dir: PathBuf::from(".spark-profile/benchmarks"),
+        };
+        let long_prompt = "Use cwd for scenario files. ".repeat(200);
+        let args = opencode_command_args(
+            &options,
+            Path::new("workspaces/precise-patch"),
+            Path::new(".spark-profile/benchmarks/runs/run-1/prompt.txt"),
+        );
+        let args = args
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(args.windows(2).any(|pair| pair[0] == "--file"
+            && pair[1] == ".spark-profile/benchmarks/runs/run-1/prompt.txt"));
+        assert!(args.contains(&OPENCODE_PROMPT_FILE_MESSAGE.to_string()));
+        assert!(
+            args.iter()
+                .position(|arg| arg == OPENCODE_PROMPT_FILE_MESSAGE)
+                < args.iter().position(|arg| arg == "--file")
+        );
+        assert!(!args.contains(&long_prompt));
+    }
+
+    #[test]
+    fn opencode_invocation_strips_windows_verbatim_paths_for_cli_url_parsing() {
+        let options = OpencodeBenchmarkOptions {
+            cwd: PathBuf::from("repo"),
+            suite: ProfileBenchmarkSuiteKind::RealWorld,
+            model: None,
+            reasoning_effort: "medium".to_string(),
+            repeat: 1,
+            scenarios: Vec::new(),
+            timeout_seconds: 60,
+            opencode_bin: PathBuf::from("opencode"),
+            pure: false,
+            output_dir: PathBuf::from(".spark-profile/benchmarks"),
+        };
+        let args = opencode_command_args(
+            &options,
+            Path::new(r"\\?\C:\repo\.spark-profile\workspace"),
+            Path::new(r"\\?\C:\repo\.spark-profile\runs\prompt.txt"),
+        )
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--dir" && pair[1] == r"C:\repo\.spark-profile\workspace")
+        );
+        assert!(args.windows(2).any(
+            |pair| pair[0] == "--file" && pair[1] == r"C:\repo\.spark-profile\runs\prompt.txt"
+        ));
     }
 
     #[test]
