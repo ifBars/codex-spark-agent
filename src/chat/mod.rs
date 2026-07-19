@@ -5,7 +5,7 @@ use std::path::PathBuf;
 pub(crate) mod markdown;
 pub(crate) mod tui;
 
-use crate::{agent, prompt_commands, session, skill, tools};
+use crate::{agent, mcp, prompt_commands, session, skill, tools};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SlashCommand {
@@ -49,6 +49,11 @@ pub(crate) const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "/memory",
         usage: "/memory [on|off|status|path|show|add <note>]",
         description: "Toggle markdown memory for this session",
+    },
+    SlashCommand {
+        name: "/mcp",
+        usage: "/mcp [list|enable|disable|reset|refresh]",
+        description: "Manage workspace MCP servers",
     },
     SlashCommand {
         name: "/ask",
@@ -229,11 +234,19 @@ pub(crate) async fn run_line_interactive_chat(
             continue;
         }
 
+        if let Some(command) = command_args(input, "/mcp") {
+            match handle_mcp_command(runner, &cwd, command.trim()).await {
+                Ok(message) => println!("{message}"),
+                Err(error) => eprintln!("error: {error:#}"),
+            }
+            continue;
+        }
+
         match input {
             "/exit" | "/quit" => return Ok(()),
             "/help" => {
                 println!(
-                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /memory, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit"
+                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /memory, /mcp, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit"
                 );
                 println!(
                     "Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear"
@@ -243,6 +256,9 @@ pub(crate) async fn run_line_interactive_chat(
                 );
                 println!(
                     "Memory commands: /memory, /memory on, /memory off, /memory add <durable note>, /memory show"
+                );
+                println!(
+                    "MCP commands: /mcp, /mcp enable <name>, /mcp disable <name>, /mcp reset <name>, /mcp refresh"
                 );
                 println!(
                     "Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>"
@@ -446,6 +462,90 @@ pub(crate) fn parse_reasoning_effort(input: &str) -> Option<&'static str> {
         "high" => Some("high"),
         "xhigh" => Some("xhigh"),
         _ => None,
+    }
+}
+
+pub(crate) async fn handle_mcp_command(
+    runner: &mut agent::AgentRunner,
+    cwd: &std::path::Path,
+    command: &str,
+) -> Result<String> {
+    let mut parts = command.split_whitespace();
+    match parts.next() {
+        None | Some("list") => {
+            if parts.next().is_some() {
+                anyhow::bail!("usage: /mcp [list]");
+            }
+            let statuses = mcp::configured_server_statuses(cwd)?;
+            if statuses.is_empty() {
+                return Ok("No MCP servers configured. Add one to global Codex config, .mcp.json, or .spark/mcp.json.".to_string());
+            }
+            let mut lines = vec![format!(
+                "MCP servers (workspace state: {})",
+                mcp::mcp_state_path(cwd).display()
+            )];
+            if mcp::mcp_disabled_by_env() {
+                lines.push("all MCP discovery is disabled by SPARK_DISABLE_MCP".to_string());
+            }
+            for status in statuses {
+                lines.push(format!(
+                    "{}  {}{}",
+                    if status.enabled { "on " } else { "off" },
+                    status.name,
+                    if status.overridden {
+                        "  (workspace override)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            Ok(lines.join("\n"))
+        }
+        Some(action @ ("enable" | "disable")) => {
+            let name = parts
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: /mcp {action} <name>"))?;
+            if parts.next().is_some() {
+                anyhow::bail!("usage: /mcp {action} <name>");
+            }
+            let enabled = action == "enable";
+            mcp::set_server_enabled(cwd, name, enabled)?;
+            runner.invalidate_mcp_registry();
+            Ok(format!(
+                "MCP server `{name}` {} for this workspace. The next agent request will reload MCP tools.",
+                if enabled { "enabled" } else { "disabled" }
+            ))
+        }
+        Some("reset") => {
+            let name = parts
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("usage: /mcp reset <name>"))?;
+            if parts.next().is_some() {
+                anyhow::bail!("usage: /mcp reset <name>");
+            }
+            let removed = mcp::reset_server_enabled(cwd, name)?;
+            runner.invalidate_mcp_registry();
+            Ok(if removed {
+                format!("MCP server `{name}` now follows its configured enabled state.")
+            } else {
+                format!("MCP server `{name}` had no workspace override.")
+            })
+        }
+        Some("refresh") => {
+            if parts.next().is_some() {
+                anyhow::bail!("usage: /mcp refresh");
+            }
+            let (tool_count, warnings) = runner.refresh_mcp_registry().await;
+            let mut message = format!("MCP registry refreshed: {tool_count} tools available.");
+            if !warnings.is_empty() {
+                message.push_str("\nWarnings:\n- ");
+                message.push_str(&warnings.join("\n- "));
+            }
+            Ok(message)
+        }
+        Some(_) => {
+            anyhow::bail!("usage: /mcp [list|enable <name>|disable <name>|reset <name>|refresh]")
+        }
     }
 }
 

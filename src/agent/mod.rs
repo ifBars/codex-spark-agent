@@ -575,6 +575,18 @@ impl AgentRunner {
         self.mcp_registry = Some(registry);
     }
 
+    pub(crate) fn invalidate_mcp_registry(&mut self) {
+        self.mcp_registry = None;
+    }
+
+    pub(crate) async fn refresh_mcp_registry(&mut self) -> (usize, Vec<String>) {
+        let registry = McpRegistry::discover(&self.cwd).await;
+        let tool_count = registry.tools().len();
+        let warnings = registry.warnings().to_vec();
+        self.mcp_registry = Some(registry);
+        (tool_count, warnings)
+    }
+
     pub fn reasoning_effort(&self) -> &str {
         self.client.reasoning_effort()
     }

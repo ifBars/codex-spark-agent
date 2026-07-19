@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -63,6 +63,19 @@ struct McpServerConfig {
     url: Option<String>,
     #[serde(default)]
     http_headers: HashMap<String, String>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct McpStateRoot {
+    #[serde(default)]
+    overrides: BTreeMap<String, bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct McpServerStatus {
+    pub(crate) name: String,
+    pub(crate) enabled: bool,
+    pub(crate) overridden: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,7 +245,7 @@ impl McpRegistry {
     }
 }
 
-fn mcp_disabled_by_env() -> bool {
+pub(crate) fn mcp_disabled_by_env() -> bool {
     std::env::var("SPARK_DISABLE_MCP")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false)
@@ -260,7 +273,7 @@ fn default_tool_schema() -> Value {
     })
 }
 
-fn load_mcp_servers(cwd: &Path) -> HashMap<String, McpServerConfig> {
+fn load_mcp_server_definitions(cwd: &Path) -> HashMap<String, McpServerConfig> {
     let mut servers = HashMap::new();
     if let Ok(app_dir) = config::app_dir() {
         merge_toml_servers(&mut servers, &app_dir.join("config.toml"));
@@ -271,6 +284,86 @@ fn load_mcp_servers(cwd: &Path) -> HashMap<String, McpServerConfig> {
     merge_json_servers(&mut servers, &cwd.join(".mcp.json"));
     merge_json_servers(&mut servers, &cwd.join(".spark").join("mcp.json"));
     servers
+}
+
+fn load_mcp_servers(cwd: &Path) -> HashMap<String, McpServerConfig> {
+    let mut servers = load_mcp_server_definitions(cwd);
+    if let Ok(state) = read_mcp_state(cwd) {
+        for (name, enabled) in state.overrides {
+            if let Some(config) = servers.get_mut(&name) {
+                config.enabled = Some(enabled);
+            }
+        }
+    }
+    servers
+}
+
+pub(crate) fn mcp_state_path(cwd: &Path) -> PathBuf {
+    cwd.join(".spark").join("mcp-state.json")
+}
+
+pub(crate) fn configured_server_statuses(cwd: &Path) -> Result<Vec<McpServerStatus>> {
+    let definitions = load_mcp_server_definitions(cwd);
+    let state = read_mcp_state(cwd)?;
+    let mut statuses = definitions
+        .into_iter()
+        .map(|(name, config)| McpServerStatus {
+            enabled: state
+                .overrides
+                .get(&name)
+                .copied()
+                .unwrap_or(config.enabled.unwrap_or(true)),
+            overridden: state.overrides.contains_key(&name),
+            name,
+        })
+        .collect::<Vec<_>>();
+    statuses.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(statuses)
+}
+
+pub(crate) fn set_server_enabled(cwd: &Path, name: &str, enabled: bool) -> Result<()> {
+    let definitions = load_mcp_server_definitions(cwd);
+    if !definitions.contains_key(name) {
+        anyhow::bail!("unknown MCP server `{name}`; run /mcp list to see configured servers");
+    }
+
+    let mut state = read_mcp_state(cwd)?;
+    state.overrides.insert(name.to_string(), enabled);
+    write_mcp_state(cwd, &state)
+}
+
+pub(crate) fn reset_server_enabled(cwd: &Path, name: &str) -> Result<bool> {
+    let definitions = load_mcp_server_definitions(cwd);
+    if !definitions.contains_key(name) {
+        anyhow::bail!("unknown MCP server `{name}`; run /mcp list to see configured servers");
+    }
+
+    let mut state = read_mcp_state(cwd)?;
+    let removed = state.overrides.remove(name).is_some();
+    if removed {
+        write_mcp_state(cwd, &state)?;
+    }
+    Ok(removed)
+}
+
+fn read_mcp_state(cwd: &Path) -> Result<McpStateRoot> {
+    let path = mcp_state_path(cwd);
+    if !path.exists() {
+        return Ok(McpStateRoot::default());
+    }
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
+}
+
+fn write_mcp_state(cwd: &Path, state: &McpStateRoot) -> Result<()> {
+    let path = mcp_state_path(cwd);
+    let parent = path.parent().context("MCP state path has no parent")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create {}", parent.display()))?;
+    let mut body = serde_json::to_string_pretty(state)?;
+    body.push('\n');
+    std::fs::write(&path, body).with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn merge_toml_servers(target: &mut HashMap<String, McpServerConfig>, path: &Path) {
@@ -675,8 +768,46 @@ fn sanitize_name(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{local_mcp_tool_name, parse_json_rpc_result, parse_sse_json};
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        configured_server_statuses, load_mcp_servers, local_mcp_tool_name, mcp_state_path,
+        parse_json_rpc_result, parse_sse_json, reset_server_enabled, set_server_enabled,
+    };
     use serde_json::json;
+
+    struct TestWorkspace(PathBuf);
+
+    impl TestWorkspace {
+        fn new() -> Self {
+            let id = super::REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = std::env::temp_dir()
+                .join(format!("spark-mcp-state-test-{}-{id}", std::process::id()));
+            std::fs::create_dir_all(&path).expect("create MCP test workspace");
+            std::fs::write(
+                path.join(".mcp.json"),
+                serde_json::to_vec_pretty(&json!({
+                    "mcpServers": {
+                        "context7": {"command": "context7-server"},
+                        "docs": {"url": "https://example.test/mcp", "enabled": false}
+                    }
+                }))
+                .expect("serialize MCP fixture"),
+            )
+            .expect("write MCP fixture");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TestWorkspace {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn mcp_tool_names_are_stable_function_names() {
@@ -710,5 +841,54 @@ mod tests {
         .expect("sse should parse");
 
         assert_eq!(parsed["result"]["ok"], true);
+    }
+
+    #[test]
+    fn workspace_state_overrides_and_resets_server_enabled_status() {
+        let workspace = TestWorkspace::new();
+
+        let initial = configured_server_statuses(workspace.path()).expect("list MCP servers");
+        assert!(
+            initial
+                .iter()
+                .any(|server| server.name == "context7" && server.enabled && !server.overridden)
+        );
+        assert!(
+            initial
+                .iter()
+                .any(|server| server.name == "docs" && !server.enabled && !server.overridden)
+        );
+
+        set_server_enabled(workspace.path(), "context7", false).expect("disable MCP server");
+        let disabled = configured_server_statuses(workspace.path()).expect("list disabled server");
+        assert!(
+            disabled.iter().any(|server| {
+                server.name == "context7" && !server.enabled && server.overridden
+            })
+        );
+        assert_eq!(
+            load_mcp_servers(workspace.path())["context7"].enabled,
+            Some(false)
+        );
+        assert!(mcp_state_path(workspace.path()).is_file());
+
+        assert!(reset_server_enabled(workspace.path(), "context7").expect("reset MCP server"));
+        let reset = configured_server_statuses(workspace.path()).expect("list reset server");
+        assert!(
+            reset
+                .iter()
+                .any(|server| server.name == "context7" && server.enabled && !server.overridden)
+        );
+    }
+
+    #[test]
+    fn workspace_state_rejects_unknown_server_names() {
+        let workspace = TestWorkspace::new();
+
+        let error = set_server_enabled(workspace.path(), "missing", false)
+            .expect_err("unknown server should fail");
+
+        assert!(error.to_string().contains("unknown MCP server `missing`"));
+        assert!(!mcp_state_path(workspace.path()).exists());
     }
 }
