@@ -42,6 +42,12 @@ pub(crate) enum AgentDisplayEvent {
     },
     Assistant(String),
     AssistantDelta(String),
+    ResponseComplete {
+        duration_ms: u64,
+        output_tokens: Option<u64>,
+        time_to_first_token_ms: Option<u64>,
+        average_tokens_per_second: Option<f64>,
+    },
     ReasoningStart,
     ReasoningSummary(String),
     ReasoningFinish,
@@ -292,6 +298,26 @@ impl AgentRunner {
                 events,
                 AgentDisplayEvent::AssistantDelta(text.to_string()),
             ),
+        }
+    }
+
+    pub(crate) fn emit_response_complete(
+        &mut self,
+        duration_ms: u64,
+        output_tokens: Option<u64>,
+        time_to_first_token_ms: Option<u64>,
+        average_tokens_per_second: Option<f64>,
+    ) {
+        let event = AgentDisplayEvent::ResponseComplete {
+            duration_ms,
+            output_tokens,
+            time_to_first_token_ms,
+            average_tokens_per_second,
+        };
+        match &mut self.display {
+            AgentDisplay::Plain | AgentDisplay::Markdown => {}
+            AgentDisplay::Buffered(events) => events.push(event),
+            AgentDisplay::Shared(events) => push_shared_display_event(events, event),
         }
     }
 

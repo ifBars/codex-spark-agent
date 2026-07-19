@@ -41,3 +41,5 @@ tokio-util = { version = "0.7.18", features = ["rt"] }
 directories = "6.0.0"
 inquire = "0.9.4"
 comfy-table = "7.2.2"
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.29", features = ["native-tls"] }

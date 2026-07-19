@@ -36,6 +36,8 @@ impl AgentRunner {
         let mut turn = 0usize;
         let mut last_tool_only_compaction_streak = 0usize;
         let mut last_tool_only_notice_streak = 0usize;
+        let mut previous_response_id = None::<String>;
+        let mut continuation_input_start = 0usize;
         loop {
             turn += 1;
             if cancellation.is_cancelled() {
@@ -72,6 +74,8 @@ impl AgentRunner {
                 .await
             {
                 Ok(Some(report)) => {
+                    previous_response_id = None;
+                    continuation_input_start = 0;
                     if report.get("trigger").and_then(Value::as_str)
                         == Some(TOOL_ONLY_STREAK_COMPACTION_TRIGGER)
                     {
@@ -136,6 +140,8 @@ impl AgentRunner {
             let client = self.client.clone();
             let request_input = self.input.clone();
             let streamed_text;
+            let mut time_to_first_token_ms = None;
+            let mut generation_started = None;
             let mut response_retry_used = false;
             let (response, raw) = loop {
                 let mut attempt_streamed_text = String::new();
@@ -143,66 +149,90 @@ impl AgentRunner {
                 let mut hosted_search_queries = HashMap::<String, Option<String>>::new();
                 let mut hosted_search_displayed = HashSet::<String>::new();
                 let response_result = client
-                    .responses_create_with_event_handler(&request_input, &tools, |event| {
-                        if let Some(update) = reasoning_display_update(event) {
-                            match update {
-                                ReasoningDisplayUpdate::Started => self.emit_reasoning_start(),
-                                ReasoningDisplayUpdate::Summary(text) => {
-                                    self.emit_reasoning_summary(&text);
-                                }
-                                ReasoningDisplayUpdate::Finished => self.emit_reasoning_finish(),
-                            }
-                        }
-                        if let Some(update) = web_search_display_update(event) {
-                            match update {
-                                WebSearchDisplayUpdate::Started { id, query } => {
-                                    hosted_search_starts.insert(id.clone(), Instant::now());
-                                    hosted_search_queries.insert(id.clone(), query.clone());
-                                    if query.is_some() {
-                                        hosted_search_displayed.insert(id);
-                                        self.emit_tool_batch_start(1);
-                                        self.emit_tool_call(
-                                            "web.search",
-                                            &web_search_display_args(query),
-                                        );
+                    .responses_create_with_event_handler(
+                        &request_input,
+                        &tools,
+                        previous_response_id.as_deref(),
+                        continuation_input_start,
+                        |event| {
+                            if let Some(update) = reasoning_display_update(event) {
+                                match update {
+                                    ReasoningDisplayUpdate::Started => self.emit_reasoning_start(),
+                                    ReasoningDisplayUpdate::Summary(text) => {
+                                        self.emit_reasoning_summary(&text);
                                     }
-                                }
-                                WebSearchDisplayUpdate::Query { id, query } => {
-                                    hosted_search_queries.insert(id.clone(), Some(query.clone()));
-                                    if hosted_search_displayed.insert(id) {
-                                        self.emit_tool_batch_start(1);
-                                        self.emit_tool_call(
-                                            "web.search",
-                                            &web_search_display_args(Some(query)),
-                                        );
+                                    ReasoningDisplayUpdate::Finished => {
+                                        self.emit_reasoning_finish()
                                     }
-                                }
-                                WebSearchDisplayUpdate::Finished { id, query, ok } => {
-                                    let started = hosted_search_starts.remove(&id);
-                                    let query = query.or_else(|| {
-                                        hosted_search_queries.remove(&id).and_then(|query| query)
-                                    });
-                                    if hosted_search_displayed.insert(id) {
-                                        self.emit_tool_batch_start(1);
-                                        self.emit_tool_call(
-                                            "web.search",
-                                            &web_search_display_args(query.clone()),
-                                        );
-                                    }
-                                    let duration_ms = started
-                                        .map(|started| started.elapsed().as_millis() as u64)
-                                        .unwrap_or(0);
-                                    let error =
-                                        (!ok).then_some("hosted web search did not complete");
-                                    self.emit_tool_result("web.search", ok, duration_ms, 0, error);
                                 }
                             }
-                        }
-                        if let Some(delta) = output_text_delta(event) {
-                            attempt_streamed_text.push_str(delta);
-                            self.emit_assistant_delta(delta);
-                        }
-                    })
+                            if let Some(update) = web_search_display_update(event) {
+                                match update {
+                                    WebSearchDisplayUpdate::Started { id, query } => {
+                                        hosted_search_starts.insert(id.clone(), Instant::now());
+                                        hosted_search_queries.insert(id.clone(), query.clone());
+                                        if query.is_some() {
+                                            hosted_search_displayed.insert(id);
+                                            self.emit_tool_batch_start(1);
+                                            self.emit_tool_call(
+                                                "web.search",
+                                                &web_search_display_args(query),
+                                            );
+                                        }
+                                    }
+                                    WebSearchDisplayUpdate::Query { id, query } => {
+                                        hosted_search_queries
+                                            .insert(id.clone(), Some(query.clone()));
+                                        if hosted_search_displayed.insert(id) {
+                                            self.emit_tool_batch_start(1);
+                                            self.emit_tool_call(
+                                                "web.search",
+                                                &web_search_display_args(Some(query)),
+                                            );
+                                        }
+                                    }
+                                    WebSearchDisplayUpdate::Finished { id, query, ok } => {
+                                        let started = hosted_search_starts.remove(&id);
+                                        let query = query.or_else(|| {
+                                            hosted_search_queries
+                                                .remove(&id)
+                                                .and_then(|query| query)
+                                        });
+                                        if hosted_search_displayed.insert(id) {
+                                            self.emit_tool_batch_start(1);
+                                            self.emit_tool_call(
+                                                "web.search",
+                                                &web_search_display_args(query.clone()),
+                                            );
+                                        }
+                                        let duration_ms = started
+                                            .map(|started| started.elapsed().as_millis() as u64)
+                                            .unwrap_or(0);
+                                        let error =
+                                            (!ok).then_some("hosted web search did not complete");
+                                        self.emit_tool_result(
+                                            "web.search",
+                                            ok,
+                                            duration_ms,
+                                            0,
+                                            error,
+                                        );
+                                    }
+                                }
+                            }
+                            if let Some(delta) = output_text_delta(event) {
+                                if generation_started.is_none() {
+                                    generation_started = Some(Instant::now());
+                                    time_to_first_token_ms = Some(
+                                        request_started.elapsed().as_millis().min(u64::MAX as u128)
+                                            as u64,
+                                    );
+                                }
+                                attempt_streamed_text.push_str(delta);
+                                self.emit_assistant_delta(delta);
+                            }
+                        },
+                    )
                     .await;
                 match response_result {
                     Ok(result) => {
@@ -243,6 +273,12 @@ impl AgentRunner {
                 }
             };
             let request_duration_ms = request_started.elapsed().as_millis() as u64;
+            let output_tokens = response_output_tokens(&raw);
+            let generation_duration_ms = generation_started
+                .map(|started| started.elapsed().as_millis().min(u64::MAX as u128) as u64)
+                .unwrap_or(request_duration_ms);
+            let average_tokens_per_second =
+                average_tokens_per_second(output_tokens, generation_duration_ms);
             self.profiler
                 .record_request_duration(self.request_seq, request_duration_ms);
             if let Some(trace) = &mut self.trace {
@@ -262,8 +298,21 @@ impl AgentRunner {
             {
                 self.emit_assistant_delta(missing_suffix);
             }
+            self.emit_response_complete(
+                request_duration_ms,
+                output_tokens,
+                time_to_first_token_ms,
+                average_tokens_per_second,
+            );
 
             self.input.extend(output_items_for_next_input(&raw));
+            if raw.get("transport").and_then(Value::as_str) == Some("responses_websocket") {
+                previous_response_id = response.id.clone();
+                continuation_input_start = self.input.len();
+            } else {
+                previous_response_id = None;
+                continuation_input_start = 0;
+            }
 
             let calls = function_calls(&response);
             self.profiler
@@ -385,6 +434,22 @@ impl AgentRunner {
     }
 }
 
+fn response_output_tokens(raw: &Value) -> Option<u64> {
+    raw.get("response")
+        .unwrap_or(raw)
+        .get("usage")
+        .and_then(|usage| usage.get("output_tokens"))
+        .and_then(Value::as_u64)
+}
+
+fn average_tokens_per_second(output_tokens: Option<u64>, duration_ms: u64) -> Option<f64> {
+    let output_tokens = output_tokens?;
+    if duration_ms == 0 {
+        return None;
+    }
+    Some(output_tokens as f64 * 1_000.0 / duration_ms as f64)
+}
+
 impl AgentRunner {
     fn tools_for_current_loop(&self) -> Vec<ToolDescriptor> {
         let mut tools = tools_for_mode(builtin_tools(), self.mode)
@@ -425,7 +490,11 @@ fn tool_only_notice_interval(compact_after_tool_only_turns: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_retry_response_stream_error, tool_only_notice_interval};
+    use super::{
+        average_tokens_per_second, response_output_tokens, should_retry_response_stream_error,
+        tool_only_notice_interval,
+    };
+    use serde_json::json;
 
     #[test]
     fn tool_only_notice_arrives_before_compaction_threshold() {
@@ -442,5 +511,20 @@ mod tests {
 
         assert!(should_retry_response_stream_error(&retryable));
         assert!(!should_retry_response_stream_error(&other));
+    }
+
+    #[test]
+    fn response_usage_drives_average_output_token_rate() {
+        let raw = json!({
+            "response": {
+                "usage": {"input_tokens": 120, "output_tokens": 42, "total_tokens": 162}
+            }
+        });
+
+        let output_tokens = response_output_tokens(&raw);
+        assert_eq!(output_tokens, Some(42));
+        assert_eq!(average_tokens_per_second(output_tokens, 2_000), Some(21.0));
+        assert_eq!(average_tokens_per_second(output_tokens, 0), None);
+        assert_eq!(average_tokens_per_second(None, 2_000), None);
     }
 }

@@ -1,17 +1,36 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async_with_config};
 
 use crate::auth::AuthTokens;
 use crate::tools::ToolDescriptor;
 
 const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
+const CODEX_RESPONSES_WS_URL: &str = "wss://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_COMPACT_URL: &str = "https://chatgpt.com/backend-api/codex/responses/compact";
+const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
+const WEBSOCKET_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+// The ChatGPT Codex WebSocket gates protocol support using this header. Keep it
+// aligned with the Responses WebSocket generation implemented below.
+const CODEX_WEBSOCKET_PROTOCOL_VERSION: &str = "0.145.0";
 pub(crate) const DEFAULT_SPARK_AGENT_REASONING_EFFORT: &str = "medium";
+
+type ResponsesWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 #[derive(Debug, Clone)]
 pub struct SparkClient {
     http: reqwest::Client,
+    websocket: Arc<Mutex<Option<ResponsesWebSocket>>>,
     pub auth: AuthTokens,
     model: String,
     reasoning_effort: String,
@@ -74,6 +93,7 @@ impl SparkClient {
     ) -> Self {
         Self {
             http: reqwest::Client::new(),
+            websocket: Arc::new(Mutex::new(None)),
             auth,
             model,
             reasoning_effort: reasoning_effort.into(),
@@ -97,6 +117,7 @@ impl SparkClient {
     ) -> Self {
         Self {
             http: self.http.clone(),
+            websocket: Arc::new(Mutex::new(None)),
             auth: self.auth.clone(),
             model: model.into(),
             reasoning_effort: reasoning_effort.into(),
@@ -128,6 +149,8 @@ impl SparkClient {
         &self,
         input: &[Value],
         tools: &[ToolDescriptor],
+        previous_response_id: Option<&str>,
+        continuation_input_start: usize,
         on_event: impl FnMut(&Value),
     ) -> Result<(Response, Value)> {
         let body = json!({
@@ -144,8 +167,14 @@ impl SparkClient {
             "stream": true,
         });
 
-        self.send_streaming_body(body, "Spark request", on_event)
-            .await
+        self.send_streaming_body_with_continuation(
+            body,
+            "Spark request",
+            previous_response_id,
+            continuation_input_start,
+            on_event,
+        )
+        .await
     }
 
     pub async fn compile_skill_summary(&self, name: &str, raw_skill: &str) -> Result<String> {
@@ -213,6 +242,43 @@ SKILL.md:
     }
 
     async fn send_streaming_body(
+        &self,
+        body: Value,
+        context: &str,
+        on_event: impl FnMut(&Value),
+    ) -> Result<(Response, Value)> {
+        self.send_streaming_body_with_continuation(body, context, None, 0, on_event)
+            .await
+    }
+
+    async fn send_streaming_body_with_continuation(
+        &self,
+        body: Value,
+        context: &str,
+        previous_response_id: Option<&str>,
+        continuation_input_start: usize,
+        mut on_event: impl FnMut(&Value),
+    ) -> Result<(Response, Value)> {
+        match self
+            .send_websocket_body(
+                &body,
+                previous_response_id,
+                continuation_input_start,
+                &mut on_event,
+            )
+            .await
+        {
+            Ok(result) => return Ok(result),
+            Err(error) if !error.emitted_event => {
+                tracing::warn!(error = %error.error, "Responses WebSocket unavailable; falling back to HTTP/SSE");
+            }
+            Err(error) => return Err(error.error.context(context.to_string())),
+        }
+
+        self.send_http_streaming_body(body, context, on_event).await
+    }
+
+    async fn send_http_streaming_body(
         &self,
         body: Value,
         context: &str,
@@ -284,7 +350,76 @@ SKILL.md:
         let raw = response_from_stream(completed, &events)?;
         let parsed = serde_json::from_value::<Response>(raw.clone())
             .with_context(|| format!("failed to parse Spark response: {raw}"))?;
-        Ok((parsed, json!({"response": raw, "events": events})))
+        Ok((
+            parsed,
+            json!({"response": raw, "events": events, "transport": "responses_http"}),
+        ))
+    }
+
+    async fn send_websocket_body(
+        &self,
+        body: &Value,
+        previous_response_id: Option<&str>,
+        continuation_input_start: usize,
+        on_event: &mut impl FnMut(&Value),
+    ) -> std::result::Result<(Response, Value), WebSocketAttemptError> {
+        let mut socket_guard = self.websocket.lock().await;
+        if socket_guard.is_none() {
+            let socket = self
+                .connect_websocket()
+                .await
+                .map_err(WebSocketAttemptError::before_stream)?;
+            *socket_guard = Some(socket);
+        }
+
+        let payload = websocket_request_body(body, previous_response_id, continuation_input_start)
+            .map_err(WebSocketAttemptError::before_stream)?;
+        let socket = socket_guard
+            .as_mut()
+            .expect("websocket is initialized before streaming");
+        let result = run_websocket_response(socket, payload, on_event).await;
+        if result.is_err() {
+            *socket_guard = None;
+        }
+        result
+    }
+
+    async fn connect_websocket(&self) -> Result<ResponsesWebSocket> {
+        let mut request = CODEX_RESPONSES_WS_URL
+            .into_client_request()
+            .context("failed to build Responses WebSocket request")?;
+        let headers = request.headers_mut();
+        let mut authorization =
+            HeaderValue::from_str(&format!("Bearer {}", self.auth.access_token))?;
+        authorization.set_sensitive(true);
+        headers.insert("Authorization", authorization);
+        headers.insert("originator", HeaderValue::from_static("spark"));
+        headers.insert(
+            "OpenAI-Beta",
+            HeaderValue::from_static("responses_websockets=2026-02-06"),
+        );
+        headers.insert(
+            "User-Agent",
+            HeaderValue::from_static(concat!("spark/", env!("CARGO_PKG_VERSION"))),
+        );
+        headers.insert(
+            "version",
+            HeaderValue::from_static(CODEX_WEBSOCKET_PROTOCOL_VERSION),
+        );
+        if let Some(account_id) = &self.auth.account_id {
+            let mut account_id = HeaderValue::from_str(account_id)?;
+            account_id.set_sensitive(true);
+            headers.insert("ChatGPT-Account-Id", account_id);
+        }
+
+        let (socket, _) = tokio::time::timeout(
+            WEBSOCKET_CONNECT_TIMEOUT,
+            connect_async_with_config(request, None, true),
+        )
+        .await
+        .context("Responses WebSocket connection timed out")?
+        .context("Responses WebSocket connection failed")?;
+        Ok(socket)
     }
 
     pub async fn responses_compact(
@@ -340,6 +475,157 @@ SKILL.md:
         let output = compact_output_items(&raw)?;
         Ok((output, raw))
     }
+}
+
+struct WebSocketAttemptError {
+    error: anyhow::Error,
+    emitted_event: bool,
+}
+
+impl WebSocketAttemptError {
+    fn before_stream(error: anyhow::Error) -> Self {
+        Self {
+            error,
+            emitted_event: false,
+        }
+    }
+
+    fn during_stream(error: anyhow::Error, emitted_event: bool) -> Self {
+        Self {
+            error,
+            emitted_event,
+        }
+    }
+}
+
+fn websocket_request_body(
+    body: &Value,
+    previous_response_id: Option<&str>,
+    continuation_input_start: usize,
+) -> Result<String> {
+    let mut request = body.clone();
+    let object = request
+        .as_object_mut()
+        .context("Responses request body must be an object")?;
+    object.insert("type".to_string(), json!("response.create"));
+    if let Some(previous_response_id) = previous_response_id {
+        object.insert(
+            "previous_response_id".to_string(),
+            json!(previous_response_id),
+        );
+        let input = object
+            .get("input")
+            .and_then(Value::as_array)
+            .context("Responses request input must be an array")?;
+        object.insert(
+            "input".to_string(),
+            Value::Array(input[continuation_input_start.min(input.len())..].to_vec()),
+        );
+    }
+    serde_json::to_string(&request).context("failed to encode Responses WebSocket request")
+}
+
+async fn run_websocket_response(
+    socket: &mut ResponsesWebSocket,
+    payload: String,
+    on_event: &mut impl FnMut(&Value),
+) -> std::result::Result<(Response, Value), WebSocketAttemptError> {
+    tokio::time::timeout(
+        WEBSOCKET_IDLE_TIMEOUT,
+        socket.send(Message::Text(payload.into())),
+    )
+    .await
+    .map_err(|_| {
+        WebSocketAttemptError::before_stream(anyhow::anyhow!(
+            "timed out sending Responses WebSocket request"
+        ))
+    })?
+    .map_err(|error| {
+        WebSocketAttemptError::before_stream(anyhow::anyhow!(
+            "failed to send Responses WebSocket request: {error}"
+        ))
+    })?;
+
+    let mut events = Vec::new();
+    let mut completed = None;
+    loop {
+        let message = tokio::time::timeout(WEBSOCKET_IDLE_TIMEOUT, socket.next())
+            .await
+            .map_err(|_| {
+                WebSocketAttemptError::during_stream(
+                    anyhow::anyhow!("idle timeout waiting for Responses WebSocket"),
+                    !events.is_empty(),
+                )
+            })?
+            .ok_or_else(|| {
+                WebSocketAttemptError::during_stream(
+                    anyhow::anyhow!("Responses WebSocket closed before response.completed"),
+                    !events.is_empty(),
+                )
+            })?
+            .map_err(|error| {
+                WebSocketAttemptError::during_stream(
+                    anyhow::anyhow!("failed to read Responses WebSocket: {error}"),
+                    !events.is_empty(),
+                )
+            })?;
+
+        match message {
+            Message::Text(text) => {
+                let value: Value = serde_json::from_str(text.as_str()).map_err(|error| {
+                    WebSocketAttemptError::during_stream(
+                        anyhow::anyhow!("invalid Responses WebSocket event: {error}"),
+                        !events.is_empty(),
+                    )
+                })?;
+                if value.get("type").and_then(Value::as_str) == Some("error") {
+                    return Err(WebSocketAttemptError::during_stream(
+                        anyhow::anyhow!("Responses WebSocket returned an error: {value}"),
+                        !events.is_empty(),
+                    ));
+                }
+                on_event(&value);
+                if value.get("type").and_then(Value::as_str) == Some("response.completed") {
+                    completed = value.get("response").cloned();
+                }
+                events.push(value);
+                if completed.is_some() {
+                    break;
+                }
+            }
+            Message::Ping(payload) => {
+                socket.send(Message::Pong(payload)).await.map_err(|error| {
+                    WebSocketAttemptError::during_stream(
+                        anyhow::anyhow!("failed to answer Responses WebSocket ping: {error}"),
+                        !events.is_empty(),
+                    )
+                })?;
+            }
+            Message::Pong(_) => {}
+            Message::Close(frame) => {
+                return Err(WebSocketAttemptError::during_stream(
+                    anyhow::anyhow!(
+                        "Responses WebSocket closed before response.completed: {frame:?}"
+                    ),
+                    !events.is_empty(),
+                ));
+            }
+            Message::Binary(_) | Message::Frame(_) => {}
+        }
+    }
+
+    let raw = response_from_stream(completed, &events)
+        .map_err(|error| WebSocketAttemptError::during_stream(error, !events.is_empty()))?;
+    let parsed = serde_json::from_value::<Response>(raw.clone()).map_err(|error| {
+        WebSocketAttemptError::during_stream(
+            anyhow::anyhow!("failed to parse Spark response: {error}; response={raw}"),
+            !events.is_empty(),
+        )
+    })?;
+    Ok((
+        parsed,
+        json!({"response": raw, "events": events, "transport": "responses_websocket"}),
+    ))
 }
 
 fn compact_output_items(raw: &Value) -> Result<Vec<Value>> {
@@ -853,7 +1139,7 @@ mod tests {
         DEFAULT_SPARK_AGENT_REASONING_EFFORT, ReasoningDisplayUpdate, Response, SparkClient,
         WebSearchDisplayUpdate, output_items_for_next_input, reasoning_display_update,
         response_from_stream, response_text, spark_system_prompt, spark_system_prompt_with_context,
-        tool_to_wire, web_search_display_update,
+        tool_to_wire, web_search_display_update, websocket_request_body,
     };
 
     fn test_auth_tokens() -> AuthTokens {
@@ -880,6 +1166,46 @@ mod tests {
 
         custom_client.set_reasoning_effort("low");
         assert_eq!(custom_client.reasoning_effort(), "low");
+    }
+
+    #[test]
+    fn websocket_first_request_preserves_full_responses_body() {
+        let body = json!({
+            "model": "gpt-test",
+            "input": [{"role": "user", "content": "hello"}],
+            "tools": [],
+            "stream": true
+        });
+
+        let payload = websocket_request_body(&body, None, 0).expect("websocket payload");
+        let payload: serde_json::Value = serde_json::from_str(&payload).expect("json payload");
+
+        assert_eq!(payload["type"], "response.create");
+        assert_eq!(payload["input"], body["input"]);
+        assert!(payload.get("previous_response_id").is_none());
+    }
+
+    #[test]
+    fn websocket_continuation_sends_only_new_items_and_previous_response_id() {
+        let body = json!({
+            "model": "gpt-test",
+            "input": [
+                {"role": "user", "content": "hello"},
+                {"type": "function_call", "call_id": "call_1"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "done"}
+            ],
+            "tools": [],
+            "stream": true
+        });
+
+        let payload = websocket_request_body(&body, Some("resp_1"), 2)
+            .expect("websocket continuation payload");
+        let payload: serde_json::Value = serde_json::from_str(&payload).expect("json payload");
+
+        assert_eq!(payload["type"], "response.create");
+        assert_eq!(payload["previous_response_id"], "resp_1");
+        assert_eq!(payload["input"].as_array().map(Vec::len), Some(1));
+        assert_eq!(payload["input"][0]["type"], "function_call_output");
     }
 
     #[test]
