@@ -14,8 +14,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget, Wrap};
 
+use crate::spinners::{APPLICATION_SPINNERS, ApplicationSpinner, tool_spinner_frame};
+
 const TICK_RATE: Duration = Duration::from_millis(90);
-const VISIBLE_ROWS: usize = 14;
+const VISIBLE_ROWS: usize = 10;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SpinnerPreviewSet {
@@ -39,7 +41,39 @@ pub(crate) fn run() -> Result<()> {
     result
 }
 
-const SPINNER_SETS: [SpinnerPreviewSet; 23] = [
+const SPINNER_SETS: [SpinnerPreviewSet; 31] = [
+    SpinnerPreviewSet {
+        name: "SPARK_PULSE",
+        symbols: crate::spinners::SPARK_PULSE,
+    },
+    SpinnerPreviewSet {
+        name: "SPARK_ORBIT",
+        symbols: crate::spinners::SPARK_ORBIT,
+    },
+    SpinnerPreviewSet {
+        name: "SPARK_SCAN",
+        symbols: crate::spinners::SPARK_SCAN,
+    },
+    SpinnerPreviewSet {
+        name: "SPARK_WAVE",
+        symbols: crate::spinners::SPARK_WAVE,
+    },
+    SpinnerPreviewSet {
+        name: "SPARK_DIAMOND",
+        symbols: crate::spinners::SPARK_DIAMOND,
+    },
+    SpinnerPreviewSet {
+        name: "SPARK_FLIP",
+        symbols: crate::spinners::SPARK_FLIP,
+    },
+    SpinnerPreviewSet {
+        name: "SPARK_COMET",
+        symbols: crate::spinners::SPARK_COMET,
+    },
+    SpinnerPreviewSet {
+        name: "SPARK_TWIN",
+        symbols: crate::spinners::SPARK_TWIN,
+    },
     SpinnerPreviewSet {
         name: "ASCII",
         symbols: throbber_widgets_tui::ASCII.symbols,
@@ -196,6 +230,7 @@ impl SpinnerPreview {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
+                Constraint::Length(8),
                 Constraint::Min(6),
                 Constraint::Length(4),
             ])
@@ -217,13 +252,21 @@ impl SpinnerPreview {
         .block(Block::default().borders(Borders::BOTTOM))
         .render(layout[0], buffer);
 
+        Paragraph::new(application_spinner_lines(self.tick))
+            .block(
+                Block::default()
+                    .title(" Spark in-app lineup ")
+                    .borders(Borders::BOTTOM),
+            )
+            .render(layout[1], buffer);
+
         Paragraph::new(self.visible_rows())
             .wrap(Wrap { trim: true })
-            .render(layout[1], buffer);
+            .render(layout[2], buffer);
 
         Paragraph::new(self.selected_summary())
             .block(Block::default().borders(Borders::TOP))
-            .render(layout[2], buffer);
+            .render(layout[3], buffer);
     }
 
     fn visible_rows(&self) -> Vec<Line<'static>> {
@@ -260,9 +303,52 @@ impl SpinnerPreview {
                     Style::new().fg(Color::DarkGray),
                 ),
             ]),
-            Line::from(format!("code: throbber_widgets_tui::{}", set.name)),
+            Line::from(spinner_code(set)),
         ]
     }
+}
+
+fn spinner_code(set: SpinnerPreviewSet) -> String {
+    if set.name.starts_with("SPARK_") {
+        format!("code: crate::spinners::{}", set.name)
+    } else {
+        format!("code: throbber_widgets_tui::{}", set.name)
+    }
+}
+
+fn application_spinner_lines(tick: usize) -> Vec<Line<'static>> {
+    APPLICATION_SPINNERS
+        .chunks(2)
+        .map(|pair| {
+            let mut spans = Vec::new();
+            for (index, spinner) in pair.iter().enumerate() {
+                if index > 0 {
+                    spans.push(Span::styled("    ", Style::new().fg(Color::DarkGray)));
+                }
+                spans.extend(application_spinner_spans(*spinner, tick));
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn application_spinner_spans(spinner: ApplicationSpinner, tick: usize) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            tool_spinner_frame(Some(spinner.example_tool), tick),
+            Style::new()
+                .fg(Color::LightMagenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {:<17}", spinner.label),
+            Style::new().fg(Color::Gray),
+        ),
+        Span::styled(
+            format!("{:<22}", spinner.set_name),
+            Style::new().fg(Color::DarkGray),
+        ),
+    ]
 }
 
 fn spinner_row(set: SpinnerPreviewSet, selected: bool, tick: usize) -> Line<'static> {
@@ -319,7 +405,10 @@ impl Drop for PreviewTerminal {
 
 #[cfg(test)]
 mod tests {
-    use super::{spinner_frame, spinner_sets};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    use super::{SpinnerPreview, spinner_frame, spinner_sets};
 
     #[test]
     fn spinner_preview_lists_throbber_widget_sets() {
@@ -328,7 +417,10 @@ mod tests {
             .map(|set| set.name)
             .collect::<Vec<_>>();
 
-        assert!(names.len() >= 20);
+        assert!(names.len() >= 30);
+        assert!(names.contains(&"SPARK_PULSE"));
+        assert!(names.contains(&"SPARK_SCAN"));
+        assert!(names.contains(&"SPARK_COMET"));
         assert!(names.contains(&"ASCII"));
         assert!(names.contains(&"BRAILLE_EIGHT"));
         assert!(names.contains(&"BRAILLE_SIX_DOUBLE"));
@@ -346,5 +438,25 @@ mod tests {
 
         assert_eq!(spinner_frame(set, 0), set.symbols[0]);
         assert_eq!(spinner_frame(set, set.symbols.len()), set.symbols[0]);
+    }
+
+    #[test]
+    fn spinner_preview_renders_the_application_lineup() {
+        let app = SpinnerPreview::default();
+        let area = Rect::new(0, 0, 100, 24);
+        let mut buffer = Buffer::empty(area);
+
+        app.draw(area, &mut buffer);
+
+        let rendered = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Spark in-app lineup"));
+        assert!(rendered.contains("file read"));
+        assert!(rendered.contains("web search"));
+        assert!(rendered.contains("subagent"));
+        assert!(rendered.contains("MCP"));
     }
 }

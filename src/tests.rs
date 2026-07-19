@@ -1063,6 +1063,12 @@ fn slash_commands_match_exactly_or_with_whitespace() {
     assert_eq!(command_args("/subagents", "/subagent"), None);
     assert_eq!(command_args("/profile", "/profile"), Some(""));
     assert_eq!(command_args("/profiles", "/profile"), None);
+    assert_eq!(command_args("/mcp", "/mcp"), Some(""));
+    assert_eq!(
+        command_args("/mcp disable context7", "/mcp"),
+        Some("disable context7")
+    );
+    assert_eq!(command_args("/mcps", "/mcp"), None);
     assert_eq!(command_args("/skills", "/skill"), None);
     assert_eq!(command_args("/sessions", "/session"), None);
 }
@@ -1089,6 +1095,11 @@ fn slash_command_helpers_match_menu_and_unknown_warning() {
         matching_slash_commands("/mem")
             .iter()
             .any(|command| command.name == "/memory")
+    );
+    assert!(
+        matching_slash_commands("/mcp")
+            .iter()
+            .any(|command| command.name == "/mcp")
     );
     assert!(unknown_slash_command_warning("/wat now").contains("unknown command: /wat"));
 }

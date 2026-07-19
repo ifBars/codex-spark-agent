@@ -4,14 +4,18 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::clipboard::CopyToClipboard;
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -36,6 +40,12 @@ const TOOL_COLOR: Color = Color::LightBlue;
 const REASONING_COLOR: Color = Color::Magenta;
 const CONTEXT_COLOR: Color = Color::Yellow;
 const WARNING_COLOR: Color = Color::Red;
+const INPUT_HISTORY_LIMIT: usize = 100;
+const COPY_CONFIRMATION_DURATION: Duration = Duration::from_millis(1_600);
+const USER_MESSAGE_BG: Color = Color::Rgb(5, 24, 15);
+const USER_MESSAGE_HOVER_BG: Color = Color::Rgb(10, 42, 25);
+const ASSISTANT_MESSAGE_BG: Color = Color::Rgb(5, 17, 27);
+const ASSISTANT_MESSAGE_HOVER_BG: Color = Color::Rgb(9, 33, 47);
 
 pub(crate) async fn run(
     runner: &mut AgentRunner,
@@ -59,14 +69,18 @@ impl TuiTerminal {
     fn enter() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen)?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
         Ok(Self { terminal })
     }
 
     fn exit(&mut self) -> Result<()> {
         disable_raw_mode()?;
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(
+            self.terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        )?;
         self.terminal.show_cursor()?;
         Ok(())
     }
@@ -75,7 +89,11 @@ impl TuiTerminal {
 impl Drop for TuiTerminal {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
         let _ = self.terminal.show_cursor();
     }
 }
@@ -85,6 +103,9 @@ struct ChatTui {
     cwd: PathBuf,
     messages: Vec<TranscriptMessage>,
     input: String,
+    input_history: Vec<String>,
+    history_index: Option<usize>,
+    history_draft: String,
     scroll_back: u16,
     running: bool,
     should_quit: bool,
@@ -98,12 +119,39 @@ struct ChatTui {
     pending_reasoning_effort: Option<String>,
     activity_details_expanded: bool,
     last_running_escape: Option<Instant>,
+    active_assistant_index: Option<usize>,
+    hovered_message: Option<usize>,
+    copied_message: Option<(usize, Instant)>,
 }
 
 #[derive(Clone)]
 struct TranscriptMessage {
     role: MessageRole,
     body: String,
+    stats: Option<MessageStats>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct MessageStats {
+    duration_ms: u64,
+    output_tokens: Option<u64>,
+    time_to_first_token_ms: Option<u64>,
+    average_tokens_per_second: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MessageRows {
+    index: usize,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TranscriptView {
+    area: Rect,
+    content_width: usize,
+    viewport_height: usize,
+    scroll: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -147,6 +195,9 @@ impl ChatTui {
             cwd,
             messages: Vec::new(),
             input: String::new(),
+            input_history: Vec::new(),
+            history_index: None,
+            history_draft: String::new(),
             scroll_back: 0,
             running: false,
             should_quit: false,
@@ -160,6 +211,9 @@ impl ChatTui {
             pending_reasoning_effort: None,
             activity_details_expanded: false,
             last_running_escape: None,
+            active_assistant_index: None,
+            hovered_message: None,
+            copied_message: None,
         }
     }
 
@@ -211,14 +265,14 @@ impl ChatTui {
                 continue;
             }
 
-            let Event::Key(key) = event::read()? else {
-                continue;
-            };
-            if !should_handle_key_event(key) {
-                continue;
+            match event::read()? {
+                Event::Key(key) if should_handle_key_event(key) => {
+                    self.handle_key(runner, terminal, key).await?;
+                    self.drain_agent_events(runner);
+                }
+                Event::Mouse(mouse) => self.handle_mouse(terminal, mouse)?,
+                _ => {}
             }
-            self.handle_key(runner, terminal, key).await?;
-            self.drain_agent_events(runner);
         }
         Ok(())
     }
@@ -246,30 +300,84 @@ impl ChatTui {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.should_quit = true;
             }
-            KeyCode::Char(ch) => self.input.push(ch),
+            KeyCode::Char(ch) => {
+                self.leave_history_navigation();
+                self.input.push(ch);
+            }
             KeyCode::Backspace => {
+                self.leave_history_navigation();
                 self.input.pop();
             }
-            KeyCode::Esc => self.input.clear(),
+            KeyCode::Esc => {
+                self.input.clear();
+                self.leave_history_navigation();
+            }
             KeyCode::Tab => {
                 if let Some(completed) = complete_slash_command_input(&self.input) {
                     self.input = completed;
+                    self.leave_history_navigation();
                 }
             }
             KeyCode::Enter => {
                 let input = self.input.trim().trim_start_matches('\u{feff}').to_string();
                 self.input.clear();
+                self.leave_history_navigation();
                 if !input.is_empty() {
+                    self.record_input_history(&input);
                     self.submit(runner, terminal, input).await?;
                 }
             }
             KeyCode::PageUp => self.scroll_by(-8),
             KeyCode::PageDown => self.scroll_by(8),
-            KeyCode::Up => self.scroll_by(-1),
-            KeyCode::Down => self.scroll_by(1),
+            KeyCode::Up => self.history_previous(),
+            KeyCode::Down => self.history_next(),
             _ => {}
         }
         Ok(())
+    }
+
+    fn record_input_history(&mut self, input: &str) {
+        if self.input_history.last().is_some_and(|last| last == input) {
+            return;
+        }
+        self.input_history.push(input.to_string());
+        if self.input_history.len() > INPUT_HISTORY_LIMIT {
+            self.input_history.remove(0);
+        }
+    }
+
+    fn history_previous(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+        let index = match self.history_index {
+            Some(index) => index.saturating_sub(1),
+            None => {
+                self.history_draft = self.input.clone();
+                self.input_history.len().saturating_sub(1)
+            }
+        };
+        self.history_index = Some(index);
+        self.input.clone_from(&self.input_history[index]);
+    }
+
+    fn history_next(&mut self) {
+        let Some(index) = self.history_index else {
+            return;
+        };
+        if index + 1 < self.input_history.len() {
+            let next = index + 1;
+            self.history_index = Some(next);
+            self.input.clone_from(&self.input_history[next]);
+        } else {
+            self.input = std::mem::take(&mut self.history_draft);
+            self.history_index = None;
+        }
+    }
+
+    fn leave_history_navigation(&mut self) {
+        self.history_index = None;
+        self.history_draft.clear();
     }
 
     async fn submit(
@@ -345,7 +453,7 @@ impl ChatTui {
                 }
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {
                     self.drain_shared_agent_events(events);
-                    if self.handle_running_input()? {
+                    if self.handle_running_input(terminal)? {
                         cancellation.cancel();
                         self.drain_shared_agent_events(events);
                         terminal.draw(|frame| self.draw(frame))?;
@@ -358,11 +466,17 @@ impl ChatTui {
         }
     }
 
-    fn handle_running_input(&mut self) -> Result<bool> {
+    fn handle_running_input(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) -> Result<bool> {
         while event::poll(Duration::from_millis(0))? {
-            let Event::Key(key) = event::read()? else {
+            let event = event::read()?;
+            if let Event::Mouse(mouse) = event {
+                self.handle_mouse(terminal, mouse)?;
                 continue;
-            };
+            }
+            let Event::Key(key) = event else { continue };
             if !should_handle_key_event(key) {
                 continue;
             }
@@ -386,6 +500,47 @@ impl ChatTui {
             }
         }
         Ok(false)
+    }
+
+    fn handle_mouse(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        mouse: MouseEvent,
+    ) -> Result<()> {
+        let area = terminal.size()?;
+        if let Some(body) = self.apply_mouse_event(area.into(), mouse) {
+            execute!(
+                terminal.backend_mut(),
+                CopyToClipboard::to_clipboard_from(body)
+            )?;
+        }
+        Ok(())
+    }
+
+    fn apply_mouse_event(&mut self, area: Rect, mouse: MouseEvent) -> Option<String> {
+        match mouse.kind {
+            MouseEventKind::Moved => {
+                self.hovered_message = self.message_at_position(area, mouse.column, mouse.row);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                let index = self.message_at_position(area, mouse.column, mouse.row);
+                self.hovered_message = index;
+                let Some(index) = index else { return None };
+                let Some(message) = self.messages.get(index) else {
+                    return None;
+                };
+                if !matches!(message.role, MessageRole::User | MessageRole::Assistant) {
+                    return None;
+                }
+                let body = message.body.clone();
+                self.copied_message = Some((index, Instant::now()));
+                return Some(body);
+            }
+            MouseEventKind::ScrollUp => self.scroll_by(-3),
+            MouseEventKind::ScrollDown => self.scroll_by(3),
+            _ => {}
+        }
+        None
     }
 
     async fn handle_command(&mut self, runner: &mut AgentRunner, input: &str) -> Result<bool> {
@@ -460,6 +615,13 @@ impl ChatTui {
             }
             return Ok(true);
         }
+        if let Some(command) = chat::command_args(input, "/mcp") {
+            match chat::handle_mcp_command(runner, &self.cwd, command.trim()).await {
+                Ok(message) => self.push_system(message),
+                Err(error) => self.push_warning(format!("error: {error:#}")),
+            }
+            return Ok(true);
+        }
         if let Some(command) = chat::command_args(input, "/mode") {
             match chat::parse_mode(command.trim()) {
                 Some(mode) => {
@@ -501,10 +663,11 @@ impl ChatTui {
             }
             "/help" => {
                 self.push_system(
-                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /memory, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
+                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /memory, /mcp, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
 Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear\n\
 Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] [--max-turns 1..12] explore|research|review|plan <task>\n\
 Memory commands: /memory, /memory on, /memory off, /memory add <durable note>, /memory show\n\
+MCP commands: /mcp, /mcp enable <name>, /mcp disable <name>, /mcp reset <name>, /mcp refresh\n\
 Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>\n\
 Prompt commands: /commands lists .agents/commands, .spark/commands, and .claude/commands; /<name> [args] expands and runs a Markdown prompt.\n\
 Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc clears the composer, double Esc stops a running agent, Ctrl+C exits.",
@@ -568,6 +731,8 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             "/clear" => {
                 runner.clear_conversation();
                 self.messages.clear();
+                self.hovered_message = None;
+                self.copied_message = None;
                 if let Some(name) = &self.session_name {
                     runner.save_session_named(name)?;
                 }
@@ -608,6 +773,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         for event in events {
             match event {
                 AgentDisplayEvent::RequestStart { turn, input_chars } => {
+                    self.active_assistant_index = None;
                     self.activity.start_request(turn, input_chars);
                 }
                 AgentDisplayEvent::Assistant(text) => {
@@ -615,12 +781,32 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                     self.tool_group_index = None;
                     self.finish_reasoning_message();
                     self.push_assistant(text);
+                    self.active_assistant_index = self.messages.len().checked_sub(1);
                 }
                 AgentDisplayEvent::AssistantDelta(text) => {
                     self.activity.receive_response();
                     self.tool_group_index = None;
                     self.finish_reasoning_message();
                     self.push_assistant_delta(&text);
+                    self.active_assistant_index = self.messages.len().checked_sub(1);
+                }
+                AgentDisplayEvent::ResponseComplete {
+                    duration_ms,
+                    output_tokens,
+                    time_to_first_token_ms,
+                    average_tokens_per_second,
+                } => {
+                    if let Some(index) = self.active_assistant_index.take()
+                        && let Some(message) = self.messages.get_mut(index)
+                        && matches!(message.role, MessageRole::Assistant)
+                    {
+                        message.stats = Some(MessageStats {
+                            duration_ms,
+                            output_tokens,
+                            time_to_first_token_ms,
+                            average_tokens_per_second,
+                        });
+                    }
                 }
                 AgentDisplayEvent::ReasoningStart => {
                     self.activity.start_reasoning();
@@ -728,12 +914,37 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             frame.render_widget(line, area);
         }
 
+        let transcript_view = self.transcript_view(frame.area());
+        for rows in self.message_rows(transcript_view.content_width) {
+            let Some(message) = self.messages.get(rows.index) else {
+                continue;
+            };
+            let Some(background) =
+                message_background(message.role, self.hovered_message == Some(rows.index))
+            else {
+                continue;
+            };
+            let visible_start = rows.start.max(transcript_view.scroll);
+            let visible_end = rows.end.min(
+                transcript_view
+                    .scroll
+                    .saturating_add(transcript_view.viewport_height),
+            );
+            if visible_start >= visible_end {
+                continue;
+            }
+            let band = Rect::new(
+                transcript.x.saturating_add(1),
+                transcript
+                    .y
+                    .saturating_add((visible_start - transcript_view.scroll) as u16),
+                transcript.width.saturating_sub(1),
+                (visible_end - visible_start) as u16,
+            );
+            frame.render_widget(Block::new().style(Style::new().bg(background)), band);
+        }
+
         let transcript_lines = self.render_transcript_lines();
-        let transcript_height = transcript.height.saturating_sub(1) as usize;
-        let transcript_width = transcript.width.saturating_sub(1) as usize;
-        let tail_scroll = wrapped_line_count(&transcript_lines, transcript_width)
-            .saturating_sub(transcript_height) as u16;
-        let scroll = tail_scroll.saturating_sub(self.scroll_back);
         let transcript_text = Text::from(transcript_lines);
         let transcript_widget = Paragraph::new(transcript_text)
             .block(
@@ -742,7 +953,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                     .border_style(Style::new().fg(Color::Rgb(34, 42, 48))),
             )
             .wrap(Wrap { trim: false })
-            .scroll((scroll, 0));
+            .scroll((transcript_view.scroll.min(u16::MAX as usize) as u16, 0));
         frame.render_widget(transcript_widget, transcript);
 
         if let (Some(area), Some(lines)) = (command_menu, command_menu_lines) {
@@ -890,6 +1101,9 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                 muted_span("  Â·  "),
                 key_span("Esc"),
                 Span::raw(" clear palette"),
+                muted_span("  |  "),
+                key_span("Up/Down"),
+                Span::raw(" history"),
                 muted_span("  ·  "),
                 key_span("PgUp/PgDn"),
                 Span::raw(" transcript"),
@@ -899,6 +1113,9 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         Line::from(vec![
             key_span("Enter"),
             Span::raw(" send"),
+            muted_span("  |  "),
+            key_span("Up/Down"),
+            Span::raw(" history"),
             muted_span("  ·  "),
             key_span("/"),
             Span::raw(" commands"),
@@ -973,37 +1190,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
     fn render_transcript_lines(&self) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         for (index, message) in self.messages.iter().enumerate() {
-            lines.push(role_line(message.role));
-            let body_lines = match message.role {
-                MessageRole::Assistant => render_markdown_lines(&message.body),
-                MessageRole::User => render_user_lines(&message.body),
-                MessageRole::Tool => render_tool_lines(
-                    &message.body,
-                    self.activity_details_expanded,
-                    self.tool_group_index == Some(index)
-                        && matches!(self.activity.phase, ActivityPhase::Tools),
-                    activity_row_spinner(self.activity.tick),
-                ),
-                MessageRole::Reasoning => render_reasoning_lines(
-                    &message.body,
-                    self.reasoning_index == Some(index)
-                        && matches!(self.activity.phase, ActivityPhase::Thinking),
-                    activity_row_spinner(self.activity.tick),
-                ),
-                MessageRole::Compaction => render_compaction_lines(
-                    &message.body,
-                    self.activity_details_expanded,
-                    self.compaction_index == Some(index)
-                        && matches!(self.activity.phase, ActivityPhase::Compacting),
-                    activity_row_spinner(self.activity.tick),
-                ),
-                MessageRole::System | MessageRole::Warning | MessageRole::Profile => {
-                    plain_lines(&message.body)
-                }
-            };
-            for line in terminal_safe_lines(body_lines) {
-                lines.push(indent_line(line));
-            }
+            lines.extend(self.render_message_lines(index, message));
             lines.push(Line::from(""));
         }
         if lines.is_empty() {
@@ -1013,6 +1200,137 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             )));
         }
         lines
+    }
+
+    fn render_message_lines(
+        &self,
+        index: usize,
+        message: &TranscriptMessage,
+    ) -> Vec<Line<'static>> {
+        let mut lines = vec![role_line(
+            message.role,
+            self.message_interaction_label(index, message.role),
+        )];
+        let body_lines = match message.role {
+            MessageRole::Assistant => {
+                let mut lines = render_markdown_lines(&message.body);
+                if let Some(stats) = message.stats {
+                    lines.push(render_message_stats(stats));
+                }
+                lines
+            }
+            MessageRole::User => render_user_lines(&message.body),
+            MessageRole::Tool => render_tool_lines(
+                &message.body,
+                self.activity_details_expanded,
+                self.tool_group_index == Some(index)
+                    && matches!(self.activity.phase, ActivityPhase::Tools),
+                activity_row_spinner(self.activity.tick),
+            ),
+            MessageRole::Reasoning => render_reasoning_lines(
+                &message.body,
+                self.reasoning_index == Some(index)
+                    && matches!(self.activity.phase, ActivityPhase::Thinking),
+                activity_row_spinner(self.activity.tick),
+            ),
+            MessageRole::Compaction => render_compaction_lines(
+                &message.body,
+                self.activity_details_expanded,
+                self.compaction_index == Some(index)
+                    && matches!(self.activity.phase, ActivityPhase::Compacting),
+                activity_row_spinner(self.activity.tick),
+            ),
+            MessageRole::System | MessageRole::Warning | MessageRole::Profile => {
+                plain_lines(&message.body)
+            }
+        };
+        for line in terminal_safe_lines(body_lines) {
+            lines.push(indent_line(line));
+        }
+        lines
+    }
+
+    fn message_interaction_label(&self, index: usize, role: MessageRole) -> Option<&'static str> {
+        if !matches!(role, MessageRole::User | MessageRole::Assistant) {
+            return None;
+        }
+        if self.copied_message.is_some_and(|(copied, at)| {
+            copied == index && at.elapsed() < COPY_CONFIRMATION_DURATION
+        }) {
+            return Some("copied");
+        }
+        (self.hovered_message == Some(index)).then_some("click to copy")
+    }
+
+    fn message_rows(&self, content_width: usize) -> Vec<MessageRows> {
+        let mut cursor = 0usize;
+        self.messages
+            .iter()
+            .enumerate()
+            .map(|(index, message)| {
+                let height =
+                    wrapped_line_count(&self.render_message_lines(index, message), content_width);
+                let rows = MessageRows {
+                    index,
+                    start: cursor,
+                    end: cursor.saturating_add(height),
+                };
+                cursor = rows.end.saturating_add(1);
+                rows
+            })
+            .collect()
+    }
+
+    fn transcript_view(&self, frame_area: Rect) -> TranscriptView {
+        let command_menu_lines = self.command_menu_lines();
+        let command_menu_visible = command_menu_lines.is_some();
+        let activity_visible = self.activity_line(command_menu_visible).is_some();
+        let command_menu_height = command_menu_lines
+            .as_ref()
+            .map(|lines| (lines.len() as u16 + 2).min(8))
+            .unwrap_or(0);
+        let chunks = Layout::vertical(layout_constraints(
+            command_menu_visible,
+            activity_visible,
+            command_menu_height,
+        ))
+        .split(frame_area);
+        let transcript_index = 1 + usize::from(activity_visible);
+        let area = chunks[transcript_index];
+        let content_width = area.width.saturating_sub(1).max(1) as usize;
+        let viewport_height = area.height.saturating_sub(1) as usize;
+        let tail_scroll = wrapped_line_count(&self.render_transcript_lines(), content_width)
+            .saturating_sub(viewport_height);
+        TranscriptView {
+            area,
+            content_width,
+            viewport_height,
+            scroll: tail_scroll.saturating_sub(self.scroll_back as usize),
+        }
+    }
+
+    fn message_at_position(&self, frame_area: Rect, column: u16, row: u16) -> Option<usize> {
+        let view = self.transcript_view(frame_area);
+        let content_x = view.area.x.saturating_add(1);
+        if column < content_x
+            || column >= view.area.right()
+            || row < view.area.y
+            || row >= view.area.bottom()
+        {
+            return None;
+        }
+        let content_row = view.scroll.saturating_add((row - view.area.y) as usize);
+        self.message_rows(view.content_width)
+            .into_iter()
+            .find(|rows| content_row >= rows.start && content_row < rows.end)
+            .and_then(|rows| {
+                self.messages
+                    .get(rows.index)
+                    .filter(|message| {
+                        matches!(message.role, MessageRole::User | MessageRole::Assistant)
+                    })
+                    .map(|_| rows.index)
+            })
     }
 
     fn push_user(&mut self, body: impl Into<String>) {
@@ -1215,6 +1533,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         self.messages.push(TranscriptMessage {
             role,
             body: body.into(),
+            stats: None,
         });
         self.scroll_back = 0;
     }
@@ -1227,6 +1546,11 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         self.tool_group_index = adjust_removed_index(self.tool_group_index, index);
         self.compaction_index = adjust_removed_index(self.compaction_index, index);
         self.reasoning_index = adjust_removed_index(self.reasoning_index, index);
+        self.active_assistant_index = adjust_removed_index(self.active_assistant_index, index);
+        self.hovered_message = adjust_removed_index(self.hovered_message, index);
+        self.copied_message = self.copied_message.and_then(|(copied, at)| {
+            adjust_removed_index(Some(copied), index).map(|copied| (copied, at))
+        });
         self.scroll_back = 0;
     }
 
@@ -1513,9 +1837,8 @@ fn spinner_frame_for_activity(
     current_tool: Option<&str>,
     tick: usize,
 ) -> &'static str {
-    if matches!(phase, ActivityPhase::Tools) && current_tool == Some("web.search") {
-        let symbols = throbber_widgets_tui::OGHAM_A.symbols;
-        return symbols[tick % symbols.len()];
+    if matches!(phase, ActivityPhase::Tools) {
+        return crate::spinners::tool_spinner_frame(current_tool, tick);
     }
     spinner_frame_for_phase(phase, tick)
 }
@@ -1548,7 +1871,7 @@ fn muted_owned(text: String) -> Span<'static> {
     Span::styled(text, Style::new().fg(MUTED))
 }
 
-fn role_line(role: MessageRole) -> Line<'static> {
+fn role_line(role: MessageRole, interaction: Option<&'static str>) -> Line<'static> {
     let (label, color, marker) = match role {
         MessageRole::User => ("you", USER_COLOR, "●"),
         MessageRole::Assistant => ("spark", ACCENT, "◆"),
@@ -1559,7 +1882,7 @@ fn role_line(role: MessageRole) -> Line<'static> {
         MessageRole::Warning => ("warning", WARNING_COLOR, "!"),
         MessageRole::Profile => ("profile", TOOL_COLOR, "■"),
     };
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             format!("{marker} "),
             Style::new().fg(color).add_modifier(Modifier::BOLD),
@@ -1568,11 +1891,63 @@ fn role_line(role: MessageRole) -> Line<'static> {
             label.to_string(),
             Style::new().fg(color).add_modifier(Modifier::BOLD),
         ),
-    ])
+    ];
+    if let Some(interaction) = interaction {
+        spans.push(Span::styled(
+            format!("  [{interaction}]"),
+            Style::new()
+                .fg(if interaction == "copied" {
+                    Color::Green
+                } else {
+                    MUTED
+                })
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn message_background(role: MessageRole, hovered: bool) -> Option<Color> {
+    match (role, hovered) {
+        (MessageRole::User, false) => Some(USER_MESSAGE_BG),
+        (MessageRole::User, true) => Some(USER_MESSAGE_HOVER_BG),
+        (MessageRole::Assistant, false) => Some(ASSISTANT_MESSAGE_BG),
+        (MessageRole::Assistant, true) => Some(ASSISTANT_MESSAGE_HOVER_BG),
+        _ => None,
+    }
 }
 
 fn render_user_lines(text: &str) -> Vec<Line<'static>> {
     text.lines().map(input_line).collect()
+}
+
+fn render_message_stats(stats: MessageStats) -> Line<'static> {
+    let mut parts = vec![format!(
+        "completed in {}",
+        format_duration(stats.duration_ms)
+    )];
+    if let Some(tokens) = stats.output_tokens {
+        parts.push(format!("{tokens} output tok"));
+    }
+    if let Some(tokens_per_second) = stats.average_tokens_per_second {
+        parts.push(format!("{tokens_per_second:.1} tok/s avg"));
+    }
+    if let Some(time_to_first_token_ms) = stats.time_to_first_token_ms {
+        parts.push(format!("TTFT {}", format_duration(time_to_first_token_ms)));
+    }
+    Line::from(Span::styled(parts.join("  ·  "), Style::new().fg(MUTED)))
+}
+
+fn format_duration(duration_ms: u64) -> String {
+    if duration_ms < 1_000 {
+        format!("{duration_ms}ms")
+    } else if duration_ms < 60_000 {
+        format!("{:.1}s", duration_ms as f64 / 1_000.0)
+    } else {
+        let minutes = duration_ms / 60_000;
+        let seconds = (duration_ms % 60_000) as f64 / 1_000.0;
+        format!("{minutes}m {seconds:.1}s")
+    }
 }
 
 fn render_tool_lines(
@@ -2100,10 +2475,13 @@ fn register_escape_tap(last_escape: &mut Option<Instant>, now: Instant) -> bool 
 mod tests {
     use std::time::{Duration, Instant};
 
-    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use ratatui::text::Line;
 
     use crate::agent::AgentDisplayEvent;
@@ -2182,6 +2560,128 @@ mod tests {
     }
 
     #[test]
+    fn up_and_down_cycle_input_history_and_restore_the_draft() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        tui.record_input_history("first command");
+        tui.record_input_history("second command");
+        tui.input = "unfinished draft".to_string();
+
+        tui.history_previous();
+        assert_eq!(tui.input, "second command");
+        tui.history_previous();
+        assert_eq!(tui.input, "first command");
+        tui.history_previous();
+        assert_eq!(tui.input, "first command");
+
+        tui.history_next();
+        assert_eq!(tui.input, "second command");
+        tui.history_next();
+        assert_eq!(tui.input, "unfinished draft");
+        assert_eq!(tui.history_index, None);
+    }
+
+    #[test]
+    fn input_history_is_bounded_and_skips_consecutive_duplicates() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        for index in 0..=super::INPUT_HISTORY_LIMIT {
+            tui.record_input_history(&format!("command {index}"));
+        }
+        tui.record_input_history("command 100");
+
+        assert_eq!(tui.input_history.len(), super::INPUT_HISTORY_LIMIT);
+        assert_eq!(
+            tui.input_history.first().map(String::as_str),
+            Some("command 1")
+        );
+        assert_eq!(
+            tui.input_history.last().map(String::as_str),
+            Some("command 100")
+        );
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_transcript_without_navigating_input_history() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        tui.record_input_history("recent command");
+        tui.input = "current draft".to_string();
+        let mouse = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        tui.apply_mouse_event(Rect::new(0, 0, 80, 24), mouse);
+
+        assert_eq!(tui.input, "current draft");
+        assert_eq!(tui.history_index, None);
+        assert_eq!(tui.scroll_back, 3);
+    }
+
+    #[test]
+    fn clicking_a_message_returns_its_body_and_shows_copied_feedback() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        tui.push_user("copy this exact message");
+        let area = Rect::new(0, 0, 80, 20);
+        let view = tui.transcript_view(area);
+        let rows = tui.message_rows(view.content_width);
+        let mut mouse = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: view.area.x + 1,
+            row: view.area.y + (rows[0].start.saturating_sub(view.scroll) as u16),
+            modifiers: KeyModifiers::NONE,
+        };
+
+        assert_eq!(tui.apply_mouse_event(area, mouse), None);
+        assert!(flatten_lines(&tui.render_transcript_lines()).contains("click to copy"));
+
+        mouse.kind = MouseEventKind::Down(MouseButton::Left);
+
+        assert_eq!(
+            tui.apply_mouse_event(area, mouse).as_deref(),
+            Some("copy this exact message")
+        );
+        assert!(flatten_lines(&tui.render_transcript_lines()).contains("copied"));
+    }
+
+    #[test]
+    fn user_and_assistant_messages_use_distinct_backgrounds_and_hover_states() {
+        assert_ne!(
+            super::message_background(MessageRole::User, false),
+            super::message_background(MessageRole::Assistant, false)
+        );
+        assert_ne!(
+            super::message_background(MessageRole::User, false),
+            super::message_background(MessageRole::User, true)
+        );
+        assert_ne!(
+            super::message_background(MessageRole::Assistant, false),
+            super::message_background(MessageRole::Assistant, true)
+        );
+        assert_eq!(super::message_background(MessageRole::System, true), None);
+    }
+
+    #[test]
+    fn response_completion_stats_attach_to_the_active_assistant_message() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        tui.apply_agent_events(vec![
+            AgentDisplayEvent::AssistantDelta("Done.".to_string()),
+            AgentDisplayEvent::ResponseComplete {
+                duration_ms: 1_250,
+                output_tokens: Some(80),
+                time_to_first_token_ms: Some(240),
+                average_tokens_per_second: Some(79.2),
+            },
+        ]);
+
+        let rendered = flatten_lines(&tui.render_transcript_lines());
+        assert!(rendered.contains("completed in 1.2s"));
+        assert!(rendered.contains("TTFT 240ms"));
+        assert!(rendered.contains("80 output tok"));
+        assert!(rendered.contains("79.2 tok/s avg"));
+    }
+
+    #[test]
     fn input_line_rainbow_highlights_deep_thinking_keywords() {
         let line = input_line("ultrathink before changing src/chat/tui.rs");
         let rendered = flatten_lines(&[line.clone()]);
@@ -2243,14 +2743,22 @@ mod tests {
     }
 
     #[test]
-    fn web_search_uses_ogham_spinner_while_other_tools_use_braille_six() {
+    fn tools_use_activity_specific_spinners() {
         assert_eq!(
             spinner_frame_for_activity(ActivityPhase::Tools, Some("web.search"), 0),
             throbber_widgets_tui::OGHAM_A.symbols[0]
         );
         assert_eq!(
             spinner_frame_for_activity(ActivityPhase::Tools, Some("fs.search"), 0),
-            throbber_widgets_tui::BRAILLE_SIX.symbols[0]
+            crate::spinners::SPARK_SCAN[0]
+        );
+        assert_eq!(
+            spinner_frame_for_activity(ActivityPhase::Tools, Some("cmd.exec"), 0),
+            throbber_widgets_tui::ARROW.symbols[0]
+        );
+        assert_eq!(
+            spinner_frame_for_activity(ActivityPhase::Tools, Some("mcp__context7__query-docs"), 0),
+            throbber_widgets_tui::CANADIAN.symbols[0]
         );
     }
 

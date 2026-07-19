@@ -14,6 +14,7 @@ mod session;
 mod setup;
 mod skill;
 mod spinner_preview;
+mod spinners;
 mod telemetry;
 mod tools;
 mod trace;
