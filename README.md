@@ -154,6 +154,8 @@ Inside `spark chat`, these are the commands I use most:
 - `/<command> [args]` expands a Markdown prompt command and runs it.
 - `/new`, `/save`, `/clear`, and `/exit` do what they say.
 
+The TUI reserves Up/Down for submitted-command history and restores an unfinished draft when you return past the newest entry. PageUp/PageDown and the mouse wheel scroll the transcript; the wheel never changes command history. User and Spark messages use distinct subtle backgrounds. Hover a message to reveal the copy affordance, then click it to copy its body and show a short `copied` confirmation. Completed Spark messages also show elapsed time, output tokens, average output TPS, and TTFT when the API reports usage.
+
 Interactive chat starts a fresh timestamped session unless you pass `--session <name>`. Named sessions live in Spark's local app data directory.
 
 ## Skills
@@ -249,7 +251,11 @@ The file tools stay under the selected `--cwd`. Recursive listing and search ski
 
 MCP servers are discovered from global Codex config plus repo-local `.mcp.json` and `.spark/mcp.json` files. The harness supports stdio servers with `command`/`args` and HTTP MCP endpoints with `url`/`http_headers`; disabled servers are skipped, and unavailable servers are reported as warnings without blocking the run. Discovered tools are exposed in work mode as function names like `mcp__context7__resolve-library-id`. Set `SPARK_DISABLE_MCP=1` to skip MCP discovery for benchmark or offline runs.
 
+Inside interactive chat, use `/mcp` to list configured servers, `/mcp enable <name>` or `/mcp disable <name>` to set a workspace override, `/mcp reset <name>` to return to the configured state, and `/mcp refresh` to rediscover tools immediately. Workspace overrides are stored in ignored `.spark/mcp-state.json` without rewriting the source MCP configuration.
+
 ## Traces and profiling
+
+Normal Responses traffic is WebSocket-first. Spark keeps the authenticated connection alive across agent turns and chains `previous_response_id`, so tool-result turns send only their new input instead of rebuilding the entire conversation server-side. If the WebSocket cannot connect before any stream event arrives, Spark falls back to the existing HTTP/SSE transport. Remote compaction remains on the dedicated HTTP endpoint.
 
 Use `--trace` when you want raw evidence for a run. Trace files are written under `.spark-runs/`.
 
