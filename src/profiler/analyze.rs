@@ -27,7 +27,7 @@ use actions::{
 };
 use diagnostics::{AnalysisReports, insert_analysis_reports};
 use expectations::{
-    compaction_regrowth_report, scenario_skill_expectation_report,
+    cmd_exec_scope_report, compaction_regrowth_report, scenario_skill_expectation_report,
     scenario_tool_call_expectation_report, scenario_tool_expectation_report,
     tool_failure_recovery_report, tool_only_turn_report,
 };
@@ -265,6 +265,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
     let validation_success = scenario_validation_succeeded(dir);
     let tool_failure_recovery_report =
         tool_failure_recovery_report(&observed_tool_results, validation_success);
+    let cmd_exec_scope_report = cmd_exec_scope_report(&observed_tool_calls);
     if let Some(object) = summary.as_object_mut() {
         insert_analysis_reports(
             object,
@@ -280,6 +281,7 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 scenario_call_expectation_report: &scenario_call_expectation_report,
                 scenario_skill_expectation_report: &scenario_skill_expectation_report,
                 tool_failure_recovery_report: &tool_failure_recovery_report,
+                cmd_exec_scope_report: &cmd_exec_scope_report,
             },
         );
     }

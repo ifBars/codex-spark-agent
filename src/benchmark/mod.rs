@@ -72,6 +72,20 @@ pub(crate) fn expected_scenario_artifacts(
             ".spark-scenarios/ops-report/metrics.json",
             ".spark-scenarios/ops-report/report.md",
         ],
+        ProfileScenarioKind::MultiModuleBugfix => &[
+            ".spark-scenarios/multi-module-bugfix/src/invoice.ts",
+            ".spark-scenarios/multi-module-bugfix/src/total.ts",
+        ],
+        ProfileScenarioKind::TerminalRepair => {
+            &[".spark-scenarios/terminal-repair/config/settings.json"]
+        }
+        ProfileScenarioKind::MultiHopAnalysis => &[
+            ".spark-scenarios/multi-hop-analysis/answer.json",
+            ".spark-scenarios/multi-hop-analysis/answer.md",
+        ],
+        ProfileScenarioKind::PolicySupportAgent => {
+            &[".spark-scenarios/policy-support-agent/resolution.json"]
+        }
         _ => &[],
     }
 }
@@ -97,6 +111,10 @@ mod tests {
             ProfileScenarioKind::TechnicalEssay,
             ProfileScenarioKind::ConfigMigration,
             ProfileScenarioKind::OpsReport,
+            ProfileScenarioKind::MultiModuleBugfix,
+            ProfileScenarioKind::TerminalRepair,
+            ProfileScenarioKind::MultiHopAnalysis,
+            ProfileScenarioKind::PolicySupportAgent,
             ProfileScenarioKind::ReactCalculatorScaffold,
             ProfileScenarioKind::RustLogAnalyzerScaffold,
             ProfileScenarioKind::RustNotesTuiScaffold,

@@ -524,7 +524,7 @@ fn benchmark_design_survey_targets_existing_scenario_taxonomy() {
     assert!(prompt.contains("three concrete new task prompts"));
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.search"]]);
     assert_eq!(calls.len(), 4);
-    assert_eq!(calls[0]["path"], "src/profile/scenarios.rs");
+    assert_eq!(calls[0]["path"], "src/profile/scenarios/prompts.rs");
     assert_eq!(calls[1]["path"], "src/profiler/analyze/expectations.rs");
     assert_eq!(calls[2]["path"], "README.md");
     assert_eq!(calls[3]["path"], "src");
@@ -1229,7 +1229,8 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::RustFailingTestBugfix,
             ProfileScenarioKind::TypeScriptReducerBugfix,
             ProfileScenarioKind::MergeConflictResolution,
-            ProfileScenarioKind::ConfigMigration
+            ProfileScenarioKind::ConfigMigration,
+            ProfileScenarioKind::MultiModuleBugfix
         ]
     );
     assert!(
@@ -1303,6 +1304,26 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             .contains(&ProfileScenarioKind::OpsReport)
     );
     assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::MultiModuleBugfix)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::TerminalRepair)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::MultiHopAnalysis)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::PolicySupportAgent)
+    );
+    assert!(
         ProfileBenchmarkSuiteKind::Core
             .scenarios()
             .contains(&ProfileScenarioKind::ToolRecovery)
@@ -1371,6 +1392,26 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
             ProfileScenarioKind::OpsReport,
             ".spark-scenarios/ops-report/data/tickets.csv",
             "billing,P1,open,95",
+        ),
+        (
+            ProfileScenarioKind::MultiModuleBugfix,
+            ".spark-scenarios/multi-module-bugfix/tests/invoice.test.ts",
+            "applies discount before tax",
+        ),
+        (
+            ProfileScenarioKind::TerminalRepair,
+            ".spark-scenarios/terminal-repair/config/settings.json",
+            "data/summary.json",
+        ),
+        (
+            ProfileScenarioKind::MultiHopAnalysis,
+            ".spark-scenarios/multi-hop-analysis/data/orders.csv",
+            "A6,Atlas,EMEA,1,80.00,returned",
+        ),
+        (
+            ProfileScenarioKind::PolicySupportAgent,
+            ".spark-scenarios/policy-support-agent/policy.md",
+            "Damaged-on-arrival",
         ),
     ];
 
@@ -1789,6 +1830,289 @@ fn ops_report_validation_accepts_billing_colon_form_and_rejects_api() {
             || String::from_utf8_lossy(&bad.stderr).contains("incorrectly identifies api"),
         "unexpected validation error: {}",
         String::from_utf8_lossy(&bad.stderr)
+    );
+}
+
+#[test]
+fn multi_module_bugfix_declares_cross_module_expectations() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::MultiModuleBugfix, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::MultiModuleBugfix)
+        .expect("validation");
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::MultiModuleBugfix);
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::MultiModuleBugfix);
+    let optional = profile_scenario_optional_tool_calls(ProfileScenarioKind::MultiModuleBugfix);
+
+    assert!(prompt.contains("Profile scenario: multi-module-bugfix"));
+    assert!(prompt.contains("src/invoice.ts"));
+    assert!(prompt.contains("src/total.ts"));
+    assert!(prompt.contains("Keep src/tax.ts unchanged"));
+    assert!(
+        benchmark_task_prompt(ProfileScenarioKind::MultiModuleBugfix)
+            .contains("discounts apply before tax")
+    );
+    assert_eq!(validation.program, "bun");
+    assert_eq!(validation.args, &["test"]);
+    assert_eq!(
+        groups,
+        vec![
+            vec!["fs.read"],
+            vec!["fs.edit", "fs.replace"],
+            vec!["cmd.exec"]
+        ]
+    );
+    assert_eq!(calls.len(), 7);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/multi-module-bugfix/issue.md"
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/multi-module-bugfix/src/invoice.ts"
+    );
+    assert_eq!(
+        calls[5]["path"],
+        ".spark-scenarios/multi-module-bugfix/src/total.ts"
+    );
+    assert_eq!(calls[6]["command"], "bun test");
+    assert_eq!(
+        optional[0]["path"],
+        ".spark-scenarios/multi-module-bugfix/src/tax.ts"
+    );
+}
+
+#[test]
+fn multi_module_bugfix_fixture_fails_then_passes_after_fix() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::MultiModuleBugfix)
+        .expect("prepare multi-module bugfix");
+    let root = dir.path().join(".spark-scenarios/multi-module-bugfix");
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::MultiModuleBugfix)
+        .expect("validation");
+
+    let failing = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        !failing.status.success(),
+        "expected fixture tests to fail before the fix"
+    );
+
+    std::fs::write(
+        root.join("src").join("invoice.ts"),
+        "export type OrderItem = {\n  sku: string;\n  quantity: number;\n  unitPriceCents: number;\n};\n\nexport type InvoiceLine = {\n  sku: string;\n  amountCents: number;\n};\n\nexport function buildInvoiceLines(items: OrderItem[]): InvoiceLine[] {\n  return items.map((item) => ({\n    sku: item.sku,\n    amountCents: item.unitPriceCents * item.quantity,\n  }));\n}\n",
+    )
+    .expect("write fixed invoice.ts");
+    std::fs::write(
+        root.join("src").join("total.ts"),
+        "import type { InvoiceLine } from './invoice';\nimport { taxCentsFor } from './tax';\n\nexport function invoiceTotalCents(\n  lines: InvoiceLine[],\n  discountCents: number,\n  taxRateBps: number,\n): number {\n  const subtotalCents = lines.reduce((sum, line) => sum + line.amountCents, 0);\n  const discountedCents = subtotalCents - discountCents;\n  return Math.round(discountedCents + taxCentsFor(discountedCents, taxRateBps));\n}\n",
+    )
+    .expect("write fixed total.ts");
+    let fixed = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        fixed.status.success(),
+        "expected fixed modules to pass\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&fixed.stdout),
+        String::from_utf8_lossy(&fixed.stderr)
+    );
+}
+
+#[test]
+fn terminal_repair_declares_terminal_first_expectations() {
+    let prompts =
+        profile_scenario_prompts(ProfileScenarioKind::TerminalRepair, 45_000).expect("scenario");
+    let prompt = prompts.first().expect("prompt");
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::TerminalRepair);
+    let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::TerminalRepair);
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::TerminalRepair)
+        .expect("validation");
+
+    assert!(prompt.contains("Profile scenario: terminal-repair"));
+    assert!(prompt.contains("bun run start"));
+    assert!(prompt.contains("Do not modify src/index.js or data/report.csv"));
+    assert!(
+        benchmark_task_prompt(ProfileScenarioKind::TerminalRepair)
+            .contains("capture the current failure")
+    );
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0]["tool"], "cmd.exec");
+    assert_eq!(calls[0]["command"], "bun run start");
+    assert_eq!(calls[0]["ok"], false);
+    assert_eq!(
+        calls[1]["path"],
+        ".spark-scenarios/terminal-repair/config/settings.json"
+    );
+    assert_eq!(calls[3]["command"], "bun run start");
+    assert!(calls[3].get("ok").is_none());
+    assert_eq!(groups[0], vec!["cmd.exec"]);
+    assert_eq!(validation.workdir, ".spark-scenarios/terminal-repair");
+}
+
+#[test]
+fn terminal_repair_validation_fails_broken_then_accepts_repaired_config() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::TerminalRepair)
+        .expect("prepare terminal repair");
+    let root = dir.path().join(".spark-scenarios/terminal-repair");
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::TerminalRepair)
+        .expect("validation");
+
+    let broken = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        !broken.status.success(),
+        "expected broken fixture to fail validation"
+    );
+
+    std::fs::write(
+        root.join("config").join("settings.json"),
+        "{\n  \"dataPath\": \"data/report.csv\"\n}\n",
+    )
+    .expect("write repaired settings.json");
+    let repaired = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        repaired.status.success(),
+        "expected repaired config to pass\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&repaired.stdout),
+        String::from_utf8_lossy(&repaired.stderr)
+    );
+}
+
+#[test]
+fn multi_hop_analysis_validation_accepts_exact_answer_and_rejects_distractors() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::MultiHopAnalysis)
+        .expect("prepare multi-hop analysis");
+    let root = dir.path().join(".spark-scenarios/multi-hop-analysis");
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::MultiHopAnalysis)
+        .expect("validation");
+
+    std::fs::write(
+        root.join("answer.json"),
+        "{\n  \"product\": \"Atlas\",\n  \"region\": \"EMEA\",\n  \"netRevenue\": 180.00\n}\n",
+    )
+    .expect("write answer.json");
+    std::fs::write(
+        root.join("answer.md"),
+        "# Answer\n\nIncluded shipped Atlas EMEA orders A1 and A4, then subtracted the A4 refund for a net revenue of 180.00.\n",
+    )
+    .expect("write answer.md");
+    let good = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        good.status.success(),
+        "expected exact answer to pass: {}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    std::fs::write(
+        root.join("answer.json"),
+        "{\n  \"product\": \"Atlas\",\n  \"region\": \"EMEA\",\n  \"netRevenue\": 200.00\n}\n",
+    )
+    .expect("write distractor answer.json");
+    let bad = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        !bad.status.success(),
+        "expected returned-order distractor answer to fail"
+    );
+
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::MultiHopAnalysis);
+    assert_eq!(calls.len(), 6);
+    assert_eq!(
+        calls[3]["path"],
+        ".spark-scenarios/multi-hop-analysis/data/refunds.csv"
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/multi-hop-analysis/answer.json"
+    );
+    assert!(
+        benchmark_task_prompt(ProfileScenarioKind::MultiHopAnalysis)
+            .contains("joining the policy rules with both data files")
+    );
+}
+
+#[test]
+fn policy_support_agent_is_two_turn_and_validates_updated_resolution() {
+    let prompts = profile_scenario_prompts(ProfileScenarioKind::PolicySupportAgent, 45_000)
+        .expect("scenario");
+    assert_eq!(prompts.len(), 2);
+    assert!(prompts[0].contains("policy-support-agent turn 1/2"));
+    assert!(prompts[0].contains("full refund on order 5591"));
+    assert!(prompts[1].contains("policy-support-agent turn 2/2"));
+    assert!(prompts[1].contains("arrived cracked"));
+    let benchmark = benchmark_profile_prompts(ProfileScenarioKind::PolicySupportAgent, 45_000)
+        .expect("benchmark prompts");
+    assert_eq!(benchmark.len(), 2);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::PolicySupportAgent)
+        .expect("prepare policy support agent");
+    let root = dir.path().join(".spark-scenarios/policy-support-agent");
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::PolicySupportAgent)
+        .expect("validation");
+
+    std::fs::write(
+        root.join("resolution.json"),
+        "{\n  \"orderId\": \"5591\",\n  \"refundApproved\": true,\n  \"refundAmount\": 48.50,\n  \"refundMethod\": \"store_credit\",\n  \"reasonCode\": \"damaged_on_arrival\",\n  \"policyCitations\": [\"S3\", \"S4\"]\n}\n",
+    )
+    .expect("write updated resolution.json");
+    let good = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        good.status.success(),
+        "expected updated resolution to pass: {}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    std::fs::write(
+        root.join("resolution.json"),
+        "{\n  \"orderId\": \"5591\",\n  \"refundApproved\": true,\n  \"refundAmount\": 48.50,\n  \"refundMethod\": \"original_payment\",\n  \"reasonCode\": \"damaged_on_arrival\",\n  \"policyCitations\": [\"S3\"]\n}\n",
+    )
+    .expect("write wrong-method resolution.json");
+    let bad = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        !bad.status.success(),
+        "expected original_payment resolution to fail the gift-card rule"
+    );
+
+    let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::PolicySupportAgent);
+    assert_eq!(calls.len(), 5);
+    assert_eq!(
+        calls[0]["path"],
+        ".spark-scenarios/policy-support-agent/brief.md"
+    );
+    assert_eq!(
+        calls[4]["path"],
+        ".spark-scenarios/policy-support-agent/resolution.json"
     );
 }
 

@@ -800,7 +800,7 @@ fn quick_comparison_preflight_only_skips_isolated_codex_home() {
     assert_eq!(status["skip_codex_preflight"], false);
     assert_eq!(status["preflight_only"], true);
     assert_eq!(status["fail_on_directional_comparison"], false);
-    assert_eq!(status["scenario_count"], 15);
+    assert_eq!(status["scenario_count"], 19);
     assert_eq!(status["scenarios"][0], "precise-patch");
     let rerun_command = status["rerun_command"]
         .as_str()

@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use rand::Rng;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -142,7 +143,7 @@ impl AgentRunner {
             let streamed_text;
             let mut time_to_first_token_ms = None;
             let mut generation_started = None;
-            let mut response_retry_used = false;
+            let mut response_retries = 0;
             let (response, raw) = loop {
                 let mut attempt_streamed_text = String::new();
                 let mut hosted_search_starts = HashMap::<String, Instant>::new();
@@ -236,18 +237,41 @@ impl AgentRunner {
                     .await;
                 match response_result {
                     Ok(result) => {
+                        if response_retries > 0 {
+                            self.emit_connection_recovered(response_retries);
+                        }
                         streamed_text = attempt_streamed_text;
                         break result;
                     }
                     Err(error)
-                        if !response_retry_used
-                            && should_retry_response_stream_error(&error)
+                        if should_retry_response_stream_error(&error)
                             && attempt_streamed_text.is_empty() =>
                     {
-                        response_retry_used = true;
-                        self.emit_warning(
-                            "response stream ended without completion; retrying request once"
-                                .to_string(),
+                        if response_retries >= DEFAULT_STREAM_MAX_RETRIES {
+                            if client.switch_to_http_transport().await {
+                                self.emit_transport_fallback(
+                                    "WebSocket",
+                                    "HTTP/SSE",
+                                    format!("{error:#}"),
+                                );
+                                response_retries = 0;
+                                continue;
+                            }
+                            self.record_terminal_error(
+                                self.request_seq,
+                                "response",
+                                &error.to_string(),
+                            )?;
+                            return Err(error);
+                        }
+
+                        response_retries += 1;
+                        let delay = stream_retry_delay(response_retries);
+                        self.emit_connection_retry(
+                            response_retries,
+                            DEFAULT_STREAM_MAX_RETRIES,
+                            delay.as_millis().min(u64::MAX as u128) as u64,
+                            format!("{error:#}"),
                         );
                         if let Some(trace) = &mut self.trace {
                             trace.write(
@@ -255,10 +279,23 @@ impl AgentRunner {
                                 "response-retry",
                                 &json!({
                                     "stage": "response",
-                                    "error": error.to_string(),
-                                    "retry": 1,
+                                    "error": format!("{error:#}"),
+                                    "retry": response_retries,
+                                    "max_retries": DEFAULT_STREAM_MAX_RETRIES,
+                                    "delay_ms": delay.as_millis(),
+                                    "transport": if client.websocket_enabled() {
+                                        "responses_websocket"
+                                    } else {
+                                        "responses_http"
+                                    },
                                 }),
                             )?;
+                        }
+                        tokio::select! {
+                            _ = cancellation.cancelled() => {
+                                return self.record_cancelled(self.request_seq, "response_retry_delay");
+                            }
+                            _ = tokio::time::sleep(delay) => {}
                         }
                         continue;
                     }
@@ -473,9 +510,40 @@ fn web_search_display_args(query: Option<String>) -> String {
 }
 
 fn should_retry_response_stream_error(error: &anyhow::Error) -> bool {
-    error
-        .to_string()
-        .contains("Spark stream ended without response.completed")
+    let message = format!("{error:#}").to_ascii_lowercase();
+    [
+        "stream ended without response.completed",
+        "websocket closed before response.completed",
+        "responses websocket",
+        "failed to read spark stream",
+        "error sending request",
+        "connection closed before message completed",
+        "timed out",
+        "timeout waiting for",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+        || retryable_http_status(&message)
+}
+
+const DEFAULT_STREAM_MAX_RETRIES: u64 = 5;
+const STREAM_RETRY_INITIAL_DELAY_MS: u64 = 200;
+
+fn stream_retry_delay(attempt: u64) -> Duration {
+    let base = stream_retry_base_delay(attempt);
+    let jitter = rand::thread_rng().gen_range(0.9..1.1);
+    Duration::from_millis((base.as_millis() as f64 * jitter) as u64)
+}
+
+fn stream_retry_base_delay(attempt: u64) -> Duration {
+    let exponent = attempt.saturating_sub(1).min(10) as u32;
+    Duration::from_millis(STREAM_RETRY_INITIAL_DELAY_MS.saturating_mul(1_u64 << exponent))
+}
+
+fn retryable_http_status(message: &str) -> bool {
+    message.contains("(408)")
+        || message.contains("(429)")
+        || (500..=599).any(|status| message.contains(&format!("({status})")))
 }
 
 fn tool_only_notice_interval(compact_after_tool_only_turns: usize) -> usize {
@@ -492,7 +560,7 @@ fn tool_only_notice_interval(compact_after_tool_only_turns: usize) -> usize {
 mod tests {
     use super::{
         average_tokens_per_second, response_output_tokens, should_retry_response_stream_error,
-        tool_only_notice_interval,
+        stream_retry_base_delay, tool_only_notice_interval,
     };
     use serde_json::json;
 
@@ -507,10 +575,24 @@ mod tests {
     #[test]
     fn response_stream_retry_is_limited_to_missing_completed() {
         let retryable = anyhow::anyhow!("Spark stream ended without response.completed");
+        let websocket = anyhow::anyhow!(
+            "Responses WebSocket closed before response.completed: keepalive ping timeout"
+        );
+        let server = anyhow::anyhow!("Spark request failed (503): unavailable");
         let other = anyhow::anyhow!("request input is too large");
 
         assert!(should_retry_response_stream_error(&retryable));
+        assert!(should_retry_response_stream_error(&websocket));
+        assert!(should_retry_response_stream_error(&server));
         assert!(!should_retry_response_stream_error(&other));
+    }
+
+    #[test]
+    fn response_stream_retry_uses_codex_aligned_exponential_backoff() {
+        assert_eq!(stream_retry_base_delay(1).as_millis(), 200);
+        assert_eq!(stream_retry_base_delay(2).as_millis(), 400);
+        assert_eq!(stream_retry_base_delay(3).as_millis(), 800);
+        assert_eq!(stream_retry_base_delay(5).as_millis(), 3_200);
     }
 
     #[test]

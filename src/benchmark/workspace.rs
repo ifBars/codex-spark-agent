@@ -29,11 +29,26 @@ pub(crate) fn create_benchmark_workspace(
     Ok(workspace)
 }
 
-pub(crate) fn benchmark_read_roots(source_cwd: &Path, scenario_cwd: &Path) -> Vec<PathBuf> {
-    if same_path(source_cwd, scenario_cwd) {
-        Vec::new()
-    } else {
+fn is_repo_survey(kind: ProfileScenarioKind) -> bool {
+    matches!(
+        kind,
+        ProfileScenarioKind::RepoSurvey
+            | ProfileScenarioKind::SteamNetworkLibSurvey
+            | ProfileScenarioKind::S1ApiSurvey
+            | ProfileScenarioKind::RepoArchitectureSurvey
+            | ProfileScenarioKind::BenchmarkDesignSurvey
+    )
+}
+
+pub(crate) fn benchmark_read_roots(
+    source_cwd: &Path,
+    scenario_cwd: &Path,
+    kind: ProfileScenarioKind,
+) -> Vec<PathBuf> {
+    if is_repo_survey(kind) && !same_path(source_cwd, scenario_cwd) {
         vec![source_cwd.to_path_buf()]
+    } else {
+        Vec::new()
     }
 }
 
@@ -150,12 +165,30 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_read_roots_include_source_for_isolated_workspace() {
+    fn benchmark_read_roots_include_source_for_repo_survey() {
         let source = tempfile::tempdir().expect("source");
         let workspace = tempfile::tempdir().expect("workspace");
 
-        let roots = benchmark_read_roots(source.path(), workspace.path());
+        let roots = benchmark_read_roots(
+            source.path(),
+            workspace.path(),
+            ProfileScenarioKind::RepoSurvey,
+        );
 
         assert_eq!(roots, vec![source.path().to_path_buf()]);
+    }
+
+    #[test]
+    fn benchmark_read_roots_deny_source_for_fixture_scenario() {
+        let source = tempfile::tempdir().expect("source");
+        let workspace = tempfile::tempdir().expect("workspace");
+
+        let roots = benchmark_read_roots(
+            source.path(),
+            workspace.path(),
+            ProfileScenarioKind::PrecisePatch,
+        );
+
+        assert!(roots.is_empty());
     }
 }

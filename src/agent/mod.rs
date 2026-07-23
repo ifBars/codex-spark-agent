@@ -72,6 +72,20 @@ pub(crate) enum AgentDisplayEvent {
         output_chars: usize,
         error: Option<String>,
     },
+    ConnectionRetry {
+        attempt: u64,
+        max_attempts: u64,
+        delay_ms: u64,
+        error: String,
+    },
+    ConnectionRecovered {
+        attempts: u64,
+    },
+    TransportFallback {
+        from: &'static str,
+        to: &'static str,
+        error: String,
+    },
     System(String),
     Warning(String),
     Profile(String),
@@ -465,6 +479,60 @@ impl AgentRunner {
             AgentDisplay::Shared(events) => {
                 push_shared_display_event(events, AgentDisplayEvent::Warning(text));
             }
+        }
+    }
+
+    pub(crate) fn emit_connection_retry(
+        &mut self,
+        attempt: u64,
+        max_attempts: u64,
+        delay_ms: u64,
+        error: impl Into<String>,
+    ) {
+        let event = AgentDisplayEvent::ConnectionRetry {
+            attempt,
+            max_attempts,
+            delay_ms,
+            error: error.into(),
+        };
+        match &mut self.display {
+            AgentDisplay::Plain | AgentDisplay::Markdown => eprintln!(
+                "connection interrupted; retrying {attempt}/{max_attempts} in {delay_ms}ms"
+            ),
+            AgentDisplay::Buffered(events) => events.push(event),
+            AgentDisplay::Shared(events) => push_shared_display_event(events, event),
+        }
+    }
+
+    pub(crate) fn emit_connection_recovered(&mut self, attempts: u64) {
+        let event = AgentDisplayEvent::ConnectionRecovered { attempts };
+        match &mut self.display {
+            AgentDisplay::Plain | AgentDisplay::Markdown => {
+                eprintln!("connection recovered after {attempts} retries")
+            }
+            AgentDisplay::Buffered(events) => events.push(event),
+            AgentDisplay::Shared(events) => push_shared_display_event(events, event),
+        }
+    }
+
+    pub(crate) fn emit_transport_fallback(
+        &mut self,
+        from: &'static str,
+        to: &'static str,
+        error: impl Into<String>,
+    ) {
+        let error = error.into();
+        let event = AgentDisplayEvent::TransportFallback {
+            from,
+            to,
+            error: error.clone(),
+        };
+        match &mut self.display {
+            AgentDisplay::Plain | AgentDisplay::Markdown => {
+                eprintln!("falling back from {from} to {to}: {error}")
+            }
+            AgentDisplay::Buffered(events) => events.push(event),
+            AgentDisplay::Shared(events) => push_shared_display_event(events, event),
         }
     }
 

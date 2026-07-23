@@ -17,6 +17,7 @@ pub(super) struct AnalysisReports<'a> {
     pub(super) scenario_call_expectation_report: &'a Option<Value>,
     pub(super) scenario_skill_expectation_report: &'a Option<Value>,
     pub(super) tool_failure_recovery_report: &'a Option<Value>,
+    pub(super) cmd_exec_scope_report: &'a Option<Value>,
 }
 
 pub(super) fn insert_analysis_reports(
@@ -100,6 +101,11 @@ fn insert_report_fields(object: &mut Map<String, Value>, reports: &AnalysisRepor
         "tool_failure_recovery",
         reports.tool_failure_recovery_report,
     );
+    insert_optional_report(
+        object,
+        "cmd_exec_scope",
+        reports.cmd_exec_scope_report,
+    );
 }
 
 fn insert_optional_report(object: &mut Map<String, Value>, key: &str, report: &Option<Value>) {
@@ -141,6 +147,7 @@ fn append_diagnostics(object: &mut Map<String, Value>, reports: &AnalysisReports
         fallback_compactions,
     );
     append_tool_failure_recovery_diagnostics(diagnostics, reports.tool_failure_recovery_report);
+    append_cmd_exec_scope_diagnostics(diagnostics, reports.cmd_exec_scope_report);
 }
 
 fn append_required_action_diagnostics(diagnostics: &mut Vec<Value>, report: &RequiredActionReport) {
@@ -283,6 +290,23 @@ fn append_tool_only_diagnostics(
             "fallback_compactions": fallback_compactions,
         }));
     }
+}
+
+fn append_cmd_exec_scope_diagnostics(diagnostics: &mut Vec<Value>, report: &Option<Value>) {
+    let Some(report) = report else {
+        return;
+    };
+    let probes = report.get("probes").and_then(Value::as_array).map_or(0, Vec::len);
+    if probes == 0 {
+        return;
+    }
+    diagnostics.push(json!({
+        "level": "warning",
+        "kind": "cmd_exec_out_of_scope",
+        "message": "cmd.exec tool calls referenced paths outside the benchmark workspace (.spark-runs, .spark-profile, .spark-scenarios). These paths may indicate the agent probed trace dirs, benchmark reports, or scenario fixtures.",
+        "probe_count": probes,
+        "probes": report.get("probes").cloned().unwrap_or_else(|| json!([])),
+    }));
 }
 
 fn append_tool_failure_recovery_diagnostics(diagnostics: &mut Vec<Value>, report: &Option<Value>) {

@@ -10,11 +10,14 @@ pub(super) fn scenario_family(scenario: &str) -> &'static str {
         | "precise-patch"
         | "github-issue-bugfix"
         | "rust-failing-test-bugfix"
-        | "typescript-reducer-bugfix" => "Precise edit",
+        | "typescript-reducer-bugfix"
+        | "multi-module-bugfix" => "Precise edit",
         "file-ops" | "multi-file-patch" | "config-migration" => "Multi-file coordination",
         "github-issue-triage" => "Issue triage",
         "technical-essay" => "Long-form writing",
-        "ops-report" => "Data analysis",
+        "ops-report" | "multi-hop-analysis" => "Data analysis",
+        "terminal-repair" => "Terminal and tool recovery",
+        "policy-support-agent" => "Policy compliance",
         "react-calculator-scaffold" | "rust-log-analyzer-scaffold" | "rust-notes-tui-scaffold" => {
             "Project scaffold"
         }
@@ -52,6 +55,14 @@ pub(super) fn scenario_question(scenario: &str) -> &'static str {
         "config-migration" => "Can it migrate config shape across JSON, code, and docs?",
         "technical-essay" => "Can it write a sourced essay from local evidence?",
         "ops-report" => "Can it compute metrics and write an operational readout?",
+        "multi-module-bugfix" => {
+            "Can it fix a cross-module bug with failing tests and Bun validation?"
+        }
+        "terminal-repair" => {
+            "Can it diagnose a broken service through the terminal and repair its config?"
+        }
+        "multi-hop-analysis" => "Can it join policy and data files into one exact grounded answer?",
+        "policy-support-agent" => "Can it apply a multi-rule policy consistently across turns?",
         "react-calculator-scaffold" => "Can it build and browser-verify a React TypeScript app?",
         "rust-log-analyzer-scaffold" => "Can it scaffold and validate a small Rust CLI project?",
         "rust-notes-tui-scaffold" => "Can it scaffold and validate a vim-style Rust notes CLI?",

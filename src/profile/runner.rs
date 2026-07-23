@@ -94,7 +94,7 @@ pub(crate) async fn run_profile_scenarios(
             };
             scenarios::prepare_profile_scenario(&scenario_cwd, *scenario)?;
             let read_roots = if options.benchmark_suite.is_some() {
-                workspace::benchmark_read_roots(&options.cwd, &scenario_cwd)
+                workspace::benchmark_read_roots(&options.cwd, &scenario_cwd, *scenario)
             } else {
                 Vec::new()
             };
@@ -325,7 +325,8 @@ fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
         ProfileScenarioKind::GithubIssueBugfix
         | ProfileScenarioKind::RustFailingTestBugfix
         | ProfileScenarioKind::TypeScriptReducerBugfix
-        | ProfileScenarioKind::MergeConflictResolution => {
+        | ProfileScenarioKind::MergeConflictResolution
+        | ProfileScenarioKind::MultiModuleBugfix => {
             "Comparison evidence: Codex/OpenCode improved quality by grounding bugfix work in source and validation evidence. Spend extra effort here: read the issue first, inspect only relevant local code and tests, produce the required fix, then run the focused validation after the code change. If you run validation before fixing and it fails as expected, treat that as reproduction evidence only; rerun the same validation after the patch and do not finalize until the post-patch run passes."
         }
         ProfileScenarioKind::GithubIssueTriage => {
@@ -347,6 +348,15 @@ fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
         }
         ProfileScenarioKind::PrecisePatch | ProfileScenarioKind::MultiFilePatch => {
             "Comparison evidence: Spark succeeds on patch tasks but loses quality when it over-calls tools or under-proves the final state. Spend extra effort here on precise verification: inspect the target files, make the smallest scoped edit, run the focused validation when available, re-check the changed lines, and avoid unrelated refactors."
+        }
+        ProfileScenarioKind::TerminalRepair => {
+            "Comparison evidence: terminal repair quality depends on reading actual error output before editing. Run the failing start command first and treat the failure as the diagnostic signal, fix only config/settings.json (the JSON syntax and the dataPath), never src/index.js or data/report.csv, then rerun the same start command once and stop after REPORT OK with rows=5 and top=api."
+        }
+        ProfileScenarioKind::MultiHopAnalysis => {
+            "Comparison evidence: multi-hop analysis quality comes from joining every source instead of shortcutting from one file. Read question.md, policy.md, orders.csv, and refunds.csv; count only shipped Atlas EMEA orders, subtract only refunds attached to those orders, ignore the returned order and its refund entirely, write answer.json and answer.md, then verify both files once before stopping."
+        }
+        ProfileScenarioKind::PolicySupportAgent => {
+            "Comparison evidence: policy tasks lose quality when the decision ignores rule composition. Apply the policy literally each turn: final-sale denies refunds until damaged-on-arrival evidence exists, and gift-card purchases always refund as store credit. Write resolution.json after turn 1, update it after turn 2, and keep the schema keys and reason codes exactly as the brief defines them."
         }
         _ => {
             "Comparison evidence: Codex/OpenCode generally scored higher by spending more time on evidence and validation, while Spark won speed. Complete the scenario's required evidence path, use one focused self-check near the end, verify required files/searches/commands are present, then stop without broad repo sweeps or repeated equivalent reads."

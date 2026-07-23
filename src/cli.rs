@@ -507,6 +507,14 @@ pub(crate) enum ProfileScenarioKind {
     ConfigMigration,
     /// Operational data report task with computed metrics and narrative summary.
     OpsReport,
+    /// SWE-bench-style bugfix spanning multiple TypeScript modules with failing Bun tests.
+    MultiModuleBugfix,
+    /// Terminal-Bench-style repair task that fixes a broken service through the terminal.
+    TerminalRepair,
+    /// GAIA-style multi-hop analysis that joins policy, orders, and refunds into an exact answer.
+    MultiHopAnalysis,
+    /// tau-bench-style two-turn support case that applies a multi-rule policy consistently.
+    PolicySupportAgent,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -606,6 +614,10 @@ impl ProfileScenarioKind {
             Self::TechnicalEssay => "technical-essay",
             Self::ConfigMigration => "config-migration",
             Self::OpsReport => "ops-report",
+            Self::MultiModuleBugfix => "multi-module-bugfix",
+            Self::TerminalRepair => "terminal-repair",
+            Self::MultiHopAnalysis => "multi-hop-analysis",
+            Self::PolicySupportAgent => "policy-support-agent",
         }
     }
 }
@@ -656,6 +668,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::TypeScriptReducerBugfix,
                 ProfileScenarioKind::MergeConflictResolution,
                 ProfileScenarioKind::ConfigMigration,
+                ProfileScenarioKind::MultiModuleBugfix,
             ],
             Self::RealWorld => &[
                 ProfileScenarioKind::RepoSurvey,
@@ -679,6 +692,10 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::RustNotesTuiScaffold,
                 ProfileScenarioKind::OpsReport,
                 ProfileScenarioKind::ToolRecovery,
+                ProfileScenarioKind::MultiModuleBugfix,
+                ProfileScenarioKind::TerminalRepair,
+                ProfileScenarioKind::MultiHopAnalysis,
+                ProfileScenarioKind::PolicySupportAgent,
             ],
         }
     }

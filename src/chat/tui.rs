@@ -39,7 +39,9 @@ const USER_COLOR: Color = Color::Green;
 const TOOL_COLOR: Color = Color::LightBlue;
 const REASONING_COLOR: Color = Color::Magenta;
 const CONTEXT_COLOR: Color = Color::Yellow;
-const WARNING_COLOR: Color = Color::Red;
+const CONNECTION_COLOR: Color = Color::Yellow;
+const WARNING_COLOR: Color = Color::Yellow;
+const ERROR_COLOR: Color = Color::LightRed;
 const INPUT_HISTORY_LIMIT: usize = 100;
 const COPY_CONFIRMATION_DURATION: Duration = Duration::from_millis(1_600);
 const USER_MESSAGE_BG: Color = Color::Rgb(5, 24, 15);
@@ -115,6 +117,7 @@ struct ChatTui {
     tool_batch_seq: usize,
     tool_call_seq: usize,
     reasoning_index: Option<usize>,
+    connection_index: Option<usize>,
     reasoning_effort: String,
     pending_reasoning_effort: Option<String>,
     activity_details_expanded: bool,
@@ -162,7 +165,9 @@ enum MessageRole {
     Tool,
     Reasoning,
     Compaction,
+    Connection,
     Warning,
+    Error,
     Profile,
 }
 
@@ -207,6 +212,7 @@ impl ChatTui {
             tool_batch_seq: 0,
             tool_call_seq: 0,
             reasoning_index: None,
+            connection_index: None,
             reasoning_effort: crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT.to_string(),
             pending_reasoning_effort: None,
             activity_details_expanded: false,
@@ -427,7 +433,7 @@ impl ChatTui {
         match run_result {
             Ok(true) => self.push_warning("agent stopped by double Escape"),
             Ok(false) => {}
-            Err(error) => self.push_warning(format!("error: {error:#}")),
+            Err(error) => self.push_error(format!("{error:#}")),
         }
         if let Some(name) = &self.session_name {
             runner.save_session_named(name)?;
@@ -586,7 +592,7 @@ impl ChatTui {
                     }
                     self.push_system(message);
                 }
-                Err(error) => self.push_warning(format!("error: {error:#}")),
+                Err(error) => self.push_error(format!("{error:#}")),
             }
             return Ok(true);
         }
@@ -599,7 +605,7 @@ impl ChatTui {
                     }
                     self.push_system(crate::agent::report_prompt(&report));
                 }
-                Err(error) => self.push_warning(format!("error: {error:#}")),
+                Err(error) => self.push_error(format!("{error:#}")),
             }
             return Ok(true);
         }
@@ -611,14 +617,14 @@ impl ChatTui {
                     }
                     self.push_system(message);
                 }
-                Err(error) => self.push_warning(format!("error: {error:#}")),
+                Err(error) => self.push_error(format!("{error:#}")),
             }
             return Ok(true);
         }
         if let Some(command) = chat::command_args(input, "/mcp") {
             match chat::handle_mcp_command(runner, &self.cwd, command.trim()).await {
                 Ok(message) => self.push_system(message),
-                Err(error) => self.push_warning(format!("error: {error:#}")),
+                Err(error) => self.push_error(format!("{error:#}")),
             }
             return Ok(true);
         }
@@ -724,13 +730,18 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                         }
                     }
                     Ok(None) => self.push_system("nothing to compact"),
-                    Err(error) => self.push_warning(format!("error: {error:#}")),
+                    Err(error) => self.push_error(format!("{error:#}")),
                 }
                 Ok(true)
             }
             "/clear" => {
                 runner.clear_conversation();
                 self.messages.clear();
+                self.tool_group_index = None;
+                self.compaction_index = None;
+                self.reasoning_index = None;
+                self.connection_index = None;
+                self.active_assistant_index = None;
                 self.hovered_message = None;
                 self.copied_message = None;
                 if let Some(name) = &self.session_name {
@@ -855,6 +866,20 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                 } => {
                     self.activity.finish_tool(&name);
                     self.append_tool_result(&name, ok, duration_ms, output_chars, error.as_deref());
+                }
+                AgentDisplayEvent::ConnectionRetry {
+                    attempt,
+                    max_attempts,
+                    delay_ms,
+                    error,
+                } => {
+                    self.show_connection_retry(attempt, max_attempts, delay_ms, &error);
+                }
+                AgentDisplayEvent::ConnectionRecovered { attempts } => {
+                    self.finish_connection_recovered(attempts);
+                }
+                AgentDisplayEvent::TransportFallback { from, to, error } => {
+                    self.finish_transport_fallback(from, to, &error);
                 }
                 AgentDisplayEvent::System(text) => {
                     self.tool_group_index = None;
@@ -1240,9 +1265,11 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                     && matches!(self.activity.phase, ActivityPhase::Compacting),
                 activity_row_spinner(self.activity.tick),
             ),
-            MessageRole::System | MessageRole::Warning | MessageRole::Profile => {
-                plain_lines(&message.body)
-            }
+            MessageRole::System
+            | MessageRole::Connection
+            | MessageRole::Warning
+            | MessageRole::Error
+            | MessageRole::Profile => plain_lines(&message.body),
         };
         for line in terminal_safe_lines(body_lines) {
             lines.push(indent_line(line));
@@ -1494,6 +1521,80 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         self.push_message(MessageRole::Warning, body);
     }
 
+    fn push_error(&mut self, body: impl Into<String>) {
+        let body = body.into();
+        if let Some(index) = self.connection_index.take()
+            && let Some(message) = self.messages.get_mut(index)
+        {
+            message.role = MessageRole::Error;
+            message.body = format!("connection failed\n{}", compact_error_details(&body));
+            self.scroll_back = 0;
+            return;
+        }
+        self.push_message(MessageRole::Error, body);
+    }
+
+    fn show_connection_retry(
+        &mut self,
+        attempt: u64,
+        max_attempts: u64,
+        delay_ms: u64,
+        error: &str,
+    ) {
+        let body = format!(
+            "reconnecting {attempt}/{max_attempts} in {}\n{}",
+            format_duration(delay_ms),
+            compact_error_details(error)
+        );
+        let index = match self.connection_index {
+            Some(index)
+                if self
+                    .messages
+                    .get(index)
+                    .is_some_and(|message| matches!(message.role, MessageRole::Connection)) =>
+            {
+                index
+            }
+            _ => {
+                self.push_message(MessageRole::Connection, "");
+                self.messages.len().saturating_sub(1)
+            }
+        };
+        if let Some(message) = self.messages.get_mut(index) {
+            message.body = body;
+        }
+        self.connection_index = Some(index);
+        self.activity.phase = ActivityPhase::Thinking;
+        self.activity.detail = format!("reconnecting {attempt}/{max_attempts}");
+        self.scroll_back = 0;
+    }
+
+    fn finish_connection_recovered(&mut self, attempts: u64) {
+        let Some(index) = self.connection_index.take() else {
+            return;
+        };
+        if let Some(message) = self.messages.get_mut(index) {
+            let retries = if attempts == 1 { "retry" } else { "retries" };
+            message.body = format!("connection recovered after {attempts} {retries}");
+        }
+        self.scroll_back = 0;
+    }
+
+    fn finish_transport_fallback(&mut self, from: &str, to: &str, error: &str) {
+        let body = format!(
+            "{from} recovery exhausted; switched to {to}\n{}",
+            compact_error_details(error)
+        );
+        let index = self.connection_index.take();
+        if let Some(message) = index.and_then(|index| self.messages.get_mut(index)) {
+            message.role = MessageRole::Warning;
+            message.body = body;
+        } else {
+            self.push_warning(body);
+        }
+        self.scroll_back = 0;
+    }
+
     fn push_profile(&mut self, body: impl Into<String>) {
         self.push_message(MessageRole::Profile, body);
     }
@@ -1546,6 +1647,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         self.tool_group_index = adjust_removed_index(self.tool_group_index, index);
         self.compaction_index = adjust_removed_index(self.compaction_index, index);
         self.reasoning_index = adjust_removed_index(self.reasoning_index, index);
+        self.connection_index = adjust_removed_index(self.connection_index, index);
         self.active_assistant_index = adjust_removed_index(self.active_assistant_index, index);
         self.hovered_message = adjust_removed_index(self.hovered_message, index);
         self.copied_message = self.copied_message.and_then(|(copied, at)| {
@@ -1745,6 +1847,10 @@ fn compact_inline(text: &str, max_chars: usize) -> String {
     trimmed
 }
 
+fn compact_error_details(error: &str) -> String {
+    compact_inline(error.trim(), 320)
+}
+
 fn layout_constraints(
     command_menu_visible: bool,
     activity_visible: bool,
@@ -1879,7 +1985,9 @@ fn role_line(role: MessageRole, interaction: Option<&'static str>) -> Line<'stat
         MessageRole::Tool => ("tools", TOOL_COLOR, "▣"),
         MessageRole::Reasoning => ("thinking", REASONING_COLOR, "◇"),
         MessageRole::Compaction => ("context", CONTEXT_COLOR, "◈"),
+        MessageRole::Connection => ("connection", CONNECTION_COLOR, "~"),
         MessageRole::Warning => ("warning", WARNING_COLOR, "!"),
+        MessageRole::Error => ("error", ERROR_COLOR, "×"),
         MessageRole::Profile => ("profile", TOOL_COLOR, "■"),
     };
     let mut spans = vec![
@@ -2772,6 +2880,61 @@ mod tests {
         assert_eq!(tui.messages.len(), 1);
         assert!(matches!(tui.messages[0].role, MessageRole::Assistant));
         assert_eq!(tui.messages[0].body, "hello");
+    }
+
+    #[test]
+    fn connection_retries_update_one_thread_row_and_mark_recovery() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+
+        tui.apply_agent_events(vec![
+            AgentDisplayEvent::ConnectionRetry {
+                attempt: 1,
+                max_attempts: 5,
+                delay_ms: 200,
+                error: "keepalive ping timeout".to_string(),
+            },
+            AgentDisplayEvent::ConnectionRetry {
+                attempt: 2,
+                max_attempts: 5,
+                delay_ms: 400,
+                error: "keepalive ping timeout".to_string(),
+            },
+        ]);
+
+        assert_eq!(tui.messages.len(), 1);
+        assert!(matches!(tui.messages[0].role, MessageRole::Connection));
+        assert!(tui.messages[0].body.contains("reconnecting 2/5"));
+        assert!(tui.messages[0].body.contains("keepalive ping timeout"));
+
+        tui.apply_agent_events(vec![AgentDisplayEvent::ConnectionRecovered { attempts: 2 }]);
+        assert_eq!(tui.messages[0].body, "connection recovered after 2 retries");
+        assert!(tui.connection_index.is_none());
+    }
+
+    #[test]
+    fn transport_fallback_and_terminal_failures_remain_in_thread() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        tui.apply_agent_events(vec![
+            AgentDisplayEvent::ConnectionRetry {
+                attempt: 5,
+                max_attempts: 5,
+                delay_ms: 3_200,
+                error: "keepalive ping timeout".to_string(),
+            },
+            AgentDisplayEvent::TransportFallback {
+                from: "WebSocket",
+                to: "HTTP/SSE",
+                error: "keepalive ping timeout".to_string(),
+            },
+        ]);
+
+        assert!(matches!(tui.messages[0].role, MessageRole::Warning));
+        assert!(tui.messages[0].body.contains("switched to HTTP/SSE"));
+
+        tui.show_connection_retry(5, 5, 3_200, "HTTP stream closed");
+        tui.push_error("Spark stream ended without response.completed");
+        assert!(matches!(tui.messages[1].role, MessageRole::Error));
+        assert!(tui.messages[1].body.contains("connection failed"));
     }
 
     #[test]

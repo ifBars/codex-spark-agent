@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -31,6 +32,7 @@ type ResponsesWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub struct SparkClient {
     http: reqwest::Client,
     websocket: Arc<Mutex<Option<ResponsesWebSocket>>>,
+    websocket_enabled: Arc<AtomicBool>,
     pub auth: AuthTokens,
     model: String,
     reasoning_effort: String,
@@ -94,6 +96,7 @@ impl SparkClient {
         Self {
             http: reqwest::Client::new(),
             websocket: Arc::new(Mutex::new(None)),
+            websocket_enabled: Arc::new(AtomicBool::new(true)),
             auth,
             model,
             reasoning_effort: reasoning_effort.into(),
@@ -118,6 +121,7 @@ impl SparkClient {
         Self {
             http: self.http.clone(),
             websocket: Arc::new(Mutex::new(None)),
+            websocket_enabled: Arc::new(AtomicBool::new(true)),
             auth: self.auth.clone(),
             model: model.into(),
             reasoning_effort: reasoning_effort.into(),
@@ -245,10 +249,19 @@ SKILL.md:
         &self,
         body: Value,
         context: &str,
-        on_event: impl FnMut(&Value),
+        mut on_event: impl FnMut(&Value),
     ) -> Result<(Response, Value)> {
-        self.send_streaming_body_with_continuation(body, context, None, 0, on_event)
+        match self
+            .send_streaming_body_with_continuation(body.clone(), context, None, 0, &mut on_event)
             .await
+        {
+            Ok(result) => Ok(result),
+            Err(_) if self.switch_to_http_transport().await => {
+                self.send_streaming_body_with_continuation(body, context, None, 0, on_event)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn send_streaming_body_with_continuation(
@@ -259,23 +272,31 @@ SKILL.md:
         continuation_input_start: usize,
         mut on_event: impl FnMut(&Value),
     ) -> Result<(Response, Value)> {
-        match self
-            .send_websocket_body(
-                &body,
-                previous_response_id,
-                continuation_input_start,
-                &mut on_event,
-            )
-            .await
-        {
-            Ok(result) => return Ok(result),
-            Err(error) if !error.emitted_event => {
-                tracing::warn!(error = %error.error, "Responses WebSocket unavailable; falling back to HTTP/SSE");
-            }
-            Err(error) => return Err(error.error.context(context.to_string())),
+        if self.websocket_enabled() {
+            return self
+                .send_websocket_body(
+                    &body,
+                    previous_response_id,
+                    continuation_input_start,
+                    &mut on_event,
+                )
+                .await
+                .map_err(|error| error.error.context(context.to_string()));
         }
 
         self.send_http_streaming_body(body, context, on_event).await
+    }
+
+    pub(crate) fn websocket_enabled(&self) -> bool {
+        self.websocket_enabled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) async fn switch_to_http_transport(&self) -> bool {
+        if !self.websocket_enabled.swap(false, Ordering::Relaxed) {
+            return false;
+        }
+        self.websocket.lock().await.take();
+        true
     }
 
     async fn send_http_streaming_body(
@@ -479,22 +500,15 @@ SKILL.md:
 
 struct WebSocketAttemptError {
     error: anyhow::Error,
-    emitted_event: bool,
 }
 
 impl WebSocketAttemptError {
     fn before_stream(error: anyhow::Error) -> Self {
-        Self {
-            error,
-            emitted_event: false,
-        }
+        Self { error }
     }
 
-    fn during_stream(error: anyhow::Error, emitted_event: bool) -> Self {
-        Self {
-            error,
-            emitted_event,
-        }
+    fn during_stream(error: anyhow::Error, _emitted_event: bool) -> Self {
+        Self { error }
     }
 }
 

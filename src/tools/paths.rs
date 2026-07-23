@@ -34,6 +34,24 @@ pub(super) fn resolve_under(cwd: &Path, raw: &str) -> Result<PathBuf> {
     Ok(resolved)
 }
 
+const DENIED_READ_ROOT_COMPONENTS: &[&str] =
+    &[".spark-runs", ".spark-profile", ".spark-scenarios", ".git"];
+
+fn deny_read_root_access(resolved: &Path, read_roots: &[PathBuf], raw: &Path) -> Result<()> {
+    for root in read_roots {
+        if let Ok(relative) = resolved.strip_prefix(root) {
+            if relative.components().any(|c| {
+                c.as_os_str()
+                    .to_str()
+                    .map_or(false, |s| DENIED_READ_ROOT_COMPONENTS.contains(&s))
+            }) {
+                anyhow::bail!("path access denied: {}", raw.display());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn resolve_read_path(cwd: &Path, read_roots: &[PathBuf], raw: &str) -> Result<PathBuf> {
     let raw_path = Path::new(raw);
     if !raw_path.is_absolute()
@@ -47,6 +65,7 @@ pub(super) fn resolve_read_path(cwd: &Path, read_roots: &[PathBuf], raw: &str) -
         let resolved = std::fs::canonicalize(raw_path)
             .with_context(|| format!("failed to resolve path {}", raw_path.display()))?;
         if read_roots.iter().any(|root| resolved.starts_with(root)) {
+            deny_read_root_access(&resolved, read_roots, raw_path)?;
             return Ok(resolved);
         }
         anyhow::bail!("path escapes workspace: {}", raw);
@@ -60,6 +79,7 @@ pub(super) fn resolve_read_path(cwd: &Path, read_roots: &[PathBuf], raw: &str) -
         let resolved = std::fs::canonicalize(&candidate)
             .with_context(|| format!("failed to resolve path {}", candidate.display()))?;
         if resolved.starts_with(root) {
+            deny_read_root_access(&resolved, read_roots, raw_path)?;
             return Ok(resolved);
         }
     }
