@@ -1,5 +1,9 @@
 # Rust build output
 /target/
+/web/dist/
+/web/node_modules/
+/web/design-qa-*.png
+/web/reference-*.png
 
 # Spark local runtime state
 /.agents/
