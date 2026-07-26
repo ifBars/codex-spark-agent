@@ -51,7 +51,7 @@ Spark is intentionally smaller than the official Codex CLI. I am not trying to r
   <img src="docs/assets/reasoning-cost-quality-pilot.svg" alt="Weighted task quality plotted against total API tokens for Spark and native Codex at low, medium, and high reasoning." width="960">
 </picture>
 
-This pilot ran one difficult stateful bugfix once per runner and reasoning level. Weighted behavioral checks expose partial progress that pass/fail scoring hides. It is useful as a scoring sanity check, not a broad performance claim.
+This pilot ran one difficult stateful bugfix three times per runner and reasoning level, for 18 task-runs total. The points are three-run means and the whiskers show the observed quality range. Weighted behavioral checks expose partial progress that pass/fail scoring hides: Spark moves from 30 to 65 to 83.3 quality across low, medium, and high reasoning, while native Codex moves from 63.3 to 68.3 to 93.3. Task failures remain scored; only provider/API failures are excluded. It is useful as a scoring sanity check, not a broad performance claim.
 
 The raw values are in [`docs/benchmarks/reasoning-cost-quality-pilot-2026-07-26.csv`](docs/benchmarks/reasoning-cost-quality-pilot-2026-07-26.csv). The earlier 144-run success-only chart remains in [`docs/assets/reasoning-cost-quality.svg`](docs/assets/reasoning-cost-quality.svg).
 

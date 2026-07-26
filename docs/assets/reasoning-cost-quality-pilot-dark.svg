@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" role="img" aria-labelledby="title desc">
   <title id="title">Reasoning cost-quality pilot</title>
-  <desc id="desc">Weighted validation quality versus total API tokens for the Spark harness and Codex CLI at low, medium, and high reasoning. One stateful task was run once per level. Filled markers passed every check; hollow markers were incomplete.</desc>
+  <desc id="desc">Mean weighted validation quality versus mean total API tokens for the Spark harness and Codex CLI at low, medium, and high reasoning. One difficult stateful task was run three times per level. Whiskers show the observed quality range.</desc>
   <rect width="960" height="600" rx="16" fill="#0d1117"/>
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
     <text x="44" y="46" fill="#f0f6fc" font-size="24" font-weight="600">Reasoning cost-quality pilot</text>
-    <text x="44" y="72" fill="#8b949e" font-size="14">GPT-5.3 Codex Spark - granular behavioral scoring - 1 task x 1 run per level</text>
+    <text x="44" y="72" fill="#8b949e" font-size="14">GPT-5.3 Codex Spark - granular behavioral scoring - 1 task x 3 runs per level</text>
     <g font-size="14" fill="#f0f6fc">
       <line x1="618" y1="43" x2="652" y2="43" stroke="#58a6ff" stroke-width="3"/><circle cx="635" cy="43" r="5" fill="#58a6ff"/><text x="662" y="48">Spark harness</text>
       <line x1="618" y1="68" x2="652" y2="68" stroke="#ff7b72" stroke-width="3"/><rect x="630" y="63" width="10" height="10" rx="1" fill="#ff7b72"/><text x="662" y="73">Codex CLI</text>
@@ -16,31 +16,33 @@
     <g fill="#8b949e" font-size="13">
       <text x="101" y="460" text-anchor="end">0</text><text x="101" y="394" text-anchor="end">20</text><text x="101" y="328" text-anchor="end">40</text>
       <text x="101" y="262" text-anchor="end">60</text><text x="101" y="196" text-anchor="end">80</text><text x="101" y="130" text-anchor="end">100</text>
-      <text x="116" y="481" text-anchor="middle">100k</text><text x="312" y="481" text-anchor="middle">150k</text><text x="508" y="481" text-anchor="middle">200k</text>
-      <text x="704" y="481" text-anchor="middle">250k</text><text x="900" y="481" text-anchor="middle">300k</text>
+      <text x="116" y="481" text-anchor="middle">75k</text><text x="247" y="481" text-anchor="middle">100k</text><text x="377" y="481" text-anchor="middle">125k</text>
+      <text x="508" y="481" text-anchor="middle">150k</text><text x="639" y="481" text-anchor="middle">175k</text><text x="769" y="481" text-anchor="middle">200k</text><text x="900" y="481" text-anchor="middle">225k</text>
     </g>
     <g stroke="#6e7681" stroke-width="1.5">
       <line x1="116" y1="105" x2="116" y2="455"/><line x1="116" y1="455" x2="900" y2="455"/>
-      <line x1="116" y1="455" x2="116" y2="462"/><line x1="312" y1="455" x2="312" y2="462"/><line x1="508" y1="455" x2="508" y2="462"/>
-      <line x1="704" y1="455" x2="704" y2="462"/><line x1="900" y1="455" x2="900" y2="462"/>
+      <line x1="116" y1="455" x2="116" y2="462"/><line x1="247" y1="455" x2="247" y2="462"/><line x1="377" y1="455" x2="377" y2="462"/>
+      <line x1="508" y1="455" x2="508" y2="462"/><line x1="639" y1="455" x2="639" y2="462"/><line x1="769" y1="455" x2="769" y2="462"/><line x1="900" y1="455" x2="900" y2="462"/>
     </g>
     <text x="508" y="518" fill="#f0f6fc" font-size="14" text-anchor="middle">Total API tokens for the task-run (input + output)</text>
     <text x="31" y="288" fill="#f0f6fc" font-size="14" text-anchor="middle" transform="rotate(-90 31 288)">Weighted validation quality</text>
-    <path d="M157 455 L206 175 L472 125" fill="none" stroke="#58a6ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M294 241 L190 257 L830 125" fill="none" stroke="#ff7b72" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <g stroke="#58a6ff" stroke-width="3">
-      <circle cx="157" cy="455" r="7" fill="#0d1117"/><path d="M206 166 L215 175 L206 184 L197 175 Z" fill="#0d1117"/><path d="M472 114 L483 135 H461 Z" fill="#58a6ff"/>
+    <g stroke="#58a6ff" stroke-width="1.5" opacity="0.48">
+      <path d="M206 455 V241 M200 455 H212 M200 241 H212"/><path d="M277 307 V175 M271 307 H283 M271 175 H283"/><path d="M537 241 V125 M531 241 H543 M531 125 H543"/>
     </g>
-    <g stroke="#ff7b72" stroke-width="3">
-      <circle cx="294" cy="241" r="7" fill="#0d1117"/><path d="M190 248 L199 257 L190 266 L181 257 Z" fill="#0d1117"/><path d="M830 114 L841 135 H819 Z" fill="#ff7b72"/>
+    <g stroke="#ff7b72" stroke-width="1.5" opacity="0.48">
+      <path d="M508 307 V191 M502 307 H514 M502 191 H514"/><path d="M508 307 V125 M502 307 H514 M502 125 H514"/><path d="M772 191 V125 M766 191 H778 M766 125 H778"/>
     </g>
+    <path d="M206 356 L277 241 L537 180" fill="none" stroke="#58a6ff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M508 246 L508 230 L772 147" fill="none" stroke="#ff7b72" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <g fill="#58a6ff" stroke="#0d1117" stroke-width="2"><circle cx="206" cy="356" r="7"/><circle cx="277" cy="241" r="7"/><circle cx="537" cy="180" r="7"/></g>
+    <g fill="#ff7b72" stroke="#0d1117" stroke-width="2"><rect x="501" y="239" width="14" height="14" rx="1"/><rect x="501" y="223" width="14" height="14" rx="1"/><rect x="765" y="140" width="14" height="14" rx="1"/></g>
     <g fill="#f0f6fc" font-size="13">
-      <text x="145" y="438" text-anchor="end">low - 0</text><text x="218" y="163">medium - 85</text><text x="458" y="112" text-anchor="end">high - 100</text>
-      <text x="306" y="229">low - 65</text><text x="178" y="279" text-anchor="end">medium - 60</text><text x="816" y="112" text-anchor="end">high - 100</text>
+      <text x="194" y="344" text-anchor="end">low - 30</text><text x="265" y="229" text-anchor="end">medium - 65</text><text x="525" y="168" text-anchor="end">high - 83.3</text>
+      <text x="521" y="265">low - 63.3</text><text x="521" y="218">medium - 68.3</text><text x="760" y="135" text-anchor="end">high - 93.3</text>
     </g>
     <g fill="#8b949e" font-size="12">
-      <text x="44" y="554">Markers: circle low - diamond medium - triangle high</text><text x="916" y="554" text-anchor="end">filled = all checks passed - hollow = incomplete</text>
-      <text x="480" y="578" text-anchor="middle">Pilot only: one difficult stateful task and no confidence intervals; expand before generalizing.</text>
+      <text x="44" y="554">Points are three-run means</text><text x="916" y="554" text-anchor="end">whiskers = observed min-max quality</text>
+      <text x="480" y="578" text-anchor="middle">Pilot only: one difficult stateful task; task failures are scored and provider/API failures are excluded.</text>
     </g>
   </g>
 </svg>

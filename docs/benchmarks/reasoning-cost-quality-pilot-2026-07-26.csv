@@ -1,7 +1,7 @@
-runner,reasoning_effort,quality_score,validation_score,success,total_tokens,duration_seconds,scenario,repeats
-Spark harness,low,0,0,false,110410,15.427,stateful-reconciliation-bugfix,1
-Spark harness,medium,85,85,false,122852,19.282,stateful-reconciliation-bugfix,1
-Spark harness,high,100,100,true,190849,27.870,stateful-reconciliation-bugfix,1
-Codex CLI 0.145.0,low,65,65,false,145641,18.589,stateful-reconciliation-bugfix,1
-Codex CLI 0.145.0,medium,60,60,false,118989,18.565,stateful-reconciliation-bugfix,1
-Codex CLI 0.145.0,high,100,100,true,282246,30.632,stateful-reconciliation-bugfix,1
+runner,reasoning_effort,runs,average_quality,min_quality,max_quality,average_total_tokens,min_total_tokens,max_total_tokens,average_duration_seconds,scenario
+Spark harness,low,3,30.00,0,65,92256,72239,110410,13.03,stateful-reconciliation-bugfix
+Spark harness,medium,3,65.00,45,85,105836,95940,122852,15.92,stateful-reconciliation-bugfix
+Spark harness,high,3,83.33,65,100,155585,114098,190849,21.15,stateful-reconciliation-bugfix
+Codex CLI 0.145.0,low,3,63.33,45,80,150039,119485,184990,24.11,stateful-reconciliation-bugfix
+Codex CLI 0.145.0,medium,3,68.33,45,100,150080,118989,205713,26.45,stateful-reconciliation-bugfix
+Codex CLI 0.145.0,high,3,93.33,80,100,200418,124929,282246,24.96,stateful-reconciliation-bugfix
