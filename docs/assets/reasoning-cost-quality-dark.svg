@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560" role="img" aria-labelledby="title desc">
+  <title id="title">GPT-5.3 Codex Spark reasoning cost versus quality</title>
+  <desc id="desc">Success-only mean quality versus total token usage for Spark harness and Codex CLI at low, medium, and high reasoning. Each level contains 23 or 24 successful runs from eight tasks repeated three times. Error bars show 95 percent confidence intervals.</desc>
+  <rect width="960" height="560" rx="16" fill="#0d1117"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="44" y="46" fill="#f0f6fc" font-size="24" font-weight="600">Reasoning cost vs. quality</text>
+    <text x="44" y="72" fill="#8b949e" font-size="14">GPT-5.3 Codex Spark · 144 paired task-runs · successful rows only</text>
+
+    <g font-size="14" fill="#f0f6fc">
+      <line x1="632" y1="43" x2="666" y2="43" stroke="#58a6ff" stroke-width="3"/>
+      <circle cx="649" cy="43" r="5" fill="#0d1117" stroke="#58a6ff" stroke-width="3"/>
+      <text x="676" y="48">Spark harness</text>
+      <line x1="632" y1="68" x2="666" y2="68" stroke="#ff7b72" stroke-width="3"/>
+      <rect x="644" y="63" width="10" height="10" rx="1" fill="#0d1117" stroke="#ff7b72" stroke-width="3"/>
+      <text x="676" y="73">Codex CLI</text>
+    </g>
+
+    <g stroke="#30363d" stroke-width="1">
+      <line x1="108" y1="460" x2="900" y2="460"/>
+      <line x1="108" y1="395" x2="900" y2="395"/>
+      <line x1="108" y1="331" x2="900" y2="331"/>
+      <line x1="108" y1="266" x2="900" y2="266"/>
+      <line x1="108" y1="202" x2="900" y2="202"/>
+      <line x1="108" y1="137" x2="900" y2="137"/>
+    </g>
+
+    <g fill="#8b949e" font-size="13">
+      <text x="94" y="465" text-anchor="end">90</text>
+      <text x="94" y="400" text-anchor="end">92</text>
+      <text x="94" y="336" text-anchor="end">94</text>
+      <text x="94" y="271" text-anchor="end">96</text>
+      <text x="94" y="207" text-anchor="end">98</text>
+      <text x="94" y="142" text-anchor="end">100</text>
+
+      <text x="199" y="486" text-anchor="middle">75k</text>
+      <text x="352" y="486" text-anchor="middle">100k</text>
+      <text x="504" y="486" text-anchor="middle">125k</text>
+      <text x="656" y="486" text-anchor="middle">150k</text>
+      <text x="809" y="486" text-anchor="middle">175k</text>
+    </g>
+
+    <g stroke="#6e7681" stroke-width="1.5">
+      <line x1="108" y1="105" x2="108" y2="460"/>
+      <line x1="108" y1="460" x2="900" y2="460"/>
+      <line x1="199" y1="460" x2="199" y2="467"/>
+      <line x1="352" y1="460" x2="352" y2="467"/>
+      <line x1="504" y1="460" x2="504" y2="467"/>
+      <line x1="656" y1="460" x2="656" y2="467"/>
+      <line x1="809" y1="460" x2="809" y2="467"/>
+    </g>
+
+    <text x="504" y="522" fill="#f0f6fc" font-size="14" text-anchor="middle">Average total tokens per successful task (input + output)</text>
+    <text x="31" y="282" fill="#f0f6fc" font-size="14" text-anchor="middle" transform="rotate(-90 31 282)">Average quality score</text>
+
+    <g stroke="#58a6ff" stroke-width="1.5" opacity="0.42">
+      <path d="M177 168 H289 M177 163 V173 M289 163 V173 M233 137 V213 M228 137 H238 M228 213 H238"/>
+      <path d="M185 167 H340 M185 162 V172 M340 162 V172 M265 137 V209 M260 137 H270 M260 209 H270"/>
+      <path d="M194 167 H339 M194 162 V172 M339 162 V172 M267 137 V209 M262 137 H272 M262 209 H272"/>
+    </g>
+    <g stroke="#ff7b72" stroke-width="1.5" opacity="0.42">
+      <path d="M517 326 H752 M517 321 V331 M752 321 V331 M634 233 V418 M629 233 H639 M629 418 H639"/>
+      <path d="M409 228 H896 M409 223 V233 M896 223 V233 M653 156 V297 M648 156 H658 M648 297 H658"/>
+      <path d="M471 208 H660 M471 203 V213 M660 203 V213 M565 139 V276 M560 139 H570 M560 276 H570"/>
+    </g>
+
+    <path d="M233 168 C244 168 255 167 265 167 C266 167 266 167 267 167" fill="none" stroke="#58a6ff" stroke-width="3" stroke-linecap="round"/>
+    <path d="M634 326 C643 288 650 246 653 228 C629 215 595 209 565 208" fill="none" stroke="#ff7b72" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <g fill="#0d1117" stroke="#58a6ff" stroke-width="3">
+      <circle cx="233" cy="168" r="7"/>
+      <path d="M265 159 L273 167 L265 175 L257 167 Z"/>
+      <path d="M267 154 L279 178 H255 Z" fill="none"/>
+    </g>
+    <g fill="#0d1117" stroke="#ff7b72" stroke-width="3">
+      <circle cx="634" cy="326" r="7"/>
+      <path d="M653 219 L662 228 L653 237 L644 228 Z"/>
+      <path d="M565 198 L575 217 H555 Z"/>
+    </g>
+
+    <g fill="#f0f6fc" font-size="13">
+      <text x="219" y="151" text-anchor="end">low · 99.04</text>
+      <path d="M259 181 L246 194" fill="none" stroke="#6e7681"/>
+      <text x="240" y="202" text-anchor="end">medium · 99.08</text>
+      <path d="M274 158 L288 145" fill="none" stroke="#6e7681"/>
+      <text x="294" y="143">high · 99.08</text>
+
+      <text x="646" y="347">low · 94.17</text>
+      <text x="666" y="246">medium · 97.22</text>
+      <text x="546" y="191" text-anchor="end">high · 97.83</text>
+    </g>
+
+    <g fill="#8b949e" font-size="12">
+      <text x="44" y="542">Markers: ○ low · ◇ medium · △ high</text>
+      <text x="900" y="542" text-anchor="end">bars = 95% CI · failures excluded from means</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,7 @@
+runner,reasoning_effort,successful_runs,total_runs,average_quality_score,quality_ci95,average_total_tokens,tokens_ci95,average_duration_seconds,duration_ci95
+Spark harness,low,23,24,99.04,1.37,80538,9173,11.0,1.7
+Spark harness,medium,24,24,99.08,1.31,85762,12388,12.2,2.5
+Spark harness,high,24,24,99.08,1.31,86065,11915,12.5,2.0
+Codex CLI,low,23,24,94.17,2.86,146390,19296,25.3,5.0
+Codex CLI,medium,23,24,97.22,2.19,149439,39998,27.3,5.6
+Codex CLI,high,23,24,97.83,2.11,135090,15469,21.3,2.2

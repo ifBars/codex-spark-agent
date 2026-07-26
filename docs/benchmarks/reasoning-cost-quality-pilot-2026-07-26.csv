@@ -1,0 +1,7 @@
+runner,reasoning_effort,quality_score,validation_score,success,total_tokens,duration_seconds,scenario,repeats
+Spark harness,low,0,0,false,110410,15.427,stateful-reconciliation-bugfix,1
+Spark harness,medium,85,85,false,122852,19.282,stateful-reconciliation-bugfix,1
+Spark harness,high,100,100,true,190849,27.870,stateful-reconciliation-bugfix,1
+Codex CLI 0.145.0,low,65,65,false,145641,18.589,stateful-reconciliation-bugfix,1
+Codex CLI 0.145.0,medium,60,60,false,118989,18.565,stateful-reconciliation-bugfix,1
+Codex CLI 0.145.0,high,100,100,true,282246,30.632,stateful-reconciliation-bugfix,1
