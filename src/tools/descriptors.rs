@@ -16,7 +16,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
     vec![
         ToolDescriptor {
             name: "fs.read".to_string(),
-            description: "Read a bounded UTF-8 line window under the workspace. Returns full-file total_lines, total_chars, and total_words metadata; use offset/limit to page through larger files instead of reading them all at once.".to_string(),
+            description: "Read a bounded UTF-8 line window from a regular text file up to 1 MiB. Larger, binary, or invalid text files fail quickly; use fs.stat and a narrower source file instead.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -33,13 +33,13 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
         },
         ToolDescriptor {
             name: "fs.list".to_string(),
-            description: "List files and directories under the workspace.".to_string(),
+            description: "List files and directories under the workspace with bounded depth, directory count, and a short traversal deadline.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
                     "recursive": {"type": "boolean"},
-                    "max_depth": {"type": "integer", "minimum": 0, "maximum": 8},
+                    "max_depth": {"type": "integer", "minimum": 0, "maximum": 6},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 200}
                 },
                 "additionalProperties": false
@@ -78,7 +78,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
         },
         ToolDescriptor {
             name: "fs.search".to_string(),
-            description: "Search UTF-8 files under the workspace with ripgrep when available and return bounded matching line snippets. Query is literal by default; set regex=true for regular expressions. Narrow path/query first, then page with more specific searches when needed.".to_string(),
+            description: "Search bounded text files under the workspace with ripgrep when available. Searches use strict file/depth/result budgets and a short deadline; narrow path/query first. Query is literal by default; set regex=true for regular expressions.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -86,7 +86,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                     "path": {"type": "string"},
                     "regex": {"type": "boolean"},
                     "case_sensitive": {"type": "boolean"},
-                    "max_depth": {"type": "integer", "minimum": 0, "maximum": 12},
+                    "max_depth": {"type": "integer", "minimum": 0, "maximum": 6},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100},
                     "context_lines": {"type": "integer", "minimum": 0, "maximum": 3}
                 },
@@ -154,7 +154,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                 "properties": {
                     "command": {"type": "string"},
                     "workdir": {"type": "string"},
-                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 120000}
+                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 30000}
                 },
                 "additionalProperties": false
             }),
@@ -200,7 +200,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                         "enum": ["load", "domcontentloaded", "networkidle", "commit"]
                     },
                     "text_limit": {"type": "integer", "minimum": 0, "maximum": 40000},
-                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 120000}
+                    "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 30000}
                 },
                 "required": ["url"],
                 "additionalProperties": false
@@ -219,7 +219,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
         },
         ToolDescriptor {
             name: "subagent.run".to_string(),
-            description: "Run an isolated read-only helper agent for bounded exploration, research, review, or planning. Use kind=explore for quick local repo inspection, research for source-backed current web/local research, review for independent code-risk review, and plan for phased implementation planning. The harness chooses Spark or gpt-5.5 by task kind unless model is explicitly set. If status is incomplete, continue in the parent loop instead of repeating the same bounded call.".to_string(),
+            description: "Run an isolated read-only helper agent for scoped exploration, research, review, or planning. Use kind=explore for quick local repo inspection, research for source-backed current web/local research, review for independent code-risk review, and plan for phased implementation planning. The harness chooses Spark or gpt-5.5 by task kind unless model is explicitly set. The child runs until it completes or is cancelled; there is no turn-count cutoff.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -235,11 +235,6 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                     "reasoning_effort": {
                         "type": "string",
                         "enum": ["low", "medium", "high", "xhigh"]
-                    },
-                    "max_turns": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 12
                     }
                 },
                 "required": ["kind", "task"],

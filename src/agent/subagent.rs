@@ -7,7 +7,6 @@ use crate::profiler::AgentProfiler;
 use crate::tools::{AgentMode, ToolResult};
 
 pub(crate) const ADVANCED_SUBAGENT_MODEL: &str = "gpt-5.5";
-const MAX_SUBAGENT_TURNS: usize = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -44,28 +43,24 @@ impl SubagentKind {
                 mode: AgentMode::Ask,
                 model_policy: SubagentModelPolicy::Parent,
                 reasoning_effort: "medium",
-                max_turns: 4,
                 system_prompt: "You are a Spark explore subagent. You are read-only. Inspect local evidence quickly, do not edit files, and return only a compact brief for the parent loop.",
             },
             Self::Research => SubagentSpec {
                 mode: AgentMode::Ask,
                 model_policy: SubagentModelPolicy::Advanced,
                 reasoning_effort: "high",
-                max_turns: 6,
                 system_prompt: "You are a Spark research subagent. Prefer hosted web search for current external facts, keep citations and source names in the brief, do not edit files, and separate verified facts from inference.",
             },
             Self::Review => SubagentSpec {
                 mode: AgentMode::Ask,
                 model_policy: SubagentModelPolicy::Advanced,
                 reasoning_effort: "high",
-                max_turns: 6,
                 system_prompt: "You are a Spark review subagent. You are read-only. Check diffs, source, tests, and behavioral risks. Prioritize concrete findings with file and line evidence.",
             },
             Self::Plan => SubagentSpec {
                 mode: AgentMode::Ask,
                 model_policy: SubagentModelPolicy::Advanced,
                 reasoning_effort: "high",
-                max_turns: 4,
                 system_prompt: "You are a Spark planning subagent. You are read-only. Turn evidence into a minimal phased plan with risks, validation, and explicit non-goals.",
             },
         }
@@ -77,7 +72,6 @@ pub(crate) struct SubagentSpec {
     pub(crate) mode: AgentMode,
     pub(crate) model_policy: SubagentModelPolicy,
     pub(crate) reasoning_effort: &'static str,
-    pub(crate) max_turns: usize,
     pub(crate) system_prompt: &'static str,
 }
 
@@ -107,15 +101,9 @@ impl SubagentSpec {
                     SubagentModelPolicy::Parent => parent_reasoning_effort.to_string(),
                     SubagentModelPolicy::Advanced => self.reasoning_effort.to_string(),
                 });
-        let max_turns = options
-            .max_turns
-            .unwrap_or(self.max_turns)
-            .clamp(1, MAX_SUBAGENT_TURNS);
-
         SubagentRuntimeConfig {
             model,
             reasoning_effort,
-            max_turns,
         }
     }
 }
@@ -130,14 +118,12 @@ pub(crate) enum SubagentModelPolicy {
 pub(crate) struct SubagentRuntimeConfig {
     pub(crate) model: String,
     pub(crate) reasoning_effort: String,
-    pub(crate) max_turns: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SubagentRunOptions {
     pub(crate) model: Option<String>,
     pub(crate) reasoning_effort: Option<String>,
-    pub(crate) max_turns: Option<usize>,
 }
 
 impl SubagentRunOptions {
@@ -145,7 +131,6 @@ impl SubagentRunOptions {
         Ok(Self {
             model: optional_string(args, "model")?,
             reasoning_effort: optional_reasoning_effort(args)?,
-            max_turns: optional_max_turns(args)?,
         })
     }
 }
@@ -156,7 +141,6 @@ pub(crate) struct SubagentReport {
     pub(crate) task: String,
     pub(crate) model: String,
     pub(crate) reasoning_effort: String,
-    pub(crate) max_turns: usize,
     pub(crate) summary: String,
     pub(crate) profile: Value,
 }
@@ -196,7 +180,6 @@ impl AgentRunner {
             cwd: self.cwd.clone(),
             read_roots: self.read_roots.clone(),
             input: Vec::new(),
-            max_turns: Some(runtime.max_turns),
             trace: None,
             compact_after_chars: self.compact_after_chars,
             compact_after_tool_only_turns: self.compact_after_tool_only_turns,
@@ -222,7 +205,6 @@ impl AgentRunner {
             task: task.to_string(),
             model: runtime.model,
             reasoning_effort: runtime.reasoning_effort,
-            max_turns: runtime.max_turns,
             summary: child.latest_assistant_text().unwrap_or_default(),
             profile: child.profile_summary(),
         })
@@ -253,7 +235,6 @@ impl AgentRunner {
                     "task": report.task,
                     "model": report.model,
                     "reasoning_effort": report.reasoning_effort,
-                    "max_turns": report.max_turns,
                     "profile": report.profile,
                     "summary_chars": report.summary.len(),
                 }),
@@ -270,7 +251,6 @@ impl AgentRunner {
                     "task": report.task,
                     "model": report.model,
                     "reasoning_effort": report.reasoning_effort,
-                    "max_turns": report.max_turns,
                     "summary": report.summary,
                     "profile": report.profile,
                 }),
@@ -303,21 +283,6 @@ impl AgentRunner {
 }
 
 pub(crate) fn subagent_error_tool_result(args: &Value, message: &str) -> ToolResult {
-    if message.contains("without completion") {
-        return ToolResult {
-            ok: true,
-            data: json!({
-                "status": "incomplete",
-                "error_kind": "subagent_incomplete",
-                "tool": "subagent.run",
-                "args": args,
-                "message": message,
-                "hint": "The child exhausted its bounded turn budget. Do not retry the same bounded subagent call; continue in the parent loop, use any partial signal available, or make one larger-budget follow-up only if the task still needs delegation.",
-            }),
-            error: None,
-        };
-    }
-
     ToolResult {
         ok: false,
         data: json!({
@@ -325,7 +290,7 @@ pub(crate) fn subagent_error_tool_result(args: &Value, message: &str) -> ToolRes
             "tool": "subagent.run",
             "args": args,
             "message": message,
-            "hint": "Use kind=explore|research|review|plan with a non-empty task. Optionally set model=parent or a concrete model, reasoning_effort=low|medium|high|xhigh, and max_turns 1..12.",
+            "hint": "Use kind=explore|research|review|plan with a non-empty task. Optionally set model=parent or a concrete model and reasoning_effort=low|medium|high|xhigh.",
         }),
         error: Some(message.to_string()),
     }
@@ -354,11 +319,10 @@ fn assistant_text_from_item(item: &Value) -> Option<String> {
 
 pub(crate) fn report_prompt(report: &SubagentReport) -> String {
     format!(
-        "[spark subagent report: {}]\nModel: {}\nReasoning: {}\nMax turns: {}\nTask: {}\n\n{}\n\nProfile:\n{}",
+        "[spark subagent report: {}]\nModel: {}\nReasoning: {}\nTask: {}\n\n{}\n\nProfile:\n{}",
         report.kind.name(),
         report.model,
         report.reasoning_effort,
-        report.max_turns,
         report.task,
         report.summary.trim(),
         serde_json::to_string_pretty(&report.profile).unwrap_or_else(|_| "{}".to_string())
@@ -382,20 +346,4 @@ fn optional_reasoning_effort(args: &Value) -> Result<Option<String>> {
         "low" | "medium" | "high" | "xhigh" => Ok(Some(reasoning_effort)),
         _ => bail!("reasoning_effort must be low, medium, high, or xhigh"),
     }
-}
-
-fn optional_max_turns(args: &Value) -> Result<Option<usize>> {
-    let Some(value) = args.get("max_turns") else {
-        return Ok(None);
-    };
-    if value.is_null() {
-        return Ok(None);
-    }
-    let Some(max_turns) = value.as_u64() else {
-        bail!("max_turns must be an integer");
-    };
-    if max_turns == 0 || max_turns as usize > MAX_SUBAGENT_TURNS {
-        bail!("max_turns must be between 1 and {MAX_SUBAGENT_TURNS}");
-    }
-    Ok(Some(max_turns as usize))
 }

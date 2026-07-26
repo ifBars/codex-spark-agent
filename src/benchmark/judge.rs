@@ -1,25 +1,30 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    process::Stdio,
+    time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::process::Command;
 
 use crate::{client, config};
 
-pub(crate) const DEFAULT_JUDGE_MODEL: &str = "gpt-5.5";
+pub(crate) const DEFAULT_JUDGE_MODEL: &str = "gpt-5.6-terra";
 const MAX_SNIPPET_CHARS: usize = 8_000;
-const MAX_EVIDENCE_CHARS_PER_RUN: usize = 22_000;
+const MAX_EVIDENCE_CHARS_PER_RUN: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub(crate) struct BenchmarkJudgeOptions {
     pub(crate) cwd: PathBuf,
     pub(crate) comparison_report: PathBuf,
     pub(crate) model: String,
+    pub(crate) codex_bin: PathBuf,
     pub(crate) reasoning_effort: String,
+    pub(crate) timeout_seconds: u64,
     pub(crate) output_dir: PathBuf,
     pub(crate) limit: Option<usize>,
 }
@@ -62,6 +67,12 @@ struct ComparisonRunRow {
 pub(crate) struct BenchmarkJudgeReport {
     pub(crate) suite: String,
     pub(crate) comparison_report: String,
+    #[serde(default)]
+    pub(crate) judge_model: String,
+    #[serde(default)]
+    pub(crate) judge_reasoning_effort: String,
+    #[serde(default)]
+    pub(crate) judge_backend: String,
     pub(crate) generated_at_unix_ms: u128,
     pub(crate) rows: Vec<BenchmarkJudgeScenario>,
 }
@@ -112,19 +123,30 @@ pub(crate) async fn write_llm_judge_report(
         )
     })?;
 
-    let auth = config::load_auth()?;
-    let judge = client::SparkClient::new(auth, options.model.clone());
+    let use_codex_cli = uses_codex_cli_judge(&options.model);
+    let spark_judge = if use_codex_cli {
+        None
+    } else {
+        let auth = config::load_auth()?;
+        Some(client::SparkClient::new(auth, options.model.clone()))
+    };
     let mut rows = Vec::new();
     for (scenario, runs) in pairs.into_iter().take(options.limit.unwrap_or(usize::MAX)) {
         let prompt = judge_prompt(&options.cwd, &scenario, &runs)?;
-        let input = [json!({
-            "role": "user",
-            "content": [{"type": "input_text", "text": prompt}]
-        })];
-        let (response, _) = judge
-            .responses_create_judge(&input, &options.reasoning_effort, |_| {})
-            .await?;
-        let text = client::response_text(&response);
+        let text = if use_codex_cli {
+            codex_cli_judge_response(&options, &scenario, &prompt).await?
+        } else {
+            let input = [json!({
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt}]
+            })];
+            let (response, _) = spark_judge
+                .as_ref()
+                .expect("Spark judge must exist for non-Codex models")
+                .responses_create_judge(&input, &options.reasoning_effort, |_| {})
+                .await?;
+            client::response_text(&response)
+        };
         let mut scenario_score = parse_judge_response(&scenario, &text)?;
         scenario_score.raw_response = text;
         rows.push(scenario_score);
@@ -134,6 +156,13 @@ pub(crate) async fn write_llm_judge_report(
     let report = BenchmarkJudgeReport {
         suite: comparison.suite,
         comparison_report: options.comparison_report.display().to_string(),
+        judge_model: options.model.clone(),
+        judge_reasoning_effort: options.reasoning_effort.clone(),
+        judge_backend: if use_codex_cli {
+            "codex-cli".to_string()
+        } else {
+            "spark-client".to_string()
+        },
         generated_at_unix_ms: stamp,
         rows,
     };
@@ -147,6 +176,152 @@ pub(crate) async fn write_llm_judge_report(
         rows: report.rows.len(),
         json_path,
     })
+}
+
+fn uses_codex_cli_judge(model: &str) -> bool {
+    model.eq_ignore_ascii_case("gpt-5.6-terra")
+}
+
+async fn codex_cli_judge_response(
+    options: &BenchmarkJudgeOptions,
+    scenario: &str,
+    prompt: &str,
+) -> Result<String> {
+    let safe_scenario = scenario
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    let output_path = options
+        .output_dir
+        .join(format!(".judge-{safe_scenario}-{}.txt", unix_millis()));
+    let schema_path = output_path.with_extension("schema.json");
+    std::fs::write(
+        &schema_path,
+        serde_json::to_vec_pretty(&judge_output_schema())?,
+    )
+    .with_context(|| format!("failed to write judge schema {}", schema_path.display()))?;
+    let judge_cwd = std::env::temp_dir().join(format!(
+        "spark-benchmark-judge-{}-{}",
+        std::process::id(),
+        unix_millis()
+    ));
+    std::fs::create_dir_all(&judge_cwd)
+        .with_context(|| format!("failed to create judge cwd {}", judge_cwd.display()))?;
+    let prompt_path = judge_cwd.join("judge-prompt.txt");
+    std::fs::write(&prompt_path, prompt)
+        .with_context(|| format!("failed to write judge prompt {}", prompt_path.display()))?;
+    let reasoning_config = format!("model_reasoning_effort=\"{}\"", options.reasoning_effort);
+    let mut command = Command::new(&options.codex_bin);
+    command
+        .arg("exec")
+        .arg("--ephemeral")
+        .arg("--ignore-user-config")
+        .arg("--ignore-rules")
+        .arg("--skip-git-repo-check")
+        .arg("--sandbox")
+        .arg("read-only")
+        .arg("--model")
+        .arg(&options.model)
+        .arg("--config")
+        .arg(reasoning_config)
+        .arg("--output-last-message")
+        .arg(&output_path)
+        .arg("--output-schema")
+        .arg(&schema_path)
+        .arg("--cd")
+        .arg(&judge_cwd)
+        .arg(
+            "Read judge-prompt.txt in the current directory. It contains the complete benchmark \
+             evidence and scoring contract. Judge only that evidence, do not inspect any other \
+             files or use the network, and return the required JSON object.",
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+
+    let child = command.spawn().with_context(|| {
+        format!(
+            "failed to start Codex CLI judge {}",
+            options.codex_bin.display()
+        )
+    })?;
+
+    let output_result = tokio::time::timeout(
+        Duration::from_secs(options.timeout_seconds),
+        child.wait_with_output(),
+    )
+    .await;
+    let output = match output_result {
+        Ok(output) => output.context("failed while waiting for Codex CLI judge")?,
+        Err(_) => {
+            cleanup_codex_judge_temp(&output_path, &schema_path, &prompt_path, &judge_cwd);
+            anyhow::bail!(
+                "timed out after {} seconds waiting for Codex CLI judge",
+                options.timeout_seconds
+            );
+        }
+    };
+    let final_message = std::fs::read_to_string(&output_path).unwrap_or_default();
+    cleanup_codex_judge_temp(&output_path, &schema_path, &prompt_path, &judge_cwd);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "Codex CLI judge failed for {scenario} with status {}: {}",
+            output.status,
+            bounded_chars(&stderr, 2_000)
+        );
+    }
+    if final_message.trim().is_empty() {
+        anyhow::bail!("Codex CLI judge returned no final message for {scenario}");
+    }
+    Ok(final_message)
+}
+
+fn judge_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["scenario", "scores", "verdict", "rationale"],
+        "properties": {
+            "scenario": {"type": "string"},
+            "scores": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "runner",
+                        "solution_score",
+                        "process_score",
+                        "confidence",
+                        "notes"
+                    ],
+                    "properties": {
+                        "runner": {"type": "string"},
+                        "solution_score": {"type": "number"},
+                        "process_score": {"type": "number"},
+                        "confidence": {"type": "number"},
+                        "notes": {"type": "string"}
+                    }
+                }
+            },
+            "verdict": {"type": "string"},
+            "rationale": {"type": "string"}
+        }
+    })
+}
+
+fn cleanup_codex_judge_temp(
+    output_path: &Path,
+    schema_path: &Path,
+    prompt_path: &Path,
+    judge_cwd: &Path,
+) {
+    let _ = std::fs::remove_file(output_path);
+    let _ = std::fs::remove_file(schema_path);
+    let _ = std::fs::remove_file(prompt_path);
+    let _ = std::fs::remove_dir(judge_cwd);
 }
 
 fn matched_scenario_pairs(
@@ -204,6 +379,7 @@ fn judge_prompt(
         .chain(["tie", "inconclusive"])
         .collect::<Vec<_>>()
         .join("|");
+    let scenario_rubric = scenario_specific_rubric(scenario);
     Ok(format!(
         r#"You are judging a benchmark comparison for real coding-agent work.
 
@@ -226,6 +402,8 @@ Rubric:
 - Do not use or cite request counts or turn counts; those protocol units are intentionally not comparable between runners.
 - Compare runners on the same scenario only.
 - Return exactly one scores entry for every runner present in the evidence JSON.
+- Other than reading a CLI-provided judge prompt file when necessary, do not call tools, inspect files, browse, or run commands. Judge only the Evidence JSON embedded below.
+{scenario_rubric}
 
 Return JSON only with this exact shape:
 {{
@@ -243,6 +421,18 @@ Evidence JSON:
         verdict_options,
         serde_json::to_string_pretty(&evidence)?
     ))
+}
+
+fn scenario_specific_rubric(scenario: &str) -> &'static str {
+    match scenario {
+        "asset-ripper-exploration"
+        | "fivem-exploration"
+        | "cpp2il-exploration"
+        | "il2cpp-interop-exploration" => {
+            "- Exploration-specific scoring: judge whether the final explanation synthesizes all four task subsets, grounds architectural and call-flow claims in specific paths/symbols, distinguishes confirmed facts from inference and unknowns, explains rather than merely inventories files, avoids invented relationships, and identifies high-value next checks. Penalize a polished explanation that lacks evidence breadth or does not reflect the earlier exploration."
+        }
+        _ => "",
+    }
 }
 
 fn run_artifact_evidence(cwd: &Path, source: &str) -> Result<Value> {
@@ -497,6 +687,25 @@ mod tests {
         ));
         assert!(prompt.contains("Do not include speed"));
         assert!(prompt.contains("95-100: complete production-quality solution"));
+    }
+
+    #[test]
+    fn exploration_judge_rubric_scores_evidence_and_explanation_quality() {
+        let prompt = judge_prompt(Path::new("."), "cpp2il-exploration", &BTreeMap::new())
+            .expect("build prompt");
+
+        assert!(prompt.contains("synthesizes all four task subsets"));
+        assert!(prompt.contains("specific paths/symbols"));
+        assert!(prompt.contains("distinguishes confirmed facts from inference and unknowns"));
+        assert!(prompt.contains("explains rather than merely inventories files"));
+    }
+
+    #[test]
+    fn terra_judge_uses_codex_cli_backend() {
+        assert_eq!(DEFAULT_JUDGE_MODEL, "gpt-5.6-terra");
+        assert!(uses_codex_cli_judge("gpt-5.6-terra"));
+        assert!(uses_codex_cli_judge("GPT-5.6-TERRA"));
+        assert!(!uses_codex_cli_judge("gpt-5.5"));
     }
 
     #[test]

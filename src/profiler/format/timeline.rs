@@ -14,10 +14,6 @@ pub fn format_trace_timeline(summary: &Value) -> String {
             .get("model")
             .and_then(Value::as_str)
             .unwrap_or("unknown-model");
-        let max_turns = metadata
-            .get("max_turns")
-            .map(compact_json_value)
-            .unwrap_or_else(|| "null".to_string());
         let compact_after = metadata
             .get("compact_after_chars")
             .and_then(Value::as_u64)
@@ -32,7 +28,7 @@ pub fn format_trace_timeline(summary: &Value) -> String {
             .map(|name| format!(" scenario={name}"))
             .unwrap_or_default();
         lines.push(format!(
-            "trace model={model}{scenario} max_turns={max_turns} compact_after_chars={compact_after} max_input_chars={max_input}"
+            "trace model={model}{scenario} compact_after_chars={compact_after} max_input_chars={max_input}"
         ));
     } else {
         lines.push("trace".to_string());
@@ -300,14 +296,6 @@ fn format_errors(errors: &[Value]) -> String {
         })
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn compact_json_value(value: &Value) -> String {
-    match value {
-        Value::Null => "null".to_string(),
-        Value::String(value) => value.clone(),
-        other => other.to_string(),
-    }
 }
 
 fn truncate_for_line(value: &str, max_chars: usize) -> String {

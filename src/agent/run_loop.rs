@@ -44,13 +44,6 @@ impl AgentRunner {
             if cancellation.is_cancelled() {
                 return self.record_cancelled(turn, "turn_start");
             }
-            if let Some(max_turns) = self.max_turns
-                && turn > max_turns
-            {
-                let message = format!("stopped after {max_turns} turns without completion");
-                self.record_terminal_error(self.request_seq + 1, "max_turns", &message)?;
-                anyhow::bail!(message);
-            }
 
             let tool_only_streak = self.profiler.current_tool_only_turn_streak();
             let compaction_trigger = compaction_trigger_for_turn(

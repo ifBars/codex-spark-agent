@@ -2,6 +2,69 @@ use anyhow::Result;
 
 use crate::{APPROX_CHARS_PER_TOKEN, MAX_SCENARIO_TARGET_TOKENS, cli::ProfileScenarioKind};
 
+fn exploration_scenario_prompts(scenario: ProfileScenarioKind) -> Option<Vec<String>> {
+    let (name, codebase, tasks) = match scenario {
+        ProfileScenarioKind::AssetRipperExploration => (
+            "asset-ripper-exploration",
+            "the Schedule I AssetRipper export",
+            [
+                "Orient yourself in the exported Unity project. Inspect ProjectSettings.asset, the top-level Assets layout, and the Assembly-CSharp script tree. Build a compact evidence ledger that distinguishes project metadata, recovered scripts, and serialized assets.",
+                "Trace ScheduleOne.Product.ProductManager from its declaration into its networking, persistence, and product-registration collaborators. Follow targeted symbols into the smallest useful set of files, and record the concrete call/data path plus path evidence.",
+                "Challenge the trace by finding serialized asset or prefab evidence connected to one product-facing type or field. Explain what the YAML/script link does prove, what it does not prove about runtime behavior, and any ambiguity introduced by exported or recovered artifacts.",
+                "Synthesize the findings for an engineer new to this export. Explain the project shape, the ProductManager-centered runtime/data flow, and the boundary between confirmed evidence and inference. Cite at least six specific paths spanning settings, scripts, and serialized assets; include residual unknowns and the next two highest-value checks.",
+            ],
+        ),
+        ProfileScenarioKind::FiveMExploration => (
+            "fivem-exploration",
+            "the Cfx.re/FiveM codebase",
+            [
+                "Orient yourself in the repository. Read README.md, inspect code and code/components without recursively dumping them, and identify how product targets, shared infrastructure, components, ext, and vendor content are separated. Return a compact evidence ledger.",
+                "Trace one concrete FXServer startup or server-instance path from an entry/registration seam into the components that own resources, networking, or scripting. Prefer symbol searches and bounded reads; record the call/ownership chain with path evidence.",
+                "Challenge that architecture map by tracing one client/server or native/scripting boundary and the build or component-registration mechanism that connects it. Separate confirmed links from naming-based inference and note platform/product variants.",
+                "Synthesize an explanation for a new contributor: repository topology, component composition, the selected server flow, the selected boundary, and where an extension or debugging change would belong. Cite at least six specific paths from distinct areas, distinguish facts/inferences/unknowns, and name the next two checks.",
+            ],
+        ),
+        ProfileScenarioKind::Cpp2IlExploration => (
+            "cpp2il-exploration",
+            "the Cpp2IL codebase",
+            [
+                "Orient yourself in the solution. Read README.md and Cpp2IL.slnx, inspect the CLI, Cpp2IL.Core, LibCpp2IL, plugins, and tests, and summarize the responsibility of each layer in a compact evidence ledger.",
+                "Trace the input pipeline from Cpp2IL/Program.cs path resolution through core/plugin orchestration to LibCpp2IL context initialization. Follow concrete symbols and record inputs, ownership transitions, and path evidence.",
+                "Trace how binary plus metadata information becomes recovered type/method analysis and reaches an output or plugin seam. Identify assumptions, version/platform branches, and failure surfaces; verify claims against implementation rather than README text alone.",
+                "Synthesize an explanation for a tool integrator: architecture, end-to-end analysis flow, extension points, major failure boundaries, and where Cpp2IL stops relative to downstream interop generation. Cite at least six specific paths across CLI, core, library, plugin, and test areas; distinguish facts/inferences/unknowns and name two next checks.",
+            ],
+        ),
+        ProfileScenarioKind::Il2CppInteropExploration => (
+            "il2cpp-interop-exploration",
+            "the Il2CppInterop codebase",
+            [
+                "Orient yourself in the solution. Read README.md and Il2CppInterop.sln, inspect CLI, Generator, Runtime, Common, HarmonySupport, and documentation, and summarize their responsibilities in a compact evidence ledger.",
+                "Trace the generate command from Il2CppInterop.CLI/Program.cs through generator options/runners to emitted interop assemblies. Follow concrete symbols, identify inputs and outputs, and record the path evidence.",
+                "Trace one managed-wrapper-to-native-IL2CPP runtime path, including object or method invocation machinery and one integration seam such as class injection or Harmony support. Verify the boundary in code and documentation, and record uncertainty.",
+                "Synthesize an explanation for a plugin/tool author: how Cpp2IL output is consumed, generator versus runtime responsibilities, the selected invocation path, optional integration layers, and likely failure boundaries. Cite at least six specific paths across CLI, generator, runtime, and docs; distinguish facts/inferences/unknowns and name two next checks.",
+            ],
+        ),
+        _ => return None,
+    };
+
+    Some(
+        tasks
+            .into_iter()
+            .enumerate()
+            .map(|(index, task)| {
+                format!(
+                    "Benchmark scenario: {name}, task subset {}/4.\n\
+                     Explore {codebase} through the single read-only reference root supplied in the environment context.\n\
+                     This is strictly read-only: use only fs.list, fs.read, fs.search, and fs.stat. Do not call cmd.exec and do not write, edit, rename, or delete anything.\n\
+                     Keep reads bounded and searches targeted; do not recursively dump the codebase.\n\
+                     {task}",
+                    index + 1
+                )
+            })
+            .collect(),
+    )
+}
+
 pub(crate) fn profile_scenario_prompts(
     scenario: ProfileScenarioKind,
     target_tokens: usize,
@@ -13,6 +76,10 @@ pub(crate) fn profile_scenario_prompts(
         anyhow::bail!(
             "--target-tokens must be <= {MAX_SCENARIO_TARGET_TOKENS} so the prompt stays below Spark's 128k context window with JSON overhead"
         );
+    }
+
+    if let Some(prompts) = exploration_scenario_prompts(scenario) {
+        return Ok(prompts);
     }
 
     match scenario {
@@ -362,6 +429,19 @@ pub(crate) fn profile_scenario_prompts(
              Finish with the root cause in each module, changed files, test result, and whether the patch stayed scoped."
                 .to_string(),
         ]),
+        ProfileScenarioKind::StatefulReconciliationBugfix => Ok(vec![
+            "Profile scenario: stateful-reconciliation-bugfix.\n\
+             Work only under .spark-scenarios/stateful-reconciliation-bugfix.\n\
+             Treat issue.md as a production incident assigned to you. Diagnose the behavior from the supplied evidence before changing code.\n\
+             Use bun for validation. Do not change src/types.ts, tests, documentation, or incident evidence.\n\
+             Required actions:\n\
+             1. Read issue.md, docs/invariants.md, and logs/incident.log.\n\
+             2. Inspect src/normalize.ts, src/project.ts, src/types.ts, and tests/projection.test.ts.\n\
+             3. Repair the production implementation so all documented invariants hold, including edge cases not represented by the visible incident lines.\n\
+             4. Run bun test after the final edit.\n\
+             Finish with the inferred root causes, changed production files, and validation result."
+                .to_string(),
+        ]),
         ProfileScenarioKind::TerminalRepair => Ok(vec![
             "Profile scenario: terminal-repair.\n\
              Work only under .spark-scenarios/terminal-repair.\n\
@@ -428,6 +508,12 @@ pub(crate) fn profile_scenario_prompts(
             }
             Ok(vec![prompt])
         }
+        ProfileScenarioKind::AssetRipperExploration
+        | ProfileScenarioKind::FiveMExploration
+        | ProfileScenarioKind::Cpp2IlExploration
+        | ProfileScenarioKind::Il2CppInteropExploration => {
+            unreachable!("exploration prompts are returned before the main scenario match")
+        }
     }
 }
 
@@ -438,7 +524,11 @@ pub(crate) fn benchmark_profile_prompts(
     match scenario {
         ProfileScenarioKind::NaturalCompaction
         | ProfileScenarioKind::CompactionPressure
-        | ProfileScenarioKind::PolicySupportAgent => {
+        | ProfileScenarioKind::PolicySupportAgent
+        | ProfileScenarioKind::AssetRipperExploration
+        | ProfileScenarioKind::FiveMExploration
+        | ProfileScenarioKind::Cpp2IlExploration
+        | ProfileScenarioKind::Il2CppInteropExploration => {
             profile_scenario_prompts(scenario, target_tokens)
         }
         _ => Ok(vec![benchmark_task_prompt(scenario)]),
@@ -446,6 +536,11 @@ pub(crate) fn benchmark_profile_prompts(
 }
 
 pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
+    if let Some(prompts) = exploration_scenario_prompts(scenario) {
+        return prompts
+            .join("\n\nContinue in the same read-only session with the next task subset.\n\n");
+    }
+
     match scenario {
         ProfileScenarioKind::RepoSurvey => {
             "Benchmark scenario: repo-survey.\n\
@@ -695,6 +790,19 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Finish with the root cause in each module, changed files, test result, and whether the patch stayed scoped."
                 .to_string()
         }
+        ProfileScenarioKind::StatefulReconciliationBugfix => {
+            "Benchmark scenario: stateful-reconciliation-bugfix.\n\
+             Work only under .spark-scenarios/stateful-reconciliation-bugfix.\n\
+             Investigate and repair the reservation projection incident. This is a scoped fixture task; do not inspect unrelated repository files.\n\
+             Use bun for validation. Keep public types, tests, docs, and evidence unchanged.\n\
+             Required actions:\n\
+             1. Read issue.md, docs/invariants.md, and logs/incident.log.\n\
+             2. Inspect src/normalize.ts, src/project.ts, src/types.ts, and tests/projection.test.ts.\n\
+             3. Patch the production implementation so the documented invariants hold as a coherent state machine, not only for the visible examples.\n\
+             4. Run bun test after the final edit.\n\
+             Finish with the inferred root causes, changed production files, and validation result."
+                .to_string()
+        }
         ProfileScenarioKind::TerminalRepair => {
             "Benchmark scenario: terminal-repair.\n\
              Work only under .spark-scenarios/terminal-repair.\n\
@@ -731,6 +839,12 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              3. Verify it contains: Spark recovery path verified.\n\
              Finish with what failed, how you recovered, and whether verification passed."
                 .to_string()
+        }
+        ProfileScenarioKind::AssetRipperExploration
+        | ProfileScenarioKind::FiveMExploration
+        | ProfileScenarioKind::Cpp2IlExploration
+        | ProfileScenarioKind::Il2CppInteropExploration => {
+            unreachable!("exploration prompts are returned before the benchmark prompt match")
         }
         other => profile_scenario_prompts(other, 45_000)
             .ok()

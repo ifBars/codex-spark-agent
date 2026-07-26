@@ -16,14 +16,12 @@ class SparkTerminalBenchAgent(BaseAgent):
         self,
         spark_cmd: str = "target/debug/spark.exe",
         spark_model: str | None = None,
-        max_turns: int = 12,
         timeout_sec: int = 900,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.spark_cmd = spark_cmd
         self.spark_model = spark_model
-        self.max_turns = str(max_turns)
         self.timeout_sec = timeout_sec
 
     @staticmethod
@@ -75,8 +73,6 @@ class SparkTerminalBenchAgent(BaseAgent):
             "--new-session",
             "--session",
             f"terminal-bench-{uuid.uuid4()}",
-            "--max-turns",
-            self.max_turns,
         ]
         if self.spark_model:
             command.extend(["--model", self.spark_model])

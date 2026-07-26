@@ -1,6 +1,66 @@
 use crate::cli::ProfileScenarioKind;
 
-use super::ProfileScenarioValidationCommand;
+use super::{ProfileScenarioValidationCheck, ProfileScenarioValidationCommand};
+
+pub(crate) fn profile_scenario_validation_checks(
+    scenario: ProfileScenarioKind,
+) -> &'static [ProfileScenarioValidationCheck] {
+    match scenario {
+        ProfileScenarioKind::StatefulReconciliationBugfix => &[
+            ProfileScenarioValidationCheck {
+                name: "latest duplicate by timestamp",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='duplicate-timezone'; bun test ./tests/.harness/projection.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "chronological deterministic ordering",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='event-order'; bun test ./tests/.harness/projection.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "bounded terminal shipment",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='terminal-shipment'; bun test ./tests/.harness/projection.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "empty shipment remains open",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='empty-shipment'; bun test ./tests/.harness/projection.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "invalid quantities create no state",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='invalid-quantity'; bun test ./tests/.harness/projection.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+        ],
+        _ => &[],
+    }
+}
 
 pub(crate) fn profile_scenario_validation_command(
     scenario: ProfileScenarioKind,
@@ -144,6 +204,17 @@ pub(crate) fn profile_scenario_validation_command(
             program: "bun",
             args: &["test"],
         }),
+        ProfileScenarioKind::StatefulReconciliationBugfix => {
+            Some(ProfileScenarioValidationCommand {
+                workdir: ".spark-scenarios/stateful-reconciliation-bugfix",
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; bun test tests/projection.test.ts; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; bun test ./tests/.harness/projection.validation.ts; exit $LASTEXITCODE",
+                ],
+            })
+        }
         ProfileScenarioKind::TerminalRepair => Some(ProfileScenarioValidationCommand {
             workdir: ".spark-scenarios/terminal-repair",
             program: "powershell",

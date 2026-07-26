@@ -43,6 +43,12 @@ pub(crate) enum Command {
         /// Workspace root that receives migrated .agents/skills.
         #[arg(long, default_value = ".")]
         cwd: PathBuf,
+        /// Register the Spark MCP explorer and install the native Codex explorer bridge.
+        #[arg(long)]
+        codex: bool,
+        /// Replace an existing spark_harness MCP registration or explorer agent, preserving a backup.
+        #[arg(long, requires = "codex")]
+        force_codex: bool,
     },
     /// Show saved auth status.
     AuthStatus,
@@ -73,9 +79,6 @@ pub(crate) enum Command {
         /// Tool access mode. ask is read-only; work allows edits and command execution.
         #[arg(long, value_enum, default_value_t = RunMode::Work)]
         mode: RunMode,
-        /// Maximum agent/tool turns. Omit to let Spark run until it completes.
-        #[arg(long)]
-        max_turns: Option<usize>,
         /// Save raw request/response JSON under .spark-runs/.
         #[arg(long)]
         trace: bool,
@@ -109,6 +112,8 @@ pub(crate) enum Command {
     },
     /// Print available built-in tools as JSON.
     Tools,
+    /// Serve the Spark repository explorer over MCP stdio for native Codex.
+    McpServer,
     /// List saved chat sessions.
     Sessions,
     /// List or refresh repo-local Spark skill cache.
@@ -196,9 +201,6 @@ pub(crate) enum Command {
         /// Reasoning effort to request from the model.
         #[arg(long, value_enum, default_value_t = BenchmarkReasoningEffort::Medium)]
         reasoning_effort: BenchmarkReasoningEffort,
-        /// Maximum agent/tool turns. Omit to let Spark run until it completes.
-        #[arg(long)]
-        max_turns: Option<usize>,
         /// Target prompt size for long-context scenarios, in approximate tokens.
         #[arg(long, default_value_t = DEFAULT_SCENARIO_TARGET_TOKENS)]
         target_tokens: usize,
@@ -241,9 +243,6 @@ pub(crate) enum Command {
         /// Reasoning effort to request from the model.
         #[arg(long, value_enum, default_value_t = BenchmarkReasoningEffort::Medium)]
         reasoning_effort: BenchmarkReasoningEffort,
-        /// Maximum agent/tool turns per scenario prompt. Omit to let Spark run until it completes.
-        #[arg(long)]
-        max_turns: Option<usize>,
         /// Target prompt size for long-context scenarios, in approximate tokens.
         #[arg(long, default_value_t = DEFAULT_SCENARIO_TARGET_TOKENS)]
         target_tokens: usize,
@@ -415,9 +414,15 @@ pub(crate) enum Command {
         /// Model slug to use for the judge pass.
         #[arg(long, default_value = DEFAULT_JUDGE_MODEL)]
         model: String,
+        /// Codex CLI executable used when the selected judge model is a Codex-only model.
+        #[arg(long, default_value = "codex")]
+        codex_bin: PathBuf,
         /// Reasoning effort for the judge model.
-        #[arg(long, value_enum, default_value_t = JudgeReasoningEffort::High)]
+        #[arg(long, value_enum, default_value_t = JudgeReasoningEffort::Medium)]
         reasoning_effort: JudgeReasoningEffort,
+        /// Kill a Codex CLI judge invocation after this many seconds.
+        #[arg(long, default_value_t = 900)]
+        timeout_seconds: u64,
         /// Directory where judge JSON is written.
         #[arg(long, default_value = ".spark-profile/benchmarks")]
         output_dir: PathBuf,
@@ -475,6 +480,20 @@ pub(crate) enum ProfileScenarioKind {
     RepoArchitectureSurvey,
     /// Benchmark-design survey that asks Spark to inspect and extend the scenario taxonomy.
     BenchmarkDesignSurvey,
+    /// Four-turn read-only exploration of a Schedule I AssetRipper export.
+    AssetRipperExploration,
+    /// Four-turn read-only exploration of the Cfx.re/FiveM codebase.
+    #[value(name = "fivem-exploration", alias = "five-m-exploration")]
+    FiveMExploration,
+    /// Four-turn read-only exploration of the Cpp2IL codebase.
+    #[value(name = "cpp2il-exploration", alias = "cpp2-il-exploration")]
+    Cpp2IlExploration,
+    /// Four-turn read-only exploration of the Il2CppInterop codebase.
+    #[value(
+        name = "il2cpp-interop-exploration",
+        alias = "il2-cpp-interop-exploration"
+    )]
+    Il2CppInteropExploration,
     /// Repo-local React + TypeScript calculator app scaffold in an ignored fixture folder.
     ReactCalculatorScaffold,
     /// Repo-local Rust log analyzer CLI scaffold in an ignored fixture folder.
@@ -509,6 +528,8 @@ pub(crate) enum ProfileScenarioKind {
     OpsReport,
     /// SWE-bench-style bugfix spanning multiple TypeScript modules with failing Bun tests.
     MultiModuleBugfix,
+    /// Incident-driven state reconciliation bugfix with ambiguous evidence and cross-module invariants.
+    StatefulReconciliationBugfix,
     /// Terminal-Bench-style repair task that fixes a broken service through the terminal.
     TerminalRepair,
     /// GAIA-style multi-hop analysis that joins policy, orders, and refunds into an exact answer.
@@ -527,6 +548,8 @@ pub(crate) enum ProfileBenchmarkSuiteKind {
     Scaffolding,
     /// Precise and coordinated code-edit scenarios.
     Editing,
+    /// Difficulty-focused compound tasks intended to preserve reasoning-level headroom.
+    Reasoning,
     /// Mixed real-world suite for broad Spark profiling.
     RealWorld,
 }
@@ -570,6 +593,7 @@ impl BenchmarkReasoningEffort {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum JudgeReasoningEffort {
+    Medium,
     High,
     Xhigh,
 }
@@ -577,6 +601,7 @@ pub(crate) enum JudgeReasoningEffort {
 impl JudgeReasoningEffort {
     pub(crate) fn wire_value(self) -> &'static str {
         match self {
+            Self::Medium => "medium",
             Self::High => "high",
             Self::Xhigh => "xhigh",
         }
@@ -600,6 +625,10 @@ impl ProfileScenarioKind {
             Self::S1ApiSurvey => "s1api-survey",
             Self::RepoArchitectureSurvey => "repo-architecture-survey",
             Self::BenchmarkDesignSurvey => "benchmark-design-survey",
+            Self::AssetRipperExploration => "asset-ripper-exploration",
+            Self::FiveMExploration => "fivem-exploration",
+            Self::Cpp2IlExploration => "cpp2il-exploration",
+            Self::Il2CppInteropExploration => "il2cpp-interop-exploration",
             Self::ReactCalculatorScaffold => "react-calculator-scaffold",
             Self::RustLogAnalyzerScaffold => "rust-log-analyzer-scaffold",
             Self::RustNotesTuiScaffold => "rust-notes-tui-scaffold",
@@ -615,6 +644,7 @@ impl ProfileScenarioKind {
             Self::ConfigMigration => "config-migration",
             Self::OpsReport => "ops-report",
             Self::MultiModuleBugfix => "multi-module-bugfix",
+            Self::StatefulReconciliationBugfix => "stateful-reconciliation-bugfix",
             Self::TerminalRepair => "terminal-repair",
             Self::MultiHopAnalysis => "multi-hop-analysis",
             Self::PolicySupportAgent => "policy-support-agent",
@@ -629,6 +659,7 @@ impl ProfileBenchmarkSuiteKind {
             Self::Survey => "survey",
             Self::Scaffolding => "scaffolding",
             Self::Editing => "editing",
+            Self::Reasoning => "reasoning",
             Self::RealWorld => "real-world",
         }
     }
@@ -647,6 +678,10 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::RepoSurvey,
                 ProfileScenarioKind::RepoArchitectureSurvey,
                 ProfileScenarioKind::BenchmarkDesignSurvey,
+                ProfileScenarioKind::AssetRipperExploration,
+                ProfileScenarioKind::FiveMExploration,
+                ProfileScenarioKind::Cpp2IlExploration,
+                ProfileScenarioKind::Il2CppInteropExploration,
                 ProfileScenarioKind::GithubIssueTriage,
                 ProfileScenarioKind::CiFailureTriage,
                 ProfileScenarioKind::PullRequestReview,
@@ -669,6 +704,18 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::MergeConflictResolution,
                 ProfileScenarioKind::ConfigMigration,
                 ProfileScenarioKind::MultiModuleBugfix,
+                ProfileScenarioKind::StatefulReconciliationBugfix,
+            ],
+            Self::Reasoning => &[
+                ProfileScenarioKind::TechnicalEssay,
+                ProfileScenarioKind::ConfigMigration,
+                ProfileScenarioKind::OpsReport,
+                ProfileScenarioKind::MultiModuleBugfix,
+                ProfileScenarioKind::TerminalRepair,
+                ProfileScenarioKind::MultiHopAnalysis,
+                ProfileScenarioKind::PolicySupportAgent,
+                ProfileScenarioKind::RustNotesTuiScaffold,
+                ProfileScenarioKind::StatefulReconciliationBugfix,
             ],
             Self::RealWorld => &[
                 ProfileScenarioKind::RepoSurvey,
@@ -693,6 +740,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::OpsReport,
                 ProfileScenarioKind::ToolRecovery,
                 ProfileScenarioKind::MultiModuleBugfix,
+                ProfileScenarioKind::StatefulReconciliationBugfix,
                 ProfileScenarioKind::TerminalRepair,
                 ProfileScenarioKind::MultiHopAnalysis,
                 ProfileScenarioKind::PolicySupportAgent,

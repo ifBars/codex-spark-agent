@@ -129,6 +129,7 @@ fn benchmark_row() -> BenchmarkRunRow {
         success: true,
         validation_present: true,
         validation_exit_code: Some(0),
+        validation_score: None,
         validation_timed_out: false,
         browser_validation_present: false,
         browser_validation_exit_code: None,
@@ -521,11 +522,11 @@ fn harness_request_failure_rows_are_skipped_for_comparison() {
 #[test]
 fn harness_local_request_failures_remain_comparable() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let trace_dir = dir.path().join("spark-max-turns-error");
+    let trace_dir = dir.path().join("spark-validation-error");
     std::fs::create_dir_all(&trace_dir).expect("trace dir");
     std::fs::write(
-        trace_dir.join("002-max_turns-error.json"),
-        r#"{"stage":"max_turns","error":"stopped after 0 turns without completion"}"#,
+        trace_dir.join("002-validation-error.json"),
+        r#"{"stage":"validation","error":"local validation failed"}"#,
     )
     .expect("write trace error");
 
@@ -534,7 +535,7 @@ fn harness_local_request_failures_remain_comparable() {
     failed.scenario = "precise-patch".to_string();
     failed.success = false;
     failed.diagnostics = "request_failure".to_string();
-    failed.failure_points = "max_turns".to_string();
+    failed.failure_points = "validation".to_string();
 
     let rows = filter_harness_request_failure_rows(dir.path(), vec![failed]);
 
@@ -1295,6 +1296,9 @@ fn llm_judge_scores_steer_quality_and_process_when_present() {
     let report = BenchmarkJudgeReport {
         suite: "real-world".to_string(),
         comparison_report: "comparison.json".to_string(),
+        judge_model: "gpt-5.6-terra".to_string(),
+        judge_reasoning_effort: "medium".to_string(),
+        judge_backend: "codex-cli".to_string(),
         generated_at_unix_ms: 1,
         rows: vec![crate::benchmark::judge::BenchmarkJudgeScenario {
             scenario: "matched".to_string(),
@@ -1336,6 +1340,20 @@ fn completion_score_penalizes_validation_failure() {
     row.completion_score = completion;
     assert_eq!(completion, 30.0);
     assert!(quality_score(&row) <= completion);
+}
+
+#[test]
+fn granular_validation_preserves_partial_quality_signal() {
+    let mut row = benchmark_row();
+    row.success = false;
+    row.validation_exit_code = Some(1);
+    row.validation_score = Some(65.0);
+
+    let completion = completion_score(&row);
+    let quality = quality_score_with_validation(&row, row.validation_score);
+
+    assert_eq!(completion, 30.0);
+    assert_eq!(quality, 65.0);
 }
 
 #[test]
@@ -1502,6 +1520,7 @@ fn external_process_tracks_long_noisy_successes() {
         expected_artifacts: 1,
         present_artifacts: 1,
         validation_exit_code: Some(0),
+        validation_score: None,
         validation_timed_out: false,
         browser_validation_present: false,
         browser_validation_exit_code: None,
@@ -1553,6 +1572,7 @@ fn external_headline_score_includes_process_pressure() {
         expected_artifacts: 1,
         present_artifacts: 1,
         validation_exit_code: Some(0),
+        validation_score: None,
         validation_timed_out: false,
         browser_validation_present: false,
         browser_validation_exit_code: None,

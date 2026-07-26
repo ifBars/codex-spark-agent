@@ -13,6 +13,7 @@ pub(crate) use prompts::benchmark_task_prompt;
 pub(crate) use prompts::{
     benchmark_profile_prompts, codex_cli_benchmark_prompt, profile_scenario_prompts,
 };
+pub(crate) use validation_commands::profile_scenario_validation_checks;
 pub(crate) use validation_commands::profile_scenario_validation_command;
 
 use anyhow::Result;
@@ -22,6 +23,14 @@ use crate::MAX_SCENARIO_REPEAT;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProfileScenarioValidationCommand {
     pub(crate) workdir: &'static str,
+    pub(crate) program: &'static str,
+    pub(crate) args: &'static [&'static str],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ProfileScenarioValidationCheck {
+    pub(crate) name: &'static str,
+    pub(crate) weight: u32,
     pub(crate) program: &'static str,
     pub(crate) args: &'static [&'static str],
 }

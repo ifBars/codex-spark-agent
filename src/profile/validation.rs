@@ -22,10 +22,44 @@ pub(crate) struct ScenarioValidationResult {
     pub(crate) duration_ms: u128,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) checks: Vec<ScenarioValidationCheckResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) source_footprint: Option<SourceFootprint>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) browser: Option<BrowserValidationResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ScenarioValidationCheckResult {
+    pub(crate) name: String,
+    pub(crate) weight: u32,
+    pub(crate) passed: bool,
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) timed_out: bool,
+    pub(crate) duration_ms: u128,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+}
+
+impl ScenarioValidationResult {
+    pub(crate) fn granular_score(&self) -> Option<f64> {
+        let total_weight = self
+            .checks
+            .iter()
+            .map(|check| check.weight as u64)
+            .sum::<u64>();
+        if total_weight == 0 {
+            return None;
+        }
+        let passed_weight = self
+            .checks
+            .iter()
+            .filter(|check| check.passed)
+            .map(|check| check.weight as u64)
+            .sum::<u64>();
+        Some(passed_weight as f64 / total_weight as f64 * 100.0)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +116,7 @@ pub(crate) async fn run_and_write_scenario_validation(
             duration_ms: started.elapsed().as_millis(),
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            checks: Vec::new(),
             source_footprint: source_footprint(&cwd.join(spec.workdir)).ok(),
             browser: None,
         },
@@ -94,6 +129,7 @@ pub(crate) async fn run_and_write_scenario_validation(
             duration_ms: started.elapsed().as_millis(),
             stdout: String::new(),
             stderr: format!("failed to start validation command: {error}"),
+            checks: Vec::new(),
             source_footprint: source_footprint(&cwd.join(spec.workdir)).ok(),
             browser: None,
         },
@@ -106,10 +142,12 @@ pub(crate) async fn run_and_write_scenario_validation(
             duration_ms: started.elapsed().as_millis(),
             stdout: String::new(),
             stderr: "validation timed out".to_string(),
+            checks: Vec::new(),
             source_footprint: source_footprint(&cwd.join(spec.workdir)).ok(),
             browser: None,
         },
     };
+    result.checks = run_validation_checks(cwd, spec.workdir, scenario).await;
     result.browser = run_browser_validation(cwd, artifact_dir, scenario).await?;
 
     std::fs::write(
@@ -124,6 +162,59 @@ pub(crate) async fn run_and_write_scenario_validation(
     })?;
 
     Ok(Some(result))
+}
+
+async fn run_validation_checks(
+    cwd: &Path,
+    workdir: &str,
+    scenario: ProfileScenarioKind,
+) -> Vec<ScenarioValidationCheckResult> {
+    let mut results = Vec::new();
+    for check in scenarios::profile_scenario_validation_checks(scenario) {
+        let started = Instant::now();
+        let output = tokio::time::timeout(
+            VALIDATION_TIMEOUT,
+            Command::new(check.program)
+                .args(check.args)
+                .current_dir(cwd.join(workdir))
+                .output(),
+        )
+        .await;
+        let result = match output {
+            Ok(Ok(output)) => ScenarioValidationCheckResult {
+                name: check.name.to_string(),
+                weight: check.weight,
+                passed: output.status.success(),
+                exit_code: output.status.code(),
+                timed_out: false,
+                duration_ms: started.elapsed().as_millis(),
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            },
+            Ok(Err(error)) => ScenarioValidationCheckResult {
+                name: check.name.to_string(),
+                weight: check.weight,
+                passed: false,
+                exit_code: None,
+                timed_out: false,
+                duration_ms: started.elapsed().as_millis(),
+                stdout: String::new(),
+                stderr: format!("failed to start validation check: {error}"),
+            },
+            Err(_) => ScenarioValidationCheckResult {
+                name: check.name.to_string(),
+                weight: check.weight,
+                passed: false,
+                exit_code: None,
+                timed_out: true,
+                duration_ms: started.elapsed().as_millis(),
+                stdout: String::new(),
+                stderr: "validation check timed out".to_string(),
+            },
+        };
+        results.push(result);
+    }
+    results
 }
 
 async fn run_browser_validation(
@@ -435,7 +526,9 @@ fn command_parts(program: &str, args: &[&str]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::browser_validation_script;
+    use super::{
+        ScenarioValidationCheckResult, ScenarioValidationResult, browser_validation_script,
+    };
 
     #[test]
     fn browser_validation_script_runs_vite_from_app_directory() {
@@ -447,5 +540,34 @@ mod tests {
         assert!(script.contains("const appDir = \".spark-scenarios/react-calculator\";"));
         assert!(script.contains("cwd: appDir"));
         assert!(script.contains("from \"playwright\""));
+    }
+
+    #[test]
+    fn granular_score_uses_check_weights() {
+        let check = |name: &str, weight: u32, passed: bool| ScenarioValidationCheckResult {
+            name: name.to_string(),
+            weight,
+            passed,
+            exit_code: Some(i32::from(!passed)),
+            timed_out: false,
+            duration_ms: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        let result = ScenarioValidationResult {
+            scenario: "fixture".to_string(),
+            workdir: ".".to_string(),
+            command: Vec::new(),
+            exit_code: Some(1),
+            timed_out: false,
+            duration_ms: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            checks: vec![check("core", 70, true), check("edge", 30, false)],
+            source_footprint: None,
+            browser: None,
+        };
+
+        assert_eq!(result.granular_score(), Some(70.0));
     }
 }

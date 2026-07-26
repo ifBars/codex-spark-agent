@@ -76,6 +76,10 @@ pub(crate) fn expected_scenario_artifacts(
             ".spark-scenarios/multi-module-bugfix/src/invoice.ts",
             ".spark-scenarios/multi-module-bugfix/src/total.ts",
         ],
+        ProfileScenarioKind::StatefulReconciliationBugfix => &[
+            ".spark-scenarios/stateful-reconciliation-bugfix/src/normalize.ts",
+            ".spark-scenarios/stateful-reconciliation-bugfix/src/project.ts",
+        ],
         ProfileScenarioKind::TerminalRepair => {
             &[".spark-scenarios/terminal-repair/config/settings.json"]
         }
@@ -112,6 +116,7 @@ mod tests {
             ProfileScenarioKind::ConfigMigration,
             ProfileScenarioKind::OpsReport,
             ProfileScenarioKind::MultiModuleBugfix,
+            ProfileScenarioKind::StatefulReconciliationBugfix,
             ProfileScenarioKind::TerminalRepair,
             ProfileScenarioKind::MultiHopAnalysis,
             ProfileScenarioKind::PolicySupportAgent,

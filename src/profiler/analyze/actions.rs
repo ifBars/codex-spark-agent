@@ -215,17 +215,29 @@ pub(super) fn required_action_matches_call(
         return false;
     }
     if let Some(path) = &action.path
-        && call.args.get("path").and_then(Value::as_str) != Some(path.as_str())
+        && !call
+            .args
+            .get("path")
+            .and_then(Value::as_str)
+            .is_some_and(|actual| path_argument_matches(path, actual))
     {
         return false;
     }
     if let Some(from) = &action.from
-        && call.args.get("from").and_then(Value::as_str) != Some(from.as_str())
+        && !call
+            .args
+            .get("from")
+            .and_then(Value::as_str)
+            .is_some_and(|actual| path_argument_matches(from, actual))
     {
         return false;
     }
     if let Some(to) = &action.to
-        && call.args.get("to").and_then(Value::as_str) != Some(to.as_str())
+        && !call
+            .args
+            .get("to")
+            .and_then(Value::as_str)
+            .is_some_and(|actual| path_argument_matches(to, actual))
     {
         return false;
     }
@@ -240,4 +252,62 @@ pub(super) fn required_action_matches_call(
         return false;
     }
     true
+}
+
+fn path_argument_matches(expected: &str, actual: &str) -> bool {
+    let normalize = |path: &str| {
+        path.replace('\\', "/")
+            .trim_end_matches('/')
+            .trim_start_matches("./")
+            .to_string()
+    };
+    let expected = normalize(expected);
+    let actual = normalize(actual);
+    actual.eq_ignore_ascii_case(&expected)
+        || actual
+            .to_ascii_lowercase()
+            .ends_with(&format!("/{}", expected.to_ascii_lowercase()))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn expected_relative_path_matches_absolute_reference_root_path() {
+        let action = RequiredAction {
+            tool: "fs.read".to_string(),
+            alternate_tools: Vec::new(),
+            path: Some("Cpp2IL/Program.cs".to_string()),
+            from: None,
+            to: None,
+            recursive: None,
+            command: None,
+            ok: None,
+        };
+        let call = ObservedToolCall {
+            turn: 1,
+            call_id: None,
+            tool_name: "fs.read".to_string(),
+            args: json!({
+                "path": r"\\?\C:\Users\ghost\Desktop\Coding\Cpp2IL\Cpp2IL\Program.cs"
+            }),
+        };
+
+        assert!(required_action_matches_call(&action, &call));
+    }
+
+    #[test]
+    fn expected_path_suffix_requires_a_component_boundary() {
+        assert!(path_argument_matches(
+            "README.md",
+            r"C:\Users\ghost\Desktop\Coding\Cpp2IL\README.md"
+        ));
+        assert!(!path_argument_matches(
+            "README.md",
+            r"C:\Users\ghost\Desktop\Coding\Cpp2IL\NOTREADME.md"
+        ));
+    }
 }

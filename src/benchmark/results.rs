@@ -37,10 +37,13 @@ use infrastructure::{
 use scoring::expected_repeated_tool_calls;
 use scoring::{
     benchmark_score, codex_completion_score, codex_efficiency_score, codex_process_score,
-    codex_quality_score, codex_score_from_components, comparison_score_from_components,
-    completion_score, efficiency_score, exact_completion_pressure_scenario, process_score,
-    quality_gate, quality_score, unexpected_repeated_tool_calls,
+    codex_quality_score_with_validation, codex_score_from_components,
+    comparison_score_from_components, completion_score, efficiency_score,
+    exact_completion_pressure_scenario, process_score, quality_gate, quality_score_with_validation,
+    unexpected_repeated_tool_calls,
 };
+#[cfg(test)]
+use scoring::{codex_quality_score, quality_score};
 
 #[derive(Debug, Clone)]
 pub(crate) struct BenchmarkReportOptions {
@@ -72,6 +75,8 @@ struct BenchmarkRunRow {
     success: bool,
     validation_present: bool,
     validation_exit_code: Option<i32>,
+    #[serde(default)]
+    validation_score: Option<f64>,
     validation_timed_out: bool,
     browser_validation_present: bool,
     browser_validation_exit_code: Option<i32>,
@@ -987,6 +992,9 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
     let validation = validation::read_scenario_validation(run);
     let validation_present = validation.is_some();
     let validation_exit_code = validation.as_ref().and_then(|result| result.exit_code);
+    let validation_score = validation
+        .as_ref()
+        .and_then(|result| result.granular_score());
     let validation_timed_out = validation.as_ref().is_some_and(|result| result.timed_out);
     let browser_validation = validation
         .as_ref()
@@ -1046,6 +1054,7 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
         success: trace_success && validation_success,
         validation_present,
         validation_exit_code,
+        validation_score,
         validation_timed_out,
         browser_validation_present,
         browser_validation_exit_code,
@@ -1092,7 +1101,7 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
         failure_points: failure_points.join(";"),
     };
     row.completion_score = completion_score(&row);
-    row.quality_score = quality_score(&row);
+    row.quality_score = quality_score_with_validation(&row, validation_score);
     row.process_score = process_score(&row);
     row.task_quality_score = row.quality_score;
     row.efficiency_score = efficiency_score(row.total_duration_ms as u128, row.source_bytes);
@@ -1244,7 +1253,7 @@ fn failure_points(
 
 fn rows_to_csv(rows: &[BenchmarkRunRow]) -> String {
     let mut csv = String::from(
-        "run_id,trace_dir,suite,scenario,model,reasoning_effort,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_present,validation_exit_code,validation_timed_out,browser_validation_present,browser_validation_exit_code,browser_validation_timed_out,browser_screenshot,requests,tool_calls,max_approx_input_tokens,max_context_window_pct,max_request_duration_ms,total_duration_ms,source_files,source_bytes,compactions,tool_failures,recovered_tool_failures,unrecovered_tool_failures,truncated_tool_results,repeated_tool_calls,tool_only_turns,max_tool_only_streak,expected_tool_groups,satisfied_tool_groups,expected_tool_calls,satisfied_tool_calls,extra_calls_after_satisfied,extra_turns_after_satisfied,context_growth_after_satisfied_chars,diagnostics,failure_points,completion_score,quality_score,process_score,efficiency_index,benchmark_index\n",
+        "run_id,trace_dir,suite,scenario,model,reasoning_effort,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_present,validation_exit_code,validation_timed_out,browser_validation_present,browser_validation_exit_code,browser_validation_timed_out,browser_screenshot,requests,tool_calls,max_approx_input_tokens,max_context_window_pct,max_request_duration_ms,total_duration_ms,source_files,source_bytes,compactions,tool_failures,recovered_tool_failures,unrecovered_tool_failures,truncated_tool_results,repeated_tool_calls,tool_only_turns,max_tool_only_streak,expected_tool_groups,satisfied_tool_groups,expected_tool_calls,satisfied_tool_calls,extra_calls_after_satisfied,extra_turns_after_satisfied,context_growth_after_satisfied_chars,diagnostics,failure_points,completion_score,quality_score,process_score,efficiency_index,benchmark_index,validation_score\n",
     );
     for row in rows {
         let values = [
@@ -1302,6 +1311,9 @@ fn rows_to_csv(rows: &[BenchmarkRunRow]) -> String {
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
             row.benchmark_index
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            row.validation_score
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
         ];
@@ -1645,7 +1657,7 @@ fn comparison_row_from_harness(row: &BenchmarkRunRow) -> ComparisonRow {
 
 fn comparison_row_from_external_agent(row: &CodexCliBenchmarkRow) -> ComparisonRow {
     let completion_score = codex_completion_score(row);
-    let quality_score = codex_quality_score(row, completion_score);
+    let quality_score = codex_quality_score_with_validation(row, completion_score);
     let process_score = codex_process_score(row);
     let efficiency_score = codex_efficiency_score(row);
     ComparisonRow {

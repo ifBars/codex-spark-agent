@@ -19,7 +19,6 @@ pub(crate) struct ProfileRunOptions {
     pub(crate) cwd: PathBuf,
     pub(crate) model: String,
     pub(crate) reasoning_effort: String,
-    pub(crate) max_turns: Option<usize>,
     pub(crate) target_tokens: usize,
     pub(crate) repeat: usize,
     pub(crate) no_trace: bool,
@@ -106,7 +105,6 @@ pub(crate) async fn run_profile_scenarios(
                 scenario_cwd.clone(),
                 options.model.clone(),
                 options.reasoning_effort.clone(),
-                options.max_turns,
                 !options.no_trace,
                 !options.no_profile,
                 options.compact_after_chars,
@@ -132,7 +130,7 @@ pub(crate) async fn run_profile_scenarios(
                         "expected_skills": scenarios::profile_scenario_expected_skills(*scenario),
                     }
                 })),
-                tools::AgentMode::Work,
+                benchmark_agent_mode(*scenario),
             )?;
             runner.set_read_roots(read_roots.clone());
             let startup_context = if options.benchmark_suite.is_some() {
@@ -270,9 +268,16 @@ fn benchmark_startup_context(
     scenario: ProfileScenarioKind,
 ) -> Result<Option<String>> {
     let reference_context = benchmark_reference_context(read_roots);
+    let filesystem_path_note = if read_roots.is_empty() {
+        "Use paths relative to cwd for native filesystem and shell tools. Do not copy the absolute cwd into fs.* path arguments.".to_string()
+    } else {
+        "For source exploration, use absolute fs.* paths beneath a read_only_reference_root exactly as shown below. Do not use .. path escapes. Keep writes and shell commands inside cwd."
+            .to_string()
+    };
     let environment = format!(
-        "<environment_context>\n  <cwd>{}</cwd>\n  <note>Use paths relative to cwd for native filesystem and shell tools. Do not copy the absolute cwd into fs.* path arguments.</note>\n  <note>For cmd.exec workdir, use a path inside this cwd, preferably a relative .spark-scenarios/... path. Do not use source repository or read-only reference-root absolute paths as command workdirs.</note>\n  <note>For benchmark prompts with exact .spark-scenarios paths, start by reading those paths directly. Do not list cwd, recursively list .spark-scenarios, or search for AGENTS.md just to rediscover provided fixtures or instructions.</note>\n  <note>When a benchmark prompt lists required actions, treat them as an execution checklist. Complete every required read, edit, command, search, and verification action explicitly before the final answer, even when a later smoke check seems sufficient.</note>{}\n</environment_context>\n\n<benchmark_quality_context>\n{}\n</benchmark_quality_context>",
+        "<environment_context>\n  <cwd>{}</cwd>\n  <note>{}</note>\n  <note>For cmd.exec workdir, use a path inside this cwd, preferably a relative .spark-scenarios/... path. Do not use source repository or read-only reference-root absolute paths as command workdirs.</note>\n  <note>For benchmark prompts with exact .spark-scenarios paths, start by reading those paths directly. Do not list cwd, recursively list .spark-scenarios, or search for AGENTS.md just to rediscover provided fixtures or instructions.</note>\n  <note>When a benchmark prompt lists required actions, treat them as an execution checklist. Complete every required read, edit, command, search, and verification action explicitly before the final answer, even when a later smoke check seems sufficient.</note>{}\n</environment_context>\n\n<benchmark_quality_context>\n{}\n</benchmark_quality_context>",
         context_path(cwd),
+        filesystem_path_note,
         reference_context,
         benchmark_quality_context(scenario)
     );
@@ -303,6 +308,12 @@ fn benchmark_reference_context(read_roots: &[PathBuf]) -> String {
 
 fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
     match scenario {
+        ProfileScenarioKind::AssetRipperExploration
+        | ProfileScenarioKind::FiveMExploration
+        | ProfileScenarioKind::Cpp2IlExploration
+        | ProfileScenarioKind::Il2CppInteropExploration => {
+            "This scenario measures exploration quality and the explanation produced after four bounded task subsets. Preserve a compact evidence ledger across turns, verify architectural claims against concrete files or symbols, and reserve the fourth response for synthesis. The final explanation should cover every subset, cite specific paths, distinguish confirmed facts from inference and unknowns, avoid inventing relationships, and recommend the next two highest-value checks."
+        }
         ProfileScenarioKind::ToolRecovery | ProfileScenarioKind::ShellRecovery => {
             "Comparison evidence: Spark already completes recovery tasks quickly; quality losses came from missing exact expected probes or adding extra calls after the required path. Follow the required failing probe and recovery path exactly, verify the requested success condition once, and stop without unrelated exploration."
         }
@@ -361,6 +372,14 @@ fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
         _ => {
             "Comparison evidence: Codex/OpenCode generally scored higher by spending more time on evidence and validation, while Spark won speed. Complete the scenario's required evidence path, use one focused self-check near the end, verify required files/searches/commands are present, then stop without broad repo sweeps or repeated equivalent reads."
         }
+    }
+}
+
+fn benchmark_agent_mode(scenario: ProfileScenarioKind) -> tools::AgentMode {
+    if workspace::is_external_exploration(scenario) {
+        tools::AgentMode::Ask
+    } else {
+        tools::AgentMode::Work
     }
 }
 
@@ -439,7 +458,8 @@ mod tests {
     use crate::cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind};
 
     use super::{
-        agents_context_message, benchmark_quality_context, benchmark_startup_context, context_path,
+        agents_context_message, benchmark_agent_mode, benchmark_quality_context,
+        benchmark_startup_context, context_path,
     };
 
     #[test]
@@ -547,6 +567,8 @@ mod tests {
         assert!(context.contains("<read_only_reference_root>"));
         assert!(context.contains(&context_path(source.path())));
         assert!(context.contains("writes and shell commands remain scoped to cwd"));
+        assert!(context.contains("use absolute fs.* paths beneath"));
+        assert!(context.contains("Do not use .. path escapes"));
         assert!(
             context.contains(
                 "Do not use source repository or read-only reference-root absolute paths"
@@ -611,6 +633,26 @@ mod tests {
         let survey = benchmark_quality_context(ProfileScenarioKind::RepoSurvey);
         assert!(survey.contains("do not recursively list src"));
         assert!(survey.contains("do not read more than four src files"));
+
+        let exploration = benchmark_quality_context(ProfileScenarioKind::Cpp2IlExploration);
+        assert!(exploration.contains("after four bounded task subsets"));
+        assert!(exploration.contains("distinguish confirmed facts from inference and unknowns"));
+    }
+
+    #[test]
+    fn external_exploration_scenarios_are_forced_to_ask_mode() {
+        for scenario in [
+            ProfileScenarioKind::AssetRipperExploration,
+            ProfileScenarioKind::FiveMExploration,
+            ProfileScenarioKind::Cpp2IlExploration,
+            ProfileScenarioKind::Il2CppInteropExploration,
+        ] {
+            assert_eq!(benchmark_agent_mode(scenario), crate::tools::AgentMode::Ask);
+        }
+        assert_eq!(
+            benchmark_agent_mode(ProfileScenarioKind::PrecisePatch),
+            crate::tools::AgentMode::Work
+        );
     }
 
     #[test]

@@ -3,9 +3,8 @@ param(
     [ValidateSet("minimal", "low", "medium", "high")]
     [string]$ReasoningEffort = "medium",
     [int]$Repeat = 1,
-    [int]$MaxTurns = 45,
     [int]$TimeoutSeconds = 900,
-    [ValidateSet("core", "survey", "scaffolding", "editing", "real-world")]
+    [ValidateSet("core", "survey", "scaffolding", "editing", "reasoning", "real-world")]
     [string]$Suite = "real-world",
     [string[]]$Scenario = @(),
     [string]$CodexBin = "codex",
@@ -28,7 +27,11 @@ $CodexDir = Join-Path $RepoRoot ".spark-profile\codex-cli"
 . (Join-Path $PSScriptRoot "quick_benchmark_scenarios.ps1")
 
 if (-not $Scenario -or $Scenario.Count -eq 0) {
-    $Scenario = @(Get-QuickRealWorldScenario)
+    if ($Suite -eq "reasoning") {
+        $Scenario = @(Get-QuickReasoningScenario)
+    } else {
+        $Scenario = @(Get-QuickRealWorldScenario)
+    }
 }
 
 if ($ListScenarios) {
@@ -40,7 +43,6 @@ Write-Host "benchmark_suite=$Suite"
 Write-Host "benchmark_model=$Model"
 Write-Host "reasoning_effort=$ReasoningEffort"
 Write-Host "repeat=$Repeat"
-Write-Host "max_turns=$MaxTurns"
 Write-Host "timeout_seconds=$TimeoutSeconds"
 Write-Host "codex_bin=$CodexBin"
 Write-Host "scenario_count=$($Scenario.Count)"
@@ -226,7 +228,6 @@ function New-QuickComparisonRerunCommand {
         "-Model", (Format-PowerShellSingleQuotedArgument $Model),
         "-ReasoningEffort", (Format-PowerShellSingleQuotedArgument $ReasoningEffort),
         "-Repeat", ([string]$script:Repeat),
-        "-MaxTurns", ([string]$script:MaxTurns),
         "-TimeoutSeconds", ([string]$script:TimeoutSeconds),
         "-Suite", (Format-PowerShellSingleQuotedArgument $Suite),
         "-CodexBin", (Format-PowerShellSingleQuotedArgument $CodexBin)
@@ -419,7 +420,6 @@ function Write-CodexPreflightStatus {
         $scenarioList = @($script:Scenario)
     }
     $repeatValue = if ($null -ne $script:Repeat) { [int]$script:Repeat } else { 1 }
-    $maxTurnsValue = if ($null -ne $script:MaxTurns) { [int]$script:MaxTurns } else { 45 }
     $timeoutSecondsValue = if ($null -ne $script:TimeoutSeconds) { [int]$script:TimeoutSeconds } else { 900 }
     $codexPreflightTimeoutSecondsValue = if ($null -ne $script:CodexPreflightTimeoutSeconds) { [int]$script:CodexPreflightTimeoutSeconds } else { 120 }
     $codexCommandPath = Resolve-CommandPath -Command $CodexBin
@@ -459,7 +459,6 @@ function Write-CodexPreflightStatus {
         model = $Model
         reasoning_effort = $ReasoningEffort
         repeat = $repeatValue
-        max_turns = $maxTurnsValue
         timeout_seconds = $timeoutSecondsValue
         codex_preflight_timeout_seconds = $codexPreflightTimeoutSecondsValue
         ignore_user_config = $ignoreUserConfigValue
@@ -912,8 +911,7 @@ try {
         "profile-benchmark", $Suite,
         "--model", $Model,
         "--reasoning-effort", $ReasoningEffort,
-        "--repeat", "$Repeat",
-        "--max-turns", "$MaxTurns"
+        "--repeat", "$Repeat"
     )
     foreach ($name in $Scenario) {
         $sparkArgs += @("--scenario", $name)

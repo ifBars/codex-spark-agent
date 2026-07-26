@@ -107,7 +107,6 @@ pub struct AgentRunner {
     pub(in crate::agent) cwd: PathBuf,
     pub(in crate::agent) read_roots: Vec<PathBuf>,
     pub(in crate::agent) input: Vec<Value>,
-    pub(in crate::agent) max_turns: Option<usize>,
     pub(in crate::agent) trace: Option<TraceWriter>,
     pub(in crate::agent) compact_after_chars: usize,
     pub(in crate::agent) compact_after_tool_only_turns: usize,
@@ -149,7 +148,6 @@ impl AgentRunner {
         auth_tokens: AuthTokens,
         cwd: PathBuf,
         model: String,
-        max_turns: Option<usize>,
         trace: bool,
         profile: bool,
         compact_after_chars: usize,
@@ -166,7 +164,6 @@ impl AgentRunner {
             cwd,
             model,
             crate::client::DEFAULT_SPARK_AGENT_REASONING_EFFORT.to_string(),
-            max_turns,
             trace,
             profile,
             compact_after_chars,
@@ -185,7 +182,6 @@ impl AgentRunner {
         cwd: PathBuf,
         model: String,
         reasoning_effort: String,
-        max_turns: Option<usize>,
         trace: bool,
         profile: bool,
         compact_after_chars: usize,
@@ -198,7 +194,7 @@ impl AgentRunner {
         mode: AgentMode,
     ) -> Result<Self> {
         if auth::is_expired(&auth_tokens) {
-            println!("Refreshing ChatGPT token...");
+            eprintln!("Refreshing ChatGPT token...");
             auth_tokens = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(auth::refresh(&auth_tokens))
             })?;
@@ -208,7 +204,6 @@ impl AgentRunner {
         let trace_metadata = TraceMetadata {
             cwd: cwd.clone(),
             model: model.clone(),
-            max_turns,
             compact_after_chars,
             compact_after_tool_only_turns,
             max_input_chars,
@@ -225,7 +220,6 @@ impl AgentRunner {
             cwd: cwd.clone(),
             read_roots: Vec::new(),
             input: Vec::new(),
-            max_turns,
             trace: if trace {
                 Some(TraceWriter::new(cwd, trace_metadata)?)
             } else {
@@ -261,11 +255,21 @@ impl AgentRunner {
         prompt: &str,
         cancellation: CancellationToken,
     ) -> Result<()> {
+        self.run_with_cancel_to_text(prompt, cancellation)
+            .await
+            .map(|_| ())
+    }
+
+    pub(crate) async fn run_with_cancel_to_text(
+        &mut self,
+        prompt: &str,
+        cancellation: CancellationToken,
+    ) -> Result<String> {
         self.refresh_memory_context()?;
         self.push_user_message(prompt);
         let assistant_text = self.run_until_idle(cancellation).await?;
         self.record_memory_exchange(prompt, &assistant_text)?;
-        Ok(())
+        Ok(assistant_text)
     }
 
     pub(crate) fn use_buffered_display(&mut self) {
@@ -656,6 +660,14 @@ impl AgentRunner {
     pub fn set_read_roots(&mut self, read_roots: Vec<PathBuf>) {
         self.read_roots = read_roots;
         self.readonly_tool_cache.clear();
+    }
+
+    pub(crate) fn disable_mcp(&mut self) {
+        self.mcp_registry = Some(McpRegistry::default());
+    }
+
+    pub(crate) fn disable_subagents(&mut self) {
+        self.subagent_depth = 1;
     }
 
     pub(in crate::agent) async fn ensure_mcp_registry(&mut self) {

@@ -485,11 +485,7 @@ fn successful_file_mutation_result(result: &ObservedToolResult) -> bool {
 }
 
 pub(super) fn cmd_exec_scope_report(calls: &[ObservedToolCall]) -> Option<Value> {
-    const SUSPICIOUS_PATTERNS: &[&str] = &[
-        ".spark-runs",
-        ".spark-profile",
-        ".spark-scenarios",
-    ];
+    const SUSPICIOUS_PATTERNS: &[&str] = &[".spark-runs", ".spark-profile", ".spark-scenarios"];
     let probes: Vec<Value> = calls
         .iter()
         .filter(|call| call.tool_name == "cmd.exec")

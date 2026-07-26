@@ -76,6 +76,27 @@ pub(super) fn quality_score(row: &BenchmarkRunRow) -> f64 {
     round1((100.0 - penalty).clamp(0.0, 100.0))
 }
 
+pub(super) fn quality_score_with_validation(
+    row: &BenchmarkRunRow,
+    validation_score: Option<f64>,
+) -> f64 {
+    let Some(validation_score) = validation_score else {
+        return quality_score(row);
+    };
+    let mut penalty = row
+        .expected_tool_groups
+        .saturating_sub(row.satisfied_tool_groups) as f64
+        * 4.0;
+    penalty += row
+        .expected_tool_calls
+        .saturating_sub(row.satisfied_tool_calls) as f64
+        * 3.0;
+    if row.source_bytes > 0 {
+        penalty += source_quality_penalty(row.source_files, row.source_bytes);
+    }
+    round1((validation_score - penalty).clamp(0.0, 100.0))
+}
+
 fn source_quality_penalty(source_files: u64, source_bytes: u64) -> f64 {
     let size_penalty = source_bytes.saturating_sub(8_000) as f64 / 1_500.0;
     let file_penalty = source_files.saturating_sub(8) as f64 * 1.5;
@@ -270,6 +291,24 @@ pub(super) fn codex_quality_score(row: &CodexCliBenchmarkRow, completion_score: 
         penalty += source_quality_penalty(row.source_files, row.source_bytes);
     }
     round1((100.0 - penalty).clamp(0.0, 100.0))
+}
+
+pub(super) fn codex_quality_score_with_validation(
+    row: &CodexCliBenchmarkRow,
+    completion_score: f64,
+) -> f64 {
+    let Some(validation_score) = row.validation_score else {
+        return codex_quality_score(row, completion_score);
+    };
+    let mut penalty = row.expected_artifacts.saturating_sub(row.present_artifacts) as f64 * 4.0;
+    if row.browser_validation_present && row.browser_screenshot.is_empty() {
+        penalty += 8.0;
+    }
+    penalty += row.actionable_stderr_lines.min(10) as f64 * 1.5;
+    if row.source_bytes > 0 {
+        penalty += source_quality_penalty(row.source_files, row.source_bytes);
+    }
+    round1((validation_score - penalty).clamp(0.0, 100.0))
 }
 
 pub(super) fn codex_efficiency_score(row: &CodexCliBenchmarkRow) -> f64 {

@@ -101,11 +101,7 @@ fn insert_report_fields(object: &mut Map<String, Value>, reports: &AnalysisRepor
         "tool_failure_recovery",
         reports.tool_failure_recovery_report,
     );
-    insert_optional_report(
-        object,
-        "cmd_exec_scope",
-        reports.cmd_exec_scope_report,
-    );
+    insert_optional_report(object, "cmd_exec_scope", reports.cmd_exec_scope_report);
 }
 
 fn insert_optional_report(object: &mut Map<String, Value>, key: &str, report: &Option<Value>) {
@@ -296,7 +292,10 @@ fn append_cmd_exec_scope_diagnostics(diagnostics: &mut Vec<Value>, report: &Opti
     let Some(report) = report else {
         return;
     };
-    let probes = report.get("probes").and_then(Value::as_array).map_or(0, Vec::len);
+    let probes = report
+        .get("probes")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
     if probes == 0 {
         return;
     }

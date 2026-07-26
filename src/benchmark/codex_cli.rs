@@ -73,6 +73,8 @@ pub(crate) struct CodexCliBenchmarkRow {
     pub(crate) expected_artifacts: u64,
     pub(crate) present_artifacts: u64,
     pub(crate) validation_exit_code: Option<i32>,
+    #[serde(default)]
+    pub(crate) validation_score: Option<f64>,
     pub(crate) validation_timed_out: bool,
     #[serde(default)]
     pub(crate) browser_validation_present: bool,
@@ -218,15 +220,13 @@ async fn run_codex_cli_scenario(
         .arg("--json")
         .arg("--cd")
         .arg(scenario_cwd)
-        .arg("--sandbox")
-        .arg("danger-full-access")
-        .arg("--dangerously-bypass-approvals-and-sandbox")
         .arg("--model")
         .arg(&options.model)
         .arg("--config")
         .arg(codex_cli_reasoning_config_arg(&options.reasoning_effort))
         .arg("--output-last-message")
         .arg(&final_message_path);
+    command.args(codex_cli_sandbox_args(scenario));
     if options.ignore_user_config {
         command.arg("--ignore-user-config");
     }
@@ -295,6 +295,9 @@ async fn run_codex_cli_scenario(
         validation::run_and_write_scenario_validation(scenario_cwd, &run_dir, scenario).await?
     };
     let validation_exit_code = validation.as_ref().and_then(|result| result.exit_code);
+    let validation_score = validation
+        .as_ref()
+        .and_then(|result| result.granular_score());
     let validation_timed_out = validation.as_ref().is_some_and(|result| result.timed_out);
     let browser_validation = validation
         .as_ref()
@@ -363,6 +366,7 @@ async fn run_codex_cli_scenario(
         expected_artifacts: expected_artifacts.len() as u64,
         present_artifacts,
         validation_exit_code,
+        validation_score,
         validation_timed_out,
         browser_validation_present,
         browser_validation_exit_code,
@@ -497,10 +501,27 @@ fn external_benchmark_prompt(
     if same_path(source_cwd, scenario_cwd) {
         return base;
     }
+    let read_roots = workspace::benchmark_read_roots(source_cwd, scenario_cwd, scenario);
+    let roots = read_roots
+        .iter()
+        .map(|root| {
+            format!(
+                "  <read_only_reference_root>{}</read_only_reference_root>",
+                root.display()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let reference_note = if roots.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n{roots}\n  <note>Read source evidence only from the reference root or roots above.</note>"
+        )
+    };
     format!(
-        "<benchmark_environment>\n  <cwd>{}</cwd>\n  <read_only_reference_root>{}</read_only_reference_root>\n  <note>Use cwd for scenario files and any writes. For repository source evidence, read from the read-only reference root instead of expecting a copied repo in cwd.</note>\n</benchmark_environment>\n\n{base}",
+        "<benchmark_environment>\n  <cwd>{}</cwd>{reference_note}\n  <note>Use cwd for scenario files and any permitted writes. Do not expect source repositories to be copied into cwd.</note>\n</benchmark_environment>\n\n{base}",
         scenario_cwd.display(),
-        source_cwd.display()
     )
 }
 
@@ -542,6 +563,18 @@ fn prepare_isolated_codex_home(cwd: &Path, run_dir: &Path) -> Result<PathBuf> {
 
 fn codex_cli_reasoning_config_arg(reasoning_effort: &str) -> String {
     format!("model_reasoning_effort=\"{reasoning_effort}\"")
+}
+
+fn codex_cli_sandbox_args(scenario: ProfileScenarioKind) -> &'static [&'static str] {
+    if workspace::is_external_exploration(scenario) {
+        &["--sandbox", "read-only"]
+    } else {
+        &[
+            "--sandbox",
+            "danger-full-access",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ]
+    }
 }
 
 #[derive(Default)]
@@ -928,6 +961,34 @@ mod tests {
     }
 
     #[test]
+    fn external_exploration_uses_read_only_codex_sandbox_and_reference_root() {
+        assert_eq!(
+            codex_cli_sandbox_args(ProfileScenarioKind::Cpp2IlExploration),
+            ["--sandbox", "read-only"]
+        );
+        assert!(
+            !codex_cli_sandbox_args(ProfileScenarioKind::Cpp2IlExploration)
+                .contains(&"--dangerously-bypass-approvals-and-sandbox")
+        );
+
+        let source = tempfile::tempdir().expect("source");
+        let scenario = tempfile::tempdir().expect("scenario");
+        let prompt = external_benchmark_prompt(
+            source.path(),
+            scenario.path(),
+            ProfileScenarioKind::Cpp2IlExploration,
+        );
+
+        assert!(prompt.contains(r"C:\Users\ghost\Desktop\Coding\Cpp2IL"));
+        assert!(!prompt.contains(&format!(
+            "<read_only_reference_root>{}</read_only_reference_root>",
+            source.path().display()
+        )));
+        assert!(prompt.contains("task subset 1/4"));
+        assert!(prompt.contains("task subset 4/4"));
+    }
+
+    #[test]
     fn version_line_is_normalized_and_bounded() {
         let long_version = format!(" codex-cli   {}\t{}", "0.139.0", "x".repeat(240));
 
@@ -1027,6 +1088,7 @@ mod tests {
             expected_artifacts: 4,
             present_artifacts: 2,
             validation_exit_code: None,
+            validation_score: None,
             validation_timed_out: false,
             browser_validation_present: false,
             browser_validation_exit_code: None,
@@ -1178,6 +1240,7 @@ mod tests {
             expected_artifacts: 3,
             present_artifacts: 3,
             validation_exit_code: None,
+            validation_score: None,
             validation_timed_out: false,
             browser_validation_present: false,
             browser_validation_exit_code: None,

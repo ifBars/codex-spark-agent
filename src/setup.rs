@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use comfy_table::{Cell, Table};
 use inquire::{Confirm, Select, error::InquireError};
 
-use crate::{auth, config, session, skill};
+use crate::{auth, codex_integration, config, session, skill};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SetupOptions {
@@ -13,6 +13,8 @@ pub(crate) struct SetupOptions {
     pub(crate) skip_login: bool,
     pub(crate) skip_skill_migration: bool,
     pub(crate) skill_source: Option<PathBuf>,
+    pub(crate) codex: bool,
+    pub(crate) force_codex: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +135,27 @@ pub(crate) async fn run(options: SetupOptions) -> Result<()> {
             "Skill cache",
             "skipped",
             format!("{skill_count} repo skill(s) found"),
+        ));
+    }
+
+    if options.codex {
+        let report = codex_integration::install(options.force_codex)?;
+        rows.push(SetupSummaryRow::new(
+            "Codex MCP",
+            "ready",
+            format!("spark_harness -> {}", report.spark_executable.display()),
+        ));
+        rows.push(SetupSummaryRow::new(
+            "Codex explorer",
+            "ready",
+            match report.backup_path {
+                Some(path) => format!(
+                    "{} (previous file backed up to {})",
+                    report.agent_path.display(),
+                    path.display()
+                ),
+                None => report.agent_path.display().to_string(),
+            },
         ));
     }
 

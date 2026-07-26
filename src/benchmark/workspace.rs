@@ -8,6 +8,11 @@ use anyhow::Result;
 use crate::cli::ProfileScenarioKind;
 
 const WORKSPACE_ROOT: &str = ".spark-profile/benchmark-workspaces";
+const ASSET_RIPPER_EXPLORATION_ROOT: &str =
+    r"C:\Users\ghost\Desktop\Coding\ScheduleOne\AssetRipper_export_20260718_070918";
+const FIVEM_EXPLORATION_ROOT: &str = r"C:\Users\ghost\Desktop\Coding\FiveM\fivem-master";
+const CPP2IL_EXPLORATION_ROOT: &str = r"C:\Users\ghost\Desktop\Coding\Cpp2IL";
+const IL2CPP_INTEROP_EXPLORATION_ROOT: &str = r"C:\Users\ghost\Desktop\Coding\Il2CppInterop";
 
 pub(crate) fn create_benchmark_workspace(
     source_cwd: &Path,
@@ -45,11 +50,35 @@ pub(crate) fn benchmark_read_roots(
     scenario_cwd: &Path,
     kind: ProfileScenarioKind,
 ) -> Vec<PathBuf> {
+    if let Some(root) = exploration_read_root(kind) {
+        return vec![root];
+    }
     if is_repo_survey(kind) && !same_path(source_cwd, scenario_cwd) {
         vec![source_cwd.to_path_buf()]
     } else {
         Vec::new()
     }
+}
+
+pub(crate) fn is_external_exploration(kind: ProfileScenarioKind) -> bool {
+    matches!(
+        kind,
+        ProfileScenarioKind::AssetRipperExploration
+            | ProfileScenarioKind::FiveMExploration
+            | ProfileScenarioKind::Cpp2IlExploration
+            | ProfileScenarioKind::Il2CppInteropExploration
+    )
+}
+
+fn exploration_read_root(kind: ProfileScenarioKind) -> Option<PathBuf> {
+    let root = match kind {
+        ProfileScenarioKind::AssetRipperExploration => ASSET_RIPPER_EXPLORATION_ROOT,
+        ProfileScenarioKind::FiveMExploration => FIVEM_EXPLORATION_ROOT,
+        ProfileScenarioKind::Cpp2IlExploration => CPP2IL_EXPLORATION_ROOT,
+        ProfileScenarioKind::Il2CppInteropExploration => IL2CPP_INTEROP_EXPLORATION_ROOT,
+        _ => return None,
+    };
+    Some(PathBuf::from(root))
 }
 
 pub(crate) fn mirror_trace_to_source(source_cwd: &Path, trace_dir: &Path) -> Result<PathBuf> {
@@ -190,5 +219,37 @@ mod tests {
         );
 
         assert!(roots.is_empty());
+    }
+
+    #[test]
+    fn exploration_scenarios_use_their_external_read_only_roots() {
+        let source = tempfile::tempdir().expect("source");
+        let workspace = tempfile::tempdir().expect("workspace");
+
+        let cases = [
+            (
+                ProfileScenarioKind::AssetRipperExploration,
+                ASSET_RIPPER_EXPLORATION_ROOT,
+            ),
+            (
+                ProfileScenarioKind::FiveMExploration,
+                FIVEM_EXPLORATION_ROOT,
+            ),
+            (
+                ProfileScenarioKind::Cpp2IlExploration,
+                CPP2IL_EXPLORATION_ROOT,
+            ),
+            (
+                ProfileScenarioKind::Il2CppInteropExploration,
+                IL2CPP_INTEROP_EXPLORATION_ROOT,
+            ),
+        ];
+
+        for (scenario, expected) in cases {
+            assert_eq!(
+                benchmark_read_roots(source.path(), workspace.path(), scenario),
+                vec![PathBuf::from(expected)]
+            );
+        }
     }
 }

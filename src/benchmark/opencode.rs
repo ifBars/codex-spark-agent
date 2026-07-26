@@ -181,6 +181,9 @@ async fn run_opencode_scenario(
     let validation =
         validation::run_and_write_scenario_validation(scenario_cwd, &run_dir, scenario).await?;
     let validation_exit_code = validation.as_ref().and_then(|result| result.exit_code);
+    let validation_score = validation
+        .as_ref()
+        .and_then(|result| result.granular_score());
     let validation_timed_out = validation.as_ref().is_some_and(|result| result.timed_out);
     let browser_validation = validation
         .as_ref()
@@ -248,6 +251,7 @@ async fn run_opencode_scenario(
         expected_artifacts: expected_artifacts.len() as u64,
         present_artifacts,
         validation_exit_code,
+        validation_score,
         validation_timed_out,
         browser_validation_present,
         browser_validation_exit_code,

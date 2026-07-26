@@ -15,7 +15,6 @@ pub(super) struct TraceWriter {
 pub(super) struct TraceMetadata {
     pub(super) cwd: PathBuf,
     pub(super) model: String,
-    pub(super) max_turns: Option<usize>,
     pub(super) compact_after_chars: usize,
     pub(super) compact_after_tool_only_turns: usize,
     pub(super) max_input_chars: usize,
@@ -42,7 +41,6 @@ impl TraceWriter {
                 "started_at_unix_ms": now_ms,
                 "cwd": metadata.cwd,
                 "model": metadata.model,
-                "max_turns": metadata.max_turns,
                 "profile": metadata.profile,
                 "interactive": metadata.interactive,
                 "session": metadata.session_name,

@@ -1,8 +1,7 @@
 use serde_json::json;
 
 use crate::agent::subagent::{
-    ADVANCED_SUBAGENT_MODEL, SubagentKind, SubagentModelPolicy, SubagentRunOptions,
-    subagent_error_tool_result, subagent_prompt,
+    ADVANCED_SUBAGENT_MODEL, SubagentKind, SubagentModelPolicy, SubagentRunOptions, subagent_prompt,
 };
 
 #[test]
@@ -43,17 +42,15 @@ fn difficult_subagents_default_to_gpt55_with_kind_reasoning() {
 
     assert_eq!(runtime.model, ADVANCED_SUBAGENT_MODEL);
     assert_eq!(runtime.reasoning_effort, "high");
-    assert_eq!(runtime.max_turns, review.max_turns);
 }
 
 #[test]
-fn subagent_tool_options_allow_parent_model_and_budget_override() {
+fn subagent_tool_options_allow_parent_model_and_reasoning_override() {
     let options = SubagentRunOptions::from_tool_args(&json!({
         "kind": "research",
         "task": "Find current docs",
         "model": "parent",
-        "reasoning_effort": "medium",
-        "max_turns": 2
+        "reasoning_effort": "medium"
     }))
     .expect("options");
     let runtime =
@@ -63,30 +60,6 @@ fn subagent_tool_options_allow_parent_model_and_budget_override() {
 
     assert_eq!(runtime.model, "gpt-5.3-codex-spark");
     assert_eq!(runtime.reasoning_effort, "medium");
-    assert_eq!(runtime.max_turns, 2);
-}
-
-#[test]
-fn subagent_budget_exhaustion_returns_incomplete_observation() {
-    let result = subagent_error_tool_result(
-        &json!({
-            "kind": "explore",
-            "task": "Find the file",
-            "max_turns": 2
-        }),
-        "stopped after 2 turns without completion",
-    );
-
-    assert!(result.ok);
-    assert!(result.error.is_none());
-    assert_eq!(result.data["status"], "incomplete");
-    assert_eq!(result.data["error_kind"], "subagent_incomplete");
-    assert!(
-        result.data["hint"]
-            .as_str()
-            .expect("hint")
-            .contains("Do not retry the same bounded subagent call")
-    );
 }
 
 #[test]

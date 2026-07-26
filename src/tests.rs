@@ -281,7 +281,6 @@ fn quick_comparison_script_guards_harness_request_failures_by_default() {
     assert!(script.contains("Write-Host \"benchmark_model=$Model\""));
     assert!(script.contains("Write-Host \"reasoning_effort=$ReasoningEffort\""));
     assert!(script.contains("Write-Host \"repeat=$Repeat\""));
-    assert!(script.contains("Write-Host \"max_turns=$MaxTurns\""));
     assert!(script.contains("Write-Host \"timeout_seconds=$TimeoutSeconds\""));
     assert!(script.contains("Write-Host \"codex_bin=$CodexBin\""));
     assert!(script.contains("Write-Host \"scenario_count=$($Scenario.Count)\""));
@@ -335,7 +334,6 @@ fn quick_comparison_script_guards_harness_request_failures_by_default() {
     assert!(script.contains("codex_command_path = $codexCommandPath"));
     assert!(script.contains("codex_command_version = $codexCommandVersion"));
     assert!(script.contains("repeat = $repeatValue"));
-    assert!(script.contains("max_turns = $maxTurnsValue"));
     assert!(script.contains("timeout_seconds = $timeoutSecondsValue"));
     assert!(
         script.contains("codex_preflight_timeout_seconds = $codexPreflightTimeoutSecondsValue")
@@ -452,13 +450,13 @@ fn quick_comparison_script_guards_harness_request_failures_by_default() {
 #[test]
 fn quick_comparison_harness_guard_executes_provider_api_filter() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let local_trace = dir.path().join("local-max-turns");
+    let local_trace = dir.path().join("local-validation");
     let infra_trace = dir.path().join("provider-api-limit");
     std::fs::create_dir_all(&local_trace).expect("local trace dir");
     std::fs::create_dir_all(&infra_trace).expect("infra trace dir");
     std::fs::write(
-        local_trace.join("002-max_turns-error.json"),
-        r#"{"stage":"max_turns","error":"stopped after 0 turns without completion"}"#,
+        local_trace.join("002-validation-error.json"),
+        r#"{"stage":"validation","error":"local validation failed"}"#,
     )
     .expect("write local trace");
     std::fs::write(
@@ -482,7 +480,7 @@ fn quick_comparison_harness_guard_executes_provider_api_filter() {
                 "trace_dir": local_trace.display().to_string(),
                 "scenario": "precise-patch",
                 "diagnostics": "request_failure",
-                "failure_points": "max_turns"
+                "failure_points": "validation"
             }],
             "aggregate": {"successful_runs": 0}
         }))
@@ -517,7 +515,7 @@ fn quick_comparison_harness_guard_executes_provider_api_filter() {
                     "trace_dir": local_trace.display().to_string(),
                     "scenario": "precise-patch",
                     "diagnostics": "request_failure",
-                    "failure_points": "max_turns"
+                    "failure_points": "validation"
                 }
             ],
             "aggregate": {"successful_runs": 0}
@@ -615,8 +613,8 @@ if (-not ($status.PSObject.Properties.Name -contains 'codex_command_path')) {{
 if (-not ($status.PSObject.Properties.Name -contains 'codex_command_version')) {{
     throw 'expected preflight status artifact to include codex_command_version'
 }}
-if ($status.repeat -ne 1 -or $status.max_turns -ne 45 -or $status.timeout_seconds -ne 900 -or $status.codex_preflight_timeout_seconds -ne 120) {{
-    throw "expected preflight status artifact to include default run metadata, got repeat=$($status.repeat) max_turns=$($status.max_turns) timeout_seconds=$($status.timeout_seconds) codex_preflight_timeout_seconds=$($status.codex_preflight_timeout_seconds)"
+if ($status.repeat -ne 1 -or $status.timeout_seconds -ne 900 -or $status.codex_preflight_timeout_seconds -ne 120) {{
+    throw "expected preflight status artifact to include default run metadata, got repeat=$($status.repeat) timeout_seconds=$($status.timeout_seconds) codex_preflight_timeout_seconds=$($status.codex_preflight_timeout_seconds)"
 }}
 if ($status.ignore_user_config -or $status.isolated_codex_home -or $status.allow_harness_request_failure_comparison -or $status.allow_codex_request_failure_comparison -or $status.skip_codex_preflight -or $status.preflight_only -or $status.fail_on_directional_comparison) {{
     throw 'expected direct preflight status artifact to include false switch defaults'
@@ -649,7 +647,6 @@ if ($resolvedStatus.resume_command -notlike "*-CodexBin '$($resolvedStatus.codex
     throw "expected resume command to pin resolved command path, got '$($resolvedStatus.resume_command)'"
 }}
 $script:Repeat = 2
-$script:MaxTurns = 33
 $script:TimeoutSeconds = 444
 $script:CodexPreflightTimeoutSeconds = 55
 $script:IgnoreUserConfig = $true
@@ -664,8 +661,8 @@ $switchedStatus = Get-Content -LiteralPath $switchedStatusPath -Raw | ConvertFro
 if (-not $switchedStatus.ignore_user_config -or -not $switchedStatus.isolated_codex_home -or -not $switchedStatus.allow_harness_request_failure_comparison -or -not $switchedStatus.allow_codex_request_failure_comparison -or -not $switchedStatus.skip_codex_preflight -or -not $switchedStatus.preflight_only -or -not $switchedStatus.fail_on_directional_comparison) {{
     throw 'expected switched preflight status artifact to preserve true switch state'
 }}
-if ($switchedStatus.repeat -ne 2 -or $switchedStatus.max_turns -ne 33 -or $switchedStatus.timeout_seconds -ne 444 -or $switchedStatus.codex_preflight_timeout_seconds -ne 55) {{
-    throw "expected switched preflight status artifact to preserve run metadata, got repeat=$($switchedStatus.repeat) max_turns=$($switchedStatus.max_turns) timeout_seconds=$($switchedStatus.timeout_seconds) codex_preflight_timeout_seconds=$($switchedStatus.codex_preflight_timeout_seconds)"
+if ($switchedStatus.repeat -ne 2 -or $switchedStatus.timeout_seconds -ne 444 -or $switchedStatus.codex_preflight_timeout_seconds -ne 55) {{
+    throw "expected switched preflight status artifact to preserve run metadata, got repeat=$($switchedStatus.repeat) timeout_seconds=$($switchedStatus.timeout_seconds) codex_preflight_timeout_seconds=$($switchedStatus.codex_preflight_timeout_seconds)"
 }}
 if ($switchedStatus.scenarios -join ',' -ne 'ci-failure-triage,pull-request-review') {{
     throw "expected switched preflight status artifact to preserve scenarios, got '$($switchedStatus.scenarios -join ',')'"
@@ -790,7 +787,6 @@ fn quick_comparison_preflight_only_skips_isolated_codex_home() {
     assert_eq!(status["codex_command_path"], "");
     assert_eq!(status["codex_command_version"], "");
     assert_eq!(status["repeat"], 1);
-    assert_eq!(status["max_turns"], 45);
     assert_eq!(status["timeout_seconds"], 900);
     assert_eq!(status["codex_preflight_timeout_seconds"], 120);
     assert_eq!(status["ignore_user_config"], false);
@@ -924,7 +920,6 @@ fn readme_documents_quick_scenario_listing_and_preflight_scenario_metadata() {
     assert!(readme.contains("benchmark_model"));
     assert!(readme.contains("reasoning_effort"));
     assert!(readme.contains("repeat"));
-    assert!(readme.contains("max_turns"));
     assert!(readme.contains("timeout_seconds"));
     assert!(readme.contains("codex_bin"));
     assert!(readme.contains("codex_command_path"));
@@ -990,7 +985,6 @@ fn quick_harness_script_reports_exact_run_manifest() {
     assert!(script.contains("Write-Host \"benchmark_model=$Model\""));
     assert!(script.contains("Write-Host \"reasoning_effort=$ReasoningEffort\""));
     assert!(script.contains("Write-Host \"repeat=$Repeat\""));
-    assert!(script.contains("Write-Host \"max_turns=$MaxTurns\""));
     assert!(script.contains("Write-Host \"scenario_count=$($Scenario.Count)\""));
     assert!(script.contains("Write-Host \"scenarios=$($Scenario -join ',')\""));
     assert!(
@@ -1013,9 +1007,6 @@ fn quick_harness_script_reports_exact_run_manifest() {
     let suite_marker = script
         .find("Write-Host \"benchmark_suite=$Suite\"")
         .expect("benchmark suite output marker");
-    let max_turns_marker = script
-        .find("Write-Host \"max_turns=$MaxTurns\"")
-        .expect("max turns output marker");
     let scenario_count_marker = script
         .find("Write-Host \"scenario_count=$($Scenario.Count)\"")
         .expect("scenario count output marker");
@@ -1026,8 +1017,7 @@ fn quick_harness_script_reports_exact_run_manifest() {
         .find("& cargo @benchmarkArgs")
         .expect("benchmark run marker");
     assert!(no_trace_marker < report_marker);
-    assert!(suite_marker < max_turns_marker);
-    assert!(max_turns_marker < scenario_count_marker);
+    assert!(suite_marker < scenario_count_marker);
     assert!(scenario_count_marker < scenario_list_marker);
     assert!(scenario_list_marker < benchmark_run_marker);
     let manifest_output_marker = script
@@ -1105,17 +1095,15 @@ fn slash_command_helpers_match_menu_and_unknown_warning() {
 }
 
 #[test]
-fn subagent_command_parser_accepts_model_reasoning_and_budget_flags() {
-    let (kind, task, options) = parse_subagent_command(
-        "research --model parent --reasoning high --max-turns 2 Find current docs",
-    )
-    .expect("parse subagent command");
+fn subagent_command_parser_accepts_model_and_reasoning_flags() {
+    let (kind, task, options) =
+        parse_subagent_command("research --model parent --reasoning high Find current docs")
+            .expect("parse subagent command");
 
     assert_eq!(kind, crate::agent::SubagentKind::Research);
     assert_eq!(task, "Find current docs");
     assert_eq!(options.model.as_deref(), Some("parent"));
     assert_eq!(options.reasoning_effort.as_deref(), Some("high"));
-    assert_eq!(options.max_turns, Some(2));
 }
 
 #[test]

@@ -9,6 +9,8 @@ use super::ToolResult;
 use super::paths::{display_rel, required_str, resolve_under};
 
 const MAX_COMMAND_STREAM_CHARS: usize = 24_000;
+const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 20_000;
+const MAX_COMMAND_TIMEOUT_MS: u64 = 30_000;
 
 pub(super) async fn cmd_exec(cwd: &Path, args: Value) -> Result<ToolResult> {
     let shell_backend = ShellBackend::from_env();
@@ -20,7 +22,8 @@ pub(super) async fn cmd_exec(cwd: &Path, args: Value) -> Result<ToolResult> {
     let timeout_ms = args
         .get("timeout_ms")
         .and_then(Value::as_u64)
-        .unwrap_or(30000);
+        .unwrap_or(DEFAULT_COMMAND_TIMEOUT_MS)
+        .clamp(100, MAX_COMMAND_TIMEOUT_MS);
 
     let mut command = if let Some(shell_command) = args.get("command").and_then(Value::as_str) {
         shell_command_for(cwd, &workdir, shell_command, &shell_backend)

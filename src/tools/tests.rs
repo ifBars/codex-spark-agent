@@ -363,6 +363,49 @@ fn fs_read_caps_content_chars_even_when_lines_are_long() {
     assert!(result.data["content"].as_str().expect("content").len() <= 12_000);
 }
 
+#[tokio::test]
+async fn fs_read_rejects_oversized_or_binary_files_without_loading_them() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let oversized = dir.path().join("oversized.txt");
+    std::fs::File::create(&oversized)
+        .expect("create oversized")
+        .set_len(1_048_577)
+        .expect("size oversized");
+    std::fs::write(dir.path().join("binary.dat"), [b'a', 0, b'b']).expect("write binary");
+
+    let oversized_result = invoke(
+        dir.path(),
+        AgentMode::Work,
+        "fs.read",
+        json!({"path": "oversized.txt"}),
+    )
+    .await;
+    assert!(!oversized_result.ok);
+    assert!(
+        oversized_result
+            .error
+            .as_deref()
+            .expect("oversized error")
+            .contains("text-read limit")
+    );
+
+    let binary_result = invoke(
+        dir.path(),
+        AgentMode::Work,
+        "fs.read",
+        json!({"path": "binary.dat"}),
+    )
+    .await;
+    assert!(!binary_result.ok);
+    assert!(
+        binary_result
+            .error
+            .as_deref()
+            .expect("binary error")
+            .contains("appears to be binary")
+    );
+}
+
 #[test]
 fn fs_stat_reports_existing_file_metadata_without_contents() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -442,6 +485,30 @@ fn fs_list_clamps_limits_and_caps_result_chars() {
             .expect("serialize entries")
             .len()
             <= 12_000
+    );
+}
+
+#[test]
+fn fs_list_clamps_depth_to_the_discovery_budget() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut nested = dir.path().to_path_buf();
+    for depth in 0..8 {
+        nested.push(format!("level-{depth}"));
+        std::fs::create_dir_all(&nested).expect("create level");
+    }
+    std::fs::write(nested.join("too-deep.txt"), "needle\n").expect("write deep file");
+
+    let result = fs_list(
+        dir.path(),
+        json!({"path": ".", "recursive": true, "max_depth": 99, "limit": 200}),
+    )
+    .expect("list");
+    assert!(
+        result.data["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .all(|entry| entry["depth"].as_u64().expect("depth") <= 6)
     );
 }
 

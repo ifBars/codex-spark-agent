@@ -4,7 +4,11 @@ pub(super) fn scenario_family(scenario: &str) -> &'static str {
         | "repo-architecture-survey"
         | "benchmark-design-survey"
         | "steamnetworklib-survey"
-        | "s1api-survey" => "Survey",
+        | "s1api-survey"
+        | "asset-ripper-exploration"
+        | "fivem-exploration"
+        | "cpp2il-exploration"
+        | "il2cpp-interop-exploration" => "Survey",
         "tool-recovery" | "shell-recovery" => "Terminal and tool recovery",
         "file-edit"
         | "precise-patch"
@@ -35,6 +39,12 @@ pub(super) fn scenario_question(scenario: &str) -> &'static str {
         }
         "steamnetworklib-survey" | "s1api-survey" => {
             "Can it explore a broader external-style code surface?"
+        }
+        "asset-ripper-exploration"
+        | "fivem-exploration"
+        | "cpp2il-exploration"
+        | "il2cpp-interop-exploration" => {
+            "Can it explore deeply across four task subsets and turn evidence into a clear explanation?"
         }
         "tool-recovery" => "Can it recover from a failed native tool path?",
         "shell-recovery" => {

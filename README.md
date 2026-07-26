@@ -73,6 +73,27 @@ Useful setup flags:
 - `--skip-skill-migration` leaves `.agents/skills` untouched.
 - `--skill-source C:\path\to\skills` migrates skills from a specific directory.
 - `--cwd C:\path\to\repo` chooses the repo that receives migrated skills.
+- `--codex` registers the Spark explorer MCP server and installs a native Codex explorer override.
+- `--force-codex` replaces an existing `spark_harness` registration and backs up an existing explorer override.
+
+## Native Codex explorer integration
+
+Install the CLI, then connect native Codex to the Spark harness:
+
+```powershell
+cargo install --path . --force
+spark setup --non-interactive --skip-login --skip-skill-migration --codex --force-codex
+```
+
+This stages an immutable MCP executable under `~/.spark-codex/mcp/`, registers it as the persistent stdio server named `spark_harness`, and installs `~/.codex/agents/explorer.toml`. The versioned executable lets setup switch new Codex tasks to an updated server without terminating MCP processes that existing tasks still use. Native Codex keeps the parent task's workflows, memory, plugins, and skills, while the explorer delegates bounded read-only repository investigation to `mcp__spark_harness__explore_repo`. The MCP request accepts a task, workspace, optional starting paths/context, reasoning effort, and trace setting; it intentionally has no turn-limit field. Successful calls return only the compact evidence brief as text; workspace, model, path, trace, and profiler metadata are not duplicated into the parent model context.
+
+The MCP server can also be started directly:
+
+```powershell
+spark mcp-server
+```
+
+Agent runs continue until they complete, are cancelled, or hit a context/input safety guard. This applies to interactive runs, profiles, benchmarks, internal subagents, and MCP-backed explorers.
 
 ## Login
 
@@ -274,11 +295,39 @@ cargo run --bin spark -- analyze-trace --timeline
 
 The benchmark commands run repeatable local scenarios through Spark and, optionally, through other agent CLIs for comparison.
 
+### Reasoning cost-quality curve
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/reasoning-cost-quality-pilot-dark.svg">
+  <img src="docs/assets/reasoning-cost-quality-pilot.svg" alt="Pilot cost-quality curves for GPT-5.3 Codex Spark in the Spark harness and native Codex CLI at low, medium, and high reasoning. The horizontal axis is total API tokens for one task-run and the vertical axis is weighted behavioral validation quality." width="960">
+</picture>
+
+This first post-scoring-change pilot deliberately stays small: the same difficult stateful reconciliation bugfix ran once in each runner at low, medium, and high reasoning. Unlike the previous success-only chart, the curve includes incomplete runs and gives them granular credit for independently validated behavior. That immediately reveals separation that binary pass/fail scoring hid: the Spark harness moves from 0 to 85 to 100 quality, while native Codex CLI moves from 65 to 60 to 100. “Cost” is API input plus output tokens because OAuth-backed runs do not expose a reliable dollar charge.
+
+<details>
+<summary>Pilot values and caveats</summary>
+
+| Runner | Reasoning | Weighted quality | All checks passed | Total tokens | Time |
+| --- | --- | ---: | :---: | ---: | ---: |
+| Spark harness | Low | 0 | No | 110.4k | 15.4s |
+| Spark harness | Medium | 85 | No | 122.9k | 19.3s |
+| Spark harness | High | 100 | Yes | 190.8k | 27.9s |
+| Codex CLI 0.145.0 | Low | 65 | No | 145.6k | 18.6s |
+| Codex CLI 0.145.0 | Medium | 60 | No | 119.0k | 18.6s |
+| Codex CLI 0.145.0 | High | 100 | Yes | 282.2k | 30.6s |
+
+The scenario validates five weighted invariants rather than assigning one blanket score: normalization, exact positive aggregation, cross-source reconciliation, deterministic ordering, and regression safety. A run is only marked successful when every check passes, but partial quality remains visible. The low Spark run scored zero because a final cleanup removed a helper still imported by the project; the validator caught that regression. The native CLI’s medium point landing slightly below low is expected single-run noise, not evidence that medium reasoning is worse.
+
+There are no confidence intervals yet: this is one task and one repeat per point, intended only to verify that the new benchmark can distinguish reasoning levels before paying for a broader matrix. The previous 144-run success-only chart remains in [`docs/assets/reasoning-cost-quality.svg`](docs/assets/reasoning-cost-quality.svg), and raw pilot data is available in [`docs/benchmarks/reasoning-cost-quality-pilot-2026-07-26.csv`](docs/benchmarks/reasoning-cost-quality-pilot-2026-07-26.csv).
+
+</details>
+
 ```powershell
 cargo run --bin spark -- profile-scenario repo-survey
 cargo run --bin spark -- profile-scenario rust-notes-tui-scaffold
 cargo run --bin spark -- profile-benchmark scaffolding --repeat 3
 cargo run --bin spark -- profile-benchmark-report --suite scaffolding
+'low','medium','high' | ForEach-Object { .\scripts\quick_comparison_benchmark.ps1 -Suite reasoning -ReasoningEffort $_ -Repeat 3 }
 ```
 
 Available benchmark suites include:
@@ -287,7 +336,10 @@ Available benchmark suites include:
 - `survey`
 - `scaffolding`
 - `editing`
+- `reasoning` — compound tasks with less prompt leakage and behavior-based validation, intended for reasoning-level comparisons
 - `real-world`
+
+Reasoning scenarios may emit weighted validation checks in `scenario-validation.json`. The binary exit code still determines task completion, while `validation_score` and `quality_score` retain partial credit for independently satisfied behavioral invariants.
 
 There are also comparison runners for Codex CLI and OpenCode:
 
@@ -303,7 +355,7 @@ For a bounded Spark-vs-Codex CLI pass over real-world development tasks, use the
 .\scripts\quick_comparison_benchmark.ps1
 ```
 
-It runs the selected Spark harness scenarios, reports from that exact run manifest, runs the same scenarios through the logged-in `codex` binary, and writes a comparison report under `.spark-profile/benchmarks/`. The quick scripts print machine-readable run metadata such as `benchmark_suite`, `benchmark_model`, `reasoning_effort`, `repeat`, `max_turns`, `scenario_count`, and `scenarios`; the paired comparison script also prints `timeout_seconds` and `codex_bin`. The default quick slice includes real development tasks such as bugfixes, merge conflict resolution, config migration, issue triage, CI failure triage, pull request review, dependency upgrade triage, ops reporting, sourced writing, a small Rust log analyzer scaffold, and the harder `rust-notes-tui-scaffold` CLI scaffold. Pass `-Scenario rust-failing-test-bugfix` or another scenario list when you want a smaller smoke run before a broader comparison.
+It runs the selected Spark harness scenarios, reports from that exact run manifest, runs the same scenarios through the logged-in `codex` binary, and writes a comparison report under `.spark-profile/benchmarks/`. The quick scripts print machine-readable run metadata such as `benchmark_suite`, `benchmark_model`, `reasoning_effort`, `repeat`, `scenario_count`, and `scenarios`; the paired comparison script also prints `timeout_seconds` and `codex_bin`. The default quick slice includes real development tasks such as bugfixes, merge conflict resolution, config migration, issue triage, CI failure triage, pull request review, dependency upgrade triage, ops reporting, sourced writing, a small Rust log analyzer scaffold, and the harder `rust-notes-tui-scaffold` CLI scaffold. Pass `-Scenario rust-failing-test-bugfix` or another scenario list when you want a smaller smoke run before a broader comparison.
 
 To inspect the selected quick slice without running Spark or native Codex, use:
 
@@ -312,7 +364,7 @@ To inspect the selected quick slice without running Spark or native Codex, use:
 .\scripts\quick_harness_benchmark.ps1 -ListScenarios
 ```
 
-Before spending a Spark run, the quick comparison script preflights the logged-in `codex` binary with the selected model and reasoning effort. It writes a timestamped `*-codex-preflight-*.json` status artifact under `.spark-profile/benchmarks/` and prints `codex_preflight_status=...`, `codex_preflight_codex_path=...`, `codex_preflight_codex_version=...`, `codex_preflight_rerun_command=...`, and `codex_preflight_resume_command=...` so blocked native comparisons are auditable and easy to resume. The artifact includes `scenario_count`, `scenarios`, `repeat`, `max_turns`, `timeout_seconds`, `codex_preflight_timeout_seconds`, `codex_command_path`, `codex_command_version`, `rerun_command`, and `resume_command` for the quick slice that was about to run. The rerun command preserves the exact invocation, while the resume command omits only `-PreflightOnly` and pins `-CodexBin` to the resolved native binary path when available, so a successful retry can proceed into the full Spark-vs-native comparison against the same executable. Native Codex benchmark reports also include `codex_bin`, `codex_command_path`, and `codex_command_version`, and each native row carries `command_path` and `command_version`; final comparison JSON, CSV, and HTML rows preserve those row-level fields for provenance. Final comparison JSON also includes an `inputs` object, and the HTML includes a `Report Inputs` table plus an input freshness warning, so mixed fresh/stale benchmark reports show their source paths, modified times, row counts, scenario coverage, and modified-time span. It also records structured comparison validity under `aggregate.diagnostics.comparison_validity`; pass `--fail-on-directional-comparison` to `benchmark-compare`, or `-FailOnDirectionalComparison` to the quick comparison script, when CI should write artifacts but exit nonzero if stale inputs or skipped provider/API rows make the headline directional. It also records switch state fields: `ignore_user_config`, `isolated_codex_home`, `allow_harness_request_failure_comparison`, `allow_codex_request_failure_comparison`, `skip_codex_preflight`, `preflight_only`, and `fail_on_directional_comparison`. When the provider returns retry guidance, the artifact includes the original `retry_hint`, `retry_after_seconds`, and machine-readable `retry_at_local` / `retry_at_utc` timestamps; the same retry fields are printed to stdout when available. If native Codex is rate-limited or otherwise unavailable, it prints `codex_preflight=failed` and exits before running Spark. Pass `-SkipCodexPreflight` to defer that check to the full `codex-cli-benchmark` step. Provider/API outages are reported as non-comparable rows with scenario summaries such as `request_failure_scenarios=scenario:count`, so usage limits, quota failures, and rate limits are not scored as task performance. If at least one valid Spark or native Codex row remains, the quick comparison continues and prints terminal summaries such as `harness_provider_api_failure_scenarios=config-migration:1` or `codex_provider_api_failure_scenarios=config-migration:1`; the final comparison excludes only the provider/API rows. Ordinary Spark task failures, including local max-turns stops, remain comparable and are scored normally.
+Before spending a Spark run, the quick comparison script preflights the logged-in `codex` binary with the selected model and reasoning effort. It writes a timestamped `*-codex-preflight-*.json` status artifact under `.spark-profile/benchmarks/` and prints `codex_preflight_status=...`, `codex_preflight_codex_path=...`, `codex_preflight_codex_version=...`, `codex_preflight_rerun_command=...`, and `codex_preflight_resume_command=...` so blocked native comparisons are auditable and easy to resume. The artifact includes `scenario_count`, `scenarios`, `repeat`, `timeout_seconds`, `codex_preflight_timeout_seconds`, `codex_command_path`, `codex_command_version`, `rerun_command`, and `resume_command` for the quick slice that was about to run. The rerun command preserves the exact invocation, while the resume command omits only `-PreflightOnly` and pins `-CodexBin` to the resolved native binary path when available, so a successful retry can proceed into the full Spark-vs-native comparison against the same executable. Native Codex benchmark reports also include `codex_bin`, `codex_command_path`, and `codex_command_version`, and each native row carries `command_path` and `command_version`; final comparison JSON, CSV, and HTML rows preserve those row-level fields for provenance. Final comparison JSON also includes an `inputs` object, and the HTML includes a `Report Inputs` table plus an input freshness warning, so mixed fresh/stale benchmark reports show their source paths, modified times, row counts, scenario coverage, and modified-time span. It also records structured comparison validity under `aggregate.diagnostics.comparison_validity`; pass `--fail-on-directional-comparison` to `benchmark-compare`, or `-FailOnDirectionalComparison` to the quick comparison script, when CI should write artifacts but exit nonzero if stale inputs or skipped provider/API rows make the headline directional. It also records switch state fields: `ignore_user_config`, `isolated_codex_home`, `allow_harness_request_failure_comparison`, `allow_codex_request_failure_comparison`, `skip_codex_preflight`, `preflight_only`, and `fail_on_directional_comparison`. When the provider returns retry guidance, the artifact includes the original `retry_hint`, `retry_after_seconds`, and machine-readable `retry_at_local` / `retry_at_utc` timestamps; the same retry fields are printed to stdout when available. If native Codex is rate-limited or otherwise unavailable, it prints `codex_preflight=failed` and exits before running Spark. Pass `-SkipCodexPreflight` to defer that check to the full `codex-cli-benchmark` step. Provider/API outages are reported as non-comparable rows with scenario summaries such as `request_failure_scenarios=scenario:count`, so usage limits, quota failures, and rate limits are not scored as task performance. If at least one valid Spark or native Codex row remains, the quick comparison continues and prints terminal summaries such as `harness_provider_api_failure_scenarios=config-migration:1` or `codex_provider_api_failure_scenarios=config-migration:1`; the final comparison excludes only the provider/API rows. Ordinary Spark task failures remain comparable and are scored normally.
 
 To check native Codex availability without running either benchmark, use:
 

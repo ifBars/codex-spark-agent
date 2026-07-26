@@ -3,8 +3,7 @@ param(
     [ValidateSet("minimal", "low", "medium", "high")]
     [string]$ReasoningEffort = "medium",
     [int]$Repeat = 1,
-    [int]$MaxTurns = 45,
-    [ValidateSet("core", "survey", "scaffolding", "editing", "real-world")]
+    [ValidateSet("core", "survey", "scaffolding", "editing", "reasoning", "real-world")]
     [string]$Suite = "real-world",
     [string[]]$Scenario = @(),
     [switch]$ListScenarios,
@@ -18,7 +17,11 @@ $BenchmarkDir = Join-Path $RepoRoot ".spark-profile\benchmarks"
 . (Join-Path $PSScriptRoot "quick_benchmark_scenarios.ps1")
 
 if (-not $Scenario -or $Scenario.Count -eq 0) {
-    $Scenario = @(Get-QuickRealWorldScenario)
+    if ($Suite -eq "reasoning") {
+        $Scenario = @(Get-QuickReasoningScenario)
+    } else {
+        $Scenario = @(Get-QuickRealWorldScenario)
+    }
 }
 
 if ($ListScenarios) {
@@ -30,7 +33,6 @@ Write-Host "benchmark_suite=$Suite"
 Write-Host "benchmark_model=$Model"
 Write-Host "reasoning_effort=$ReasoningEffort"
 Write-Host "repeat=$Repeat"
-Write-Host "max_turns=$MaxTurns"
 Write-Host "scenario_count=$($Scenario.Count)"
 Write-Host "scenarios=$($Scenario -join ',')"
 
@@ -85,8 +87,7 @@ try {
         "profile-benchmark", $Suite,
         "--model", $Model,
         "--reasoning-effort", $ReasoningEffort,
-        "--repeat", "$Repeat",
-        "--max-turns", "$MaxTurns"
+        "--repeat", "$Repeat"
     )
 
     foreach ($name in $Scenario) {

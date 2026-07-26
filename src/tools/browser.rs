@@ -14,7 +14,8 @@ use super::paths::{display_rel, required_str, resolve_under_for_write};
 
 const MAX_BROWSER_STREAM_CHARS: usize = 24_000;
 const MAX_BROWSER_TEXT_CHARS: usize = 16_000;
-const DEFAULT_TIMEOUT_MS: u64 = 45_000;
+const DEFAULT_TIMEOUT_MS: u64 = 20_000;
+const MAX_TIMEOUT_MS: u64 = 30_000;
 
 pub(super) async fn browser_run(cwd: &Path, args: Value) -> Result<ToolResult> {
     let url = required_str(&args, "url")?;
@@ -22,7 +23,7 @@ pub(super) async fn browser_run(cwd: &Path, args: Value) -> Result<ToolResult> {
         .get("timeout_ms")
         .and_then(Value::as_u64)
         .unwrap_or(DEFAULT_TIMEOUT_MS)
-        .clamp(1_000, 120_000);
+        .clamp(1_000, MAX_TIMEOUT_MS);
     let text_limit = args
         .get("text_limit")
         .and_then(Value::as_u64)

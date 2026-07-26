@@ -671,7 +671,7 @@ impl ChatTui {
                 self.push_system(
                     "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /memory, /mcp, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
 Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear\n\
-Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] [--max-turns 1..12] explore|research|review|plan <task>\n\
+Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] explore|research|review|plan <task>\n\
 Memory commands: /memory, /memory on, /memory off, /memory add <durable note>, /memory show\n\
 MCP commands: /mcp, /mcp enable <name>, /mcp disable <name>, /mcp reset <name>, /mcp refresh\n\
 Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>\n\

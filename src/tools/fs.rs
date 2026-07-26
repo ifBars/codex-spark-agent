@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use regex::RegexBuilder;
@@ -22,6 +23,25 @@ const FS_LIST_MAX_ENTRIES_CHARS: usize = 12_000;
 const FS_SEARCH_DEFAULT_LIMIT: usize = 50;
 const FS_SEARCH_MAX_LIMIT: usize = 100;
 const FS_SEARCH_MAX_SNIPPET_CHARS: usize = 600;
+// Native filesystem operations run in the agent process, so keep their input and
+// traversal budgets deliberately small. This turns pathological repositories and
+// binary/generated files into actionable tool errors instead of stalled turns.
+const FS_MAX_TEXT_FILE_BYTES: u64 = 1_048_576;
+const FS_LIST_MAX_DEPTH: usize = 6;
+const FS_LIST_MAX_DIRECTORIES: usize = 256;
+const FS_LIST_TIMEOUT: Duration = Duration::from_secs(3);
+const FS_SEARCH_MAX_FILES: usize = 512;
+const FS_SEARCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn ensure_text_write_budget(content: &str) -> Result<()> {
+    if content.len() as u64 > FS_MAX_TEXT_FILE_BYTES {
+        anyhow::bail!(
+            "text payload exceeds the {} byte file-operation limit",
+            FS_MAX_TEXT_FILE_BYTES
+        );
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 pub(super) fn fs_read(cwd: &Path, args: Value) -> Result<ToolResult> {
@@ -264,7 +284,11 @@ pub(super) fn fs_list_with_read_roots(
         .get("recursive")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let max_depth = args.get("max_depth").and_then(Value::as_u64).unwrap_or(2) as usize;
+    let max_depth = args
+        .get("max_depth")
+        .and_then(Value::as_u64)
+        .unwrap_or(2)
+        .min(FS_LIST_MAX_DEPTH as u64) as usize;
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
@@ -272,15 +296,27 @@ pub(super) fn fs_list_with_read_roots(
         .unwrap_or(FS_LIST_DEFAULT_LIMIT)
         .clamp(1, FS_LIST_MAX_LIMIT);
     let root = resolve_read_path(cwd, read_roots, path)?;
+    let started = Instant::now();
+    let mut directories_visited = 0usize;
     let mut stack = vec![(root.clone(), 0_usize)];
     let mut entries = Vec::new();
     let mut truncated = false;
     while let Some((dir, depth)) = stack.pop() {
+        directories_visited += 1;
+        if directories_visited > FS_LIST_MAX_DIRECTORIES || started.elapsed() >= FS_LIST_TIMEOUT {
+            anyhow::bail!(
+                "fs.list exceeded its bounded traversal budget; narrow path, use recursive=false, or reduce max_depth"
+            );
+        }
         for entry in
             std::fs::read_dir(&dir).with_context(|| format!("failed to list {}", dir.display()))?
         {
             let entry = entry?;
             let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
             let meta = entry.metadata()?;
             if meta.is_dir() && should_skip_discovery_dir(&root, &path) {
                 continue;
@@ -381,6 +417,7 @@ pub(super) fn fs_stat_with_read_roots(
 pub(super) fn fs_write(cwd: &Path, args: Value) -> Result<ToolResult> {
     let path = required_str(&args, "path")?;
     let content = required_str(&args, "content")?;
+    ensure_text_write_budget(content)?;
     let full = resolve_under_for_write(cwd, path)?;
     let previous_bytes = std::fs::metadata(&full).ok().map(|metadata| metadata.len());
     let created_parent_dirs = missing_parent_dirs(cwd, &full);
@@ -452,7 +489,7 @@ impl<'a> SearchOptions<'a> {
                 .get("max_depth")
                 .and_then(Value::as_u64)
                 .unwrap_or(6)
-                .min(12) as usize,
+                .min(FS_LIST_MAX_DEPTH as u64) as usize,
             limit: args
                 .get("limit")
                 .and_then(Value::as_u64)
@@ -480,9 +517,11 @@ fn fs_search_with_ripgrep(cwd: &Path, options: &SearchOptions<'_>) -> Result<Opt
         .arg("--no-messages")
         .arg("--hidden")
         .arg("--max-filesize")
-        .arg("2M")
+        .arg("1M")
         .arg("--max-depth")
-        .arg(options.max_depth.to_string());
+        .arg(options.max_depth.to_string())
+        .arg("--threads")
+        .arg("2");
     if is_generated_discovery_path(&options.root) {
         command.arg("--no-ignore");
     }
@@ -519,8 +558,15 @@ fn fs_search_with_ripgrep(cwd: &Path, options: &SearchOptions<'_>) -> Result<Opt
     let mut files_scanned = None;
     let mut snippets_truncated = 0usize;
     let mut truncated = false;
+    let started = Instant::now();
 
     for line in BufReader::new(stdout).lines() {
+        if started.elapsed() >= FS_SEARCH_TIMEOUT {
+            let _ = child.kill();
+            anyhow::bail!(
+                "fs.search exceeded its 5-second deadline; narrow path or use a more specific query"
+            );
+        }
         let line = line.context("failed to read ripgrep output")?;
         if line.trim().is_empty() {
             continue;
@@ -596,7 +642,13 @@ fn fs_search_in_process(cwd: &Path, options: &SearchOptions<'_>) -> Result<ToolR
     let mut truncated = false;
     let mut snippets_truncated = 0usize;
     let mut stack = vec![(options.root.clone(), 0usize)];
+    let started = Instant::now();
     while let Some((path, depth)) = stack.pop() {
+        if started.elapsed() >= FS_SEARCH_TIMEOUT || files_scanned >= FS_SEARCH_MAX_FILES {
+            anyhow::bail!(
+                "fs.search exceeded its bounded scan budget; narrow path or use a more specific query"
+            );
+        }
         if matches.len() >= options.limit {
             truncated = true;
             break;
@@ -619,7 +671,7 @@ fn fs_search_in_process(cwd: &Path, options: &SearchOptions<'_>) -> Result<ToolR
             }
             continue;
         }
-        if !metadata.is_file() || metadata.len() > 2_000_000 {
+        if !metadata.is_file() || metadata.len() > FS_MAX_TEXT_FILE_BYTES {
             continue;
         }
         let Ok(content) = read_text_file(&path) else {
@@ -821,8 +873,39 @@ fn search_result(
 }
 
 fn read_text_file(path: &Path) -> Result<String> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
+    if !metadata.is_file() {
+        anyhow::bail!("{} is not a regular file", path.display());
+    }
+    if metadata.len() > FS_MAX_TEXT_FILE_BYTES {
+        anyhow::bail!(
+            "{} is {} bytes, exceeding the {} byte text-read limit; use fs.stat and a narrower source file",
+            path.display(),
+            metadata.len(),
+            FS_MAX_TEXT_FILE_BYTES
+        );
+    }
+    let file =
+        std::fs::File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(FS_MAX_TEXT_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    if bytes.len() as u64 > FS_MAX_TEXT_FILE_BYTES {
+        anyhow::bail!(
+            "{} exceeded the {} byte text-read limit while reading",
+            path.display(),
+            FS_MAX_TEXT_FILE_BYTES
+        );
+    }
+    let is_utf16 = bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]);
+    if !is_utf16 && bytes.contains(&0) {
+        anyhow::bail!(
+            "{} appears to be binary (contains NUL bytes)",
+            path.display()
+        );
+    }
     decode_text_bytes(&bytes).with_context(|| format!("failed to decode {}", path.display()))
 }
 
@@ -897,8 +980,7 @@ pub(super) fn fs_replace(cwd: &Path, args: Value) -> Result<ToolResult> {
         .and_then(Value::as_str)
         .context("new is required")?;
     let full = resolve_under(cwd, path)?;
-    let content = std::fs::read_to_string(&full)
-        .with_context(|| format!("failed to read {}", full.display()))?;
+    let content = read_text_file(&full)?;
     let mut replace_plan = replacement_plan(&content, old, new);
     let mut display_line_numbers_stripped = false;
     let stripped_replace = strip_replace_display_line_number_prefixes(old, new);
@@ -1190,8 +1272,7 @@ pub(super) fn fs_edit(cwd: &Path, args: Value) -> Result<ToolResult> {
     let end_line = required_u64(&args, "end_line")? as usize;
     let replacement = required_str(&args, "replacement")?;
     let full = resolve_under(cwd, path)?;
-    let content = std::fs::read_to_string(&full)
-        .with_context(|| format!("failed to read {}", full.display()))?;
+    let content = read_text_file(&full)?;
     let newline = if content.contains("\r\n") {
         "\r\n"
     } else {

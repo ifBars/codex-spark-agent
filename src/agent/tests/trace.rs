@@ -30,7 +30,6 @@ fn trace_metadata_includes_approx_token_thresholds() {
         TraceMetadata {
             cwd: dir.path().to_path_buf(),
             model: "gpt-5.3-codex-spark".to_string(),
-            max_turns: None,
             compact_after_chars: 120_000,
             compact_after_tool_only_turns: 12,
             max_input_chars: 480_000,

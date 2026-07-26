@@ -14,7 +14,6 @@ fn formats_trace_timeline_for_human_scan() {
         "trace_metadata": {
             "model": "gpt-5.3-codex-spark",
             "context": {"profile_scenario": {"name": "compaction-pressure"}},
-            "max_turns": null,
             "compact_after_chars": 160000,
             "max_input_chars": 500000
         },

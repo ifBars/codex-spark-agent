@@ -4,8 +4,10 @@ mod benchmark;
 mod chat;
 mod cli;
 mod client;
+mod codex_integration;
 mod config;
 mod mcp;
+mod mcp_server;
 mod memory;
 mod profile;
 mod profiler;
@@ -72,6 +74,8 @@ async fn run_command(command: Command) -> Result<()> {
             skip_skill_migration,
             skill_source,
             cwd,
+            codex,
+            force_codex,
         } => {
             setup::run(setup::SetupOptions {
                 cwd,
@@ -79,6 +83,8 @@ async fn run_command(command: Command) -> Result<()> {
                 skip_login,
                 skip_skill_migration,
                 skill_source,
+                codex,
+                force_codex,
             })
             .await?;
         }
@@ -100,7 +106,6 @@ async fn run_command(command: Command) -> Result<()> {
             goal,
             goal_checkpoints,
             mode,
-            max_turns,
             trace,
             profile,
             session,
@@ -147,7 +152,6 @@ async fn run_command(command: Command) -> Result<()> {
                 cwd.clone(),
                 model,
                 reasoning_effort,
-                max_turns,
                 trace,
                 profile,
                 compact_after_chars,
@@ -218,6 +222,9 @@ async fn run_command(command: Command) -> Result<()> {
         Command::Tools => {
             println!("{}", serde_json::to_string_pretty(&tools::builtin_tools())?);
         }
+        Command::McpServer => {
+            mcp_server::run().await?;
+        }
         Command::Sessions => {
             session::prepare_default_session_store(None)?;
             for session in session::store::SessionStore::open_default()?.list_names()? {
@@ -232,7 +239,6 @@ async fn run_command(command: Command) -> Result<()> {
                     auth,
                     cwd.clone(),
                     DEFAULT_MODEL.to_string(),
-                    None,
                     false,
                     false,
                     DEFAULT_COMPACT_AFTER_CHARS,
@@ -348,7 +354,6 @@ async fn run_command(command: Command) -> Result<()> {
             cwd,
             model,
             reasoning_effort,
-            max_turns,
             target_tokens,
             repeat,
             no_trace,
@@ -379,7 +384,6 @@ async fn run_command(command: Command) -> Result<()> {
                     cwd,
                     model,
                     reasoning_effort: reasoning_effort.wire_value().to_string(),
-                    max_turns,
                     target_tokens,
                     repeat,
                     no_trace,
@@ -397,7 +401,6 @@ async fn run_command(command: Command) -> Result<()> {
             cwd,
             model,
             reasoning_effort,
-            max_turns,
             target_tokens,
             repeat,
             scenarios,
@@ -430,7 +433,6 @@ async fn run_command(command: Command) -> Result<()> {
                     cwd,
                     model,
                     reasoning_effort: reasoning_effort.wire_value().to_string(),
-                    max_turns,
                     target_tokens,
                     repeat,
                     no_trace,
@@ -684,7 +686,9 @@ async fn run_command(command: Command) -> Result<()> {
             comparison_report,
             cwd,
             model,
+            codex_bin,
             reasoning_effort,
+            timeout_seconds,
             output_dir,
             limit,
         } => {
@@ -700,7 +704,9 @@ async fn run_command(command: Command) -> Result<()> {
                     cwd,
                     comparison_report,
                     model,
+                    codex_bin,
                     reasoning_effort: reasoning_effort.wire_value().to_string(),
+                    timeout_seconds,
                     output_dir,
                     limit,
                 })

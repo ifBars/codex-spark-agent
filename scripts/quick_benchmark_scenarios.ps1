@@ -21,3 +21,17 @@ function Get-QuickRealWorldScenario {
         "rust-notes-tui-scaffold"
     )
 }
+
+function Get-QuickReasoningScenario {
+    return @(
+        "technical-essay",
+        "config-migration",
+        "ops-report",
+        "multi-module-bugfix",
+        "terminal-repair",
+        "multi-hop-analysis",
+        "policy-support-agent",
+        "rust-notes-tui-scaffold",
+        "stateful-reconciliation-bugfix"
+    )
+}

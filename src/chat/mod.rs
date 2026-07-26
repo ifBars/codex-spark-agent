@@ -252,7 +252,7 @@ pub(crate) async fn run_line_interactive_chat(
                     "Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear"
                 );
                 println!(
-                    "Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] [--max-turns 1..12] explore|research|review|plan <task>"
+                    "Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] explore|research|review|plan <task>"
                 );
                 println!(
                     "Memory commands: /memory, /memory on, /memory off, /memory add <durable note>, /memory show"
@@ -666,15 +666,6 @@ pub(crate) fn parse_subagent_command(
             search_start += token.len() + consumed;
             continue;
         }
-        if token == "--max-turns" {
-            let (value, consumed) = parse_flag_value(after_token, "--max-turns")?;
-            let max_turns = value
-                .parse::<usize>()
-                .map_err(|_| anyhow::anyhow!("--max-turns must be an integer"))?;
-            options.max_turns = Some(max_turns);
-            search_start += token.len() + consumed;
-            continue;
-        }
         if kind.is_none() {
             kind = agent::SubagentKind::parse(token);
             if kind.is_none() {
@@ -698,7 +689,6 @@ pub(crate) fn parse_subagent_command(
     let validation_args = serde_json::json!({
         "model": options.model,
         "reasoning_effort": options.reasoning_effort,
-        "max_turns": options.max_turns,
     });
     options = agent::SubagentRunOptions::from_tool_args(&validation_args)?;
     Ok((kind, task, options))

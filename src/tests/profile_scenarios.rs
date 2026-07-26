@@ -1,3 +1,4 @@
+use crate::benchmark::expected_scenario_artifacts;
 use crate::cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind};
 use crate::profile::scenarios::{
     benchmark_profile_prompts, benchmark_task_prompt, codex_cli_benchmark_prompt,
@@ -1230,7 +1231,22 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::TypeScriptReducerBugfix,
             ProfileScenarioKind::MergeConflictResolution,
             ProfileScenarioKind::ConfigMigration,
-            ProfileScenarioKind::MultiModuleBugfix
+            ProfileScenarioKind::MultiModuleBugfix,
+            ProfileScenarioKind::StatefulReconciliationBugfix
+        ]
+    );
+    assert_eq!(
+        ProfileBenchmarkSuiteKind::Reasoning.scenarios(),
+        &[
+            ProfileScenarioKind::TechnicalEssay,
+            ProfileScenarioKind::ConfigMigration,
+            ProfileScenarioKind::OpsReport,
+            ProfileScenarioKind::MultiModuleBugfix,
+            ProfileScenarioKind::TerminalRepair,
+            ProfileScenarioKind::MultiHopAnalysis,
+            ProfileScenarioKind::PolicySupportAgent,
+            ProfileScenarioKind::RustNotesTuiScaffold,
+            ProfileScenarioKind::StatefulReconciliationBugfix,
         ]
     );
     assert!(
@@ -1307,6 +1323,11 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
         ProfileBenchmarkSuiteKind::RealWorld
             .scenarios()
             .contains(&ProfileScenarioKind::MultiModuleBugfix)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::StatefulReconciliationBugfix)
     );
     assert!(
         ProfileBenchmarkSuiteKind::RealWorld
@@ -2054,6 +2075,115 @@ fn multi_hop_analysis_validation_accepts_exact_answer_and_rejects_distractors() 
 }
 
 #[test]
+fn stateful_reconciliation_fixture_requires_cross_module_invariants() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(
+        dir.path(),
+        ProfileScenarioKind::StatefulReconciliationBugfix,
+    )
+    .expect("prepare stateful reconciliation");
+    let root = dir
+        .path()
+        .join(".spark-scenarios/stateful-reconciliation-bugfix");
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::StatefulReconciliationBugfix)
+            .expect("validation");
+
+    let initial = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run initial validation");
+    assert!(
+        !initial.status.success(),
+        "broken fixture should fail before the agent repairs it"
+    );
+
+    std::fs::write(
+        root.join("src/normalize.ts"),
+        r#"import type { ReservationEvent } from "./types";
+
+export function normalizeEvents(events: ReservationEvent[]): ReservationEvent[] {
+  const unique = new Map<string, ReservationEvent>();
+  for (const event of events) {
+    const current = unique.get(event.eventId);
+    if (!current || Date.parse(event.receivedAt) > Date.parse(current.receivedAt)) {
+      unique.set(event.eventId, event);
+    }
+  }
+  return [...unique.values()].sort((left, right) =>
+    Date.parse(left.occurredAt) - Date.parse(right.occurredAt)
+    || left.sequence - right.sequence
+    || left.eventId.localeCompare(right.eventId)
+  );
+}
+"#,
+    )
+    .expect("write repaired normalizer");
+    std::fs::write(
+        root.join("src/project.ts"),
+        r#"import { normalizeEvents } from "./normalize";
+import type { ReservationEvent, ReservationState } from "./types";
+
+export function projectReservations(events: ReservationEvent[]): ReservationState[] {
+  const states = new Map<string, ReservationState>();
+  for (const event of normalizeEvents(events)) {
+    const key = `${event.orderId}\u{0}${event.sku}`;
+    const state = states.get(key) ?? {
+      orderId: event.orderId, sku: event.sku, reserved: 0, shipped: 0, terminal: false,
+    };
+    if (state.terminal || !Number.isFinite(event.quantity) || event.quantity <= 0) continue;
+    if (event.kind === "reserve") state.reserved += event.quantity;
+    if (event.kind === "release") state.reserved = Math.max(0, state.reserved - event.quantity);
+    if (event.kind === "ship") {
+      const consumed = Math.min(state.reserved, event.quantity);
+      if (consumed > 0) {
+        state.reserved -= consumed;
+        state.shipped += consumed;
+        state.terminal = true;
+      }
+    }
+    states.set(key, state);
+  }
+  return [...states.values()];
+}
+"#,
+    )
+    .expect("write repaired projector");
+    let repaired = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run repaired validation");
+    assert!(
+        repaired.status.success(),
+        "coherent repair should pass\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&repaired.stdout),
+        String::from_utf8_lossy(&repaired.stderr)
+    );
+
+    let prompt = benchmark_task_prompt(ProfileScenarioKind::StatefulReconciliationBugfix);
+    assert!(prompt.contains("documented invariants hold as a coherent state machine"));
+    assert!(!prompt.contains("latest receivedAt is authoritative"));
+
+    let calls =
+        profile_scenario_expected_tool_calls(ProfileScenarioKind::StatefulReconciliationBugfix);
+    assert_eq!(calls.len(), 8);
+    assert_eq!(
+        calls[5]["path"],
+        ".spark-scenarios/stateful-reconciliation-bugfix/src/normalize.ts"
+    );
+    assert_eq!(
+        calls[6]["path"],
+        ".spark-scenarios/stateful-reconciliation-bugfix/src/project.ts"
+    );
+    assert_eq!(calls[7]["command"], "bun test");
+
+    let artifacts = expected_scenario_artifacts(ProfileScenarioKind::StatefulReconciliationBugfix);
+    assert_eq!(artifacts.len(), 2);
+}
+
+#[test]
 fn policy_support_agent_is_two_turn_and_validates_updated_resolution() {
     let prompts = profile_scenario_prompts(ProfileScenarioKind::PolicySupportAgent, 45_000)
         .expect("scenario");
@@ -2128,4 +2258,72 @@ fn natural_compaction_scenario_uses_multiple_chat_turns() {
     assert!(prompts[0].contains("turn 1/3"));
     assert!(prompts[1].contains("turn 2/3"));
     assert!(prompts[2].contains("fs.list on src with recursive=false"));
+}
+
+#[test]
+fn external_exploration_scenarios_use_four_read_only_task_subsets() {
+    let cases = [
+        (
+            ProfileScenarioKind::AssetRipperExploration,
+            "ProductManager",
+            "settings, scripts, and serialized assets",
+        ),
+        (
+            ProfileScenarioKind::FiveMExploration,
+            "FXServer",
+            "the selected boundary",
+        ),
+        (
+            ProfileScenarioKind::Cpp2IlExploration,
+            "LibCpp2IL context initialization",
+            "where Cpp2IL stops",
+        ),
+        (
+            ProfileScenarioKind::Il2CppInteropExploration,
+            "generate command",
+            "generator versus runtime responsibilities",
+        ),
+    ];
+
+    for (scenario, trace_term, synthesis_term) in cases {
+        let prompts = profile_scenario_prompts(scenario, 45_000).expect("profile prompts");
+        let benchmark = benchmark_profile_prompts(scenario, 45_000).expect("benchmark prompts");
+
+        assert_eq!(prompts.len(), 4);
+        assert_eq!(benchmark.len(), 4);
+        for (index, prompt) in prompts.iter().enumerate() {
+            assert!(prompt.contains(&format!("task subset {}/4", index + 1)));
+            assert!(prompt.contains("single read-only reference root"));
+            assert!(prompt.contains("Do not call cmd.exec"));
+            assert!(prompt.contains("do not write, edit, rename, or delete"));
+        }
+        assert!(prompts[1].contains(trace_term));
+        assert!(prompts[3].contains(synthesis_term));
+        assert!(prompts[3].contains("Cite at least six specific paths"));
+        assert!(prompts[3].contains("inference"));
+        assert!(prompts[3].contains("unknown"));
+
+        assert_eq!(
+            profile_scenario_expected_tool_groups(scenario),
+            vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
+        );
+        assert_eq!(profile_scenario_expected_tool_calls(scenario).len(), 4);
+    }
+}
+
+#[test]
+fn survey_suite_contains_all_external_exploration_scenarios() {
+    let survey = ProfileBenchmarkSuiteKind::Survey.scenarios();
+
+    for scenario in [
+        ProfileScenarioKind::AssetRipperExploration,
+        ProfileScenarioKind::FiveMExploration,
+        ProfileScenarioKind::Cpp2IlExploration,
+        ProfileScenarioKind::Il2CppInteropExploration,
+    ] {
+        assert!(
+            survey.contains(&scenario),
+            "{scenario:?} missing from survey suite"
+        );
+    }
 }

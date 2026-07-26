@@ -482,10 +482,10 @@ fn analyze_trace_reports_response_errors() {
 fn analyze_trace_reports_generic_terminal_errors() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
-        dir.path().join("002-max_turns-error.json"),
+        dir.path().join("002-validation-error.json"),
         serde_json::to_vec_pretty(&json!({
-            "stage": "max_turns",
-            "error": "stopped after 1 turns without completion"
+            "stage": "validation",
+            "error": "local validation failed"
         }))
         .expect("serialize error"),
     )
@@ -494,8 +494,8 @@ fn analyze_trace_reports_generic_terminal_errors() {
     let summary = analyze_trace(dir.path()).expect("analyze trace");
 
     assert_eq!(summary["errors"][0]["turn"], 2);
-    assert_eq!(summary["errors"][0]["stage"], "max_turns");
+    assert_eq!(summary["errors"][0]["stage"], "validation");
     assert_eq!(summary["timeline"][0]["turn"], 2);
-    assert_eq!(summary["timeline"][0]["errors"][0]["stage"], "max_turns");
+    assert_eq!(summary["timeline"][0]["errors"][0]["stage"], "validation");
     assert_eq!(summary["diagnostics"][0]["kind"], "request_failure");
 }

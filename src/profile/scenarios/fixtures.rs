@@ -27,6 +27,7 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
         ProfileScenarioKind::ConfigMigration => Some("config-migration"),
         ProfileScenarioKind::OpsReport => Some("ops-report"),
         ProfileScenarioKind::MultiModuleBugfix => Some("multi-module-bugfix"),
+        ProfileScenarioKind::StatefulReconciliationBugfix => Some("stateful-reconciliation-bugfix"),
         ProfileScenarioKind::TerminalRepair => Some("terminal-repair"),
         ProfileScenarioKind::MultiHopAnalysis => Some("multi-hop-analysis"),
         ProfileScenarioKind::PolicySupportAgent => Some("policy-support-agent"),
@@ -580,6 +581,153 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 "order_id,refund_amount\nA4,20.00\nA6,60.00\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture refunds.csv: {error}"))?;
+        }
+        ProfileScenarioKind::StatefulReconciliationBugfix => {
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests"))
+                .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests").join(".harness")).map_err(|error| {
+                anyhow::anyhow!("failed to create harness tests fixture: {error}")
+            })?;
+            std::fs::create_dir_all(dir.join("docs"))
+                .map_err(|error| anyhow::anyhow!("failed to create docs fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("logs"))
+                .map_err(|error| anyhow::anyhow!("failed to create logs fixture: {error}"))?;
+            std::fs::write(
+                dir.join("package.json"),
+                "{\n  \"name\": \"stateful-reconciliation-fixture\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": { \"test\": \"bun test\" }\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture package.json: {error}"))?;
+            std::fs::write(
+                dir.join("issue.md"),
+                "# Reservation projection incident\n\nAfter a consumer failover, the reservation dashboard mixed quantities between orders, replayed an older delivery of an event, and showed negative reserved units. A shipment was also followed by a late reserve event for the same order line.\n\nUse the incident log and projection invariants to repair the production implementation. The existing tests cover only part of the incident. Keep the public types stable and do not change the evidence, documentation, or tests.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture issue.md: {error}"))?;
+            std::fs::write(
+                dir.join("docs").join("invariants.md"),
+                "# Projection invariants\n\n1. An event id is idempotent. When transport redelivers the same id, the delivery with the latest `receivedAt` is authoritative.\n2. Authoritative events are applied by `occurredAt`, then `sequence`, then `eventId` for a deterministic tie break.\n3. State is isolated by the pair `(orderId, sku)`.\n4. Non-finite or non-positive quantities have no effect.\n5. A release cannot reduce reserved quantity below zero.\n6. Ship consumes at most the currently reserved quantity and records only the amount consumed. A successful ship is terminal for that order line, so later events have no effect.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture invariants.md: {error}"))?;
+            std::fs::write(
+                dir.join("logs").join("incident.log"),
+                "09:14:02 duplicate event=e-17 received=09:13:58 sequence=7\n09:14:03 duplicate event=e-17 received=09:14:01 sequence=8\n09:14:05 projection order=o-42 sku=atlas reserved=-2\n09:14:06 projection order=o-77 sku=atlas unexpectedly_changed=true\n09:14:08 late event=e-22 kind=reserve order=o-42 sku=atlas after_ship=e-21\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture incident.log: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("types.ts"),
+                "export type ReservationEvent = {\n  eventId: string;\n  orderId: string;\n  sku: string;\n  kind: \"reserve\" | \"release\" | \"ship\";\n  quantity: number;\n  occurredAt: string;\n  receivedAt: string;\n  sequence: number;\n};\n\nexport type ReservationState = {\n  orderId: string;\n  sku: string;\n  reserved: number;\n  shipped: number;\n  terminal: boolean;\n};\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture types.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("normalize.ts"),
+                "import type { ReservationEvent } from \"./types\";\n\nexport function normalizeEvents(events: ReservationEvent[]): ReservationEvent[] {\n  const unique = new Map<string, ReservationEvent>();\n  for (const event of events) {\n    if (!unique.has(event.eventId)) unique.set(event.eventId, event);\n  }\n  return [...unique.values()].sort((left, right) => left.sequence - right.sequence);\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture normalize.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("project.ts"),
+                "import { normalizeEvents } from \"./normalize\";\nimport type { ReservationEvent, ReservationState } from \"./types\";\n\nexport function projectReservations(events: ReservationEvent[]): ReservationState[] {\n  const states = new Map<string, ReservationState>();\n  for (const event of normalizeEvents(events)) {\n    const key = event.sku;\n    const state = states.get(key) ?? {\n      orderId: event.orderId,\n      sku: event.sku,\n      reserved: 0,\n      shipped: 0,\n      terminal: false,\n    };\n    if (event.kind === \"reserve\") state.reserved += event.quantity;\n    if (event.kind === \"release\") state.reserved -= event.quantity;\n    if (event.kind === \"ship\") {\n      state.reserved -= event.quantity;\n      state.shipped += event.quantity;\n    }\n    states.set(key, state);\n  }\n  return [...states.values()];\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture project.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("projection.test.ts"),
+                r#"import { describe, expect, test } from "bun:test";
+import { normalizeEvents } from "../src/normalize";
+import { projectReservations } from "../src/project";
+import type { ReservationEvent } from "../src/types";
+
+const event = (overrides: Partial<ReservationEvent>): ReservationEvent => ({
+  eventId: "e-1", orderId: "o-1", sku: "atlas", kind: "reserve", quantity: 1,
+  occurredAt: "2026-07-26T09:00:00Z", receivedAt: "2026-07-26T09:00:01Z",
+  sequence: 1, ...overrides,
+});
+
+describe("reservation reconciliation", () => {
+  test("isolates equal skus belonging to different orders", () => {
+    const states = projectReservations([
+      event({ eventId: "e-1", orderId: "o-1", quantity: 3 }),
+      event({ eventId: "e-2", orderId: "o-2", quantity: 7 }),
+    ]);
+    expect(states).toHaveLength(2);
+    expect(states.find(item => item.orderId === "o-1")?.reserved).toBe(3);
+    expect(states.find(item => item.orderId === "o-2")?.reserved).toBe(7);
+  });
+
+  test("clamps release to the available reservation", () => {
+    const released = projectReservations([
+      event({ eventId: "e-1", quantity: 2 }),
+      event({ eventId: "e-2", kind: "release", quantity: 5, sequence: 2 }),
+    ])[0];
+    expect(released.reserved).toBe(0);
+  });
+});
+"#,
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to write fixture projection.test.ts: {error}")
+            })?;
+            std::fs::write(
+                dir.join("tests")
+                    .join(".harness")
+                    .join("projection.validation.ts"),
+                r#"import { describe, expect, test } from "bun:test";
+import { normalizeEvents } from "../../src/normalize";
+import { projectReservations } from "../../src/project";
+import type { ReservationEvent } from "../../src/types";
+
+const selectedCheck = process.env.SPARK_VALIDATION_CHECK;
+const check = (name: string, title: string, body: () => void) => {
+  if (!selectedCheck || selectedCheck === name) test(title, body);
+};
+
+const event = (overrides: Partial<ReservationEvent>): ReservationEvent => ({
+  eventId: "e-1", orderId: "o-1", sku: "atlas", kind: "reserve", quantity: 1,
+  occurredAt: "2026-07-26T09:00:00Z", receivedAt: "2026-07-26T09:00:01Z",
+  sequence: 1, ...overrides,
+});
+
+describe("harness reconciliation invariants", () => {
+  check("duplicate-timezone", "chooses the chronologically latest duplicate across timezone offsets", () => {
+    const latest = event({ eventId: "e-17", quantity: 5, receivedAt: "2026-07-26T09:00:00Z" });
+    const earlier = event({ eventId: "e-17", quantity: 2, receivedAt: "2026-07-26T10:30:00+02:00" });
+    expect(normalizeEvents([latest, earlier])).toEqual([latest]);
+  });
+
+  check("event-order", "orders equivalent offset timestamps by instant, then sequence and id", () => {
+    const later = event({ eventId: "e-3", occurredAt: "2026-07-26T10:15:00+01:00", sequence: 1 });
+    const tieB = event({ eventId: "e-2", occurredAt: "2026-07-26T09:00:00Z", sequence: 2 });
+    const tieA = event({ eventId: "e-1", occurredAt: "2026-07-26T10:00:00+01:00", sequence: 2 });
+    expect(normalizeEvents([later, tieB, tieA]).map(item => item.eventId))
+      .toEqual(["e-1", "e-2", "e-3"]);
+  });
+
+  check("terminal-shipment", "records only consumed shipment and ignores later events", () => {
+    const state = projectReservations([
+      event({ eventId: "e-1", quantity: 4 }),
+      event({ eventId: "e-2", kind: "ship", quantity: 2, sequence: 2 }),
+      event({ eventId: "e-3", kind: "reserve", quantity: 9, sequence: 3 }),
+    ])[0];
+    expect(state).toMatchObject({ reserved: 2, shipped: 2, terminal: true });
+  });
+
+  check("empty-shipment", "does not close an empty line when a ship consumes nothing", () => {
+    const state = projectReservations([
+      event({ eventId: "e-1", kind: "ship", quantity: 2 }),
+      event({ eventId: "e-2", kind: "reserve", quantity: 3, sequence: 2 }),
+    ])[0];
+    expect(state).toMatchObject({ reserved: 3, shipped: 0, terminal: false });
+  });
+
+  check("invalid-quantity", "invalid quantities do not create projection rows", () => {
+    expect(projectReservations([
+      event({ eventId: "e-1", quantity: Number.NaN }),
+      event({ eventId: "e-2", orderId: "o-2", quantity: 0 }),
+    ])).toEqual([]);
+  });
+});
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write harness validation: {error}"))?;
         }
         ProfileScenarioKind::PolicySupportAgent => {
             std::fs::create_dir_all(dir.join("cases"))

@@ -57,6 +57,12 @@ pub(crate) fn profile_scenario_expected_tool_groups(
             vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
         }
         ProfileScenarioKind::BenchmarkDesignSurvey => vec![vec!["fs.read"], vec!["fs.search"]],
+        ProfileScenarioKind::AssetRipperExploration
+        | ProfileScenarioKind::FiveMExploration
+        | ProfileScenarioKind::Cpp2IlExploration
+        | ProfileScenarioKind::Il2CppInteropExploration => {
+            vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
+        }
         ProfileScenarioKind::ReactCalculatorScaffold => {
             vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
         }
@@ -112,6 +118,13 @@ pub(crate) fn profile_scenario_expected_tool_groups(
             vec![
                 vec!["fs.read"],
                 vec!["fs.edit", "fs.replace"],
+                vec!["cmd.exec"],
+            ]
+        }
+        ProfileScenarioKind::StatefulReconciliationBugfix => {
+            vec![
+                vec!["fs.read"],
+                vec!["fs.edit", "fs.replace", "fs.write"],
                 vec!["cmd.exec"],
             ]
         }
@@ -328,6 +341,80 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.search",
                 "path": "src",
+            }),
+        ],
+        ProfileScenarioKind::AssetRipperExploration => vec![
+            json!({
+                "tool": "fs.read",
+                "path": "ExportedProject/ProjectSettings/ProjectSettings.asset",
+            }),
+            json!({
+                "tool": "fs.list",
+                "path": "ExportedProject/Assets",
+                "recursive": false,
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "ExportedProject/Assets/Scripts/Assembly-CSharp/ScheduleOne/Product/ProductManager.cs",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "ExportedProject/Assets",
+            }),
+        ],
+        ProfileScenarioKind::FiveMExploration => vec![
+            json!({
+                "tool": "fs.read",
+                "path": "README.md",
+            }),
+            json!({
+                "tool": "fs.list",
+                "path": "code/components",
+                "recursive": false,
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "code",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "code/components",
+            }),
+        ],
+        ProfileScenarioKind::Cpp2IlExploration => vec![
+            json!({
+                "tool": "fs.read",
+                "path": "README.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "Cpp2IL/Program.cs",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "LibCpp2IL/LibCpp2IlMain.cs",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "Cpp2IL.Core",
+            }),
+        ],
+        ProfileScenarioKind::Il2CppInteropExploration => vec![
+            json!({
+                "tool": "fs.read",
+                "path": "README.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "Il2CppInterop.CLI/Program.cs",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "Il2CppInterop.Generator",
+            }),
+            json!({
+                "tool": "fs.search",
+                "path": "Il2CppInterop.Runtime",
             }),
         ],
         ProfileScenarioKind::ReactCalculatorScaffold => vec![
@@ -703,6 +790,40 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "command": "bun test",
             }),
         ],
+        ProfileScenarioKind::StatefulReconciliationBugfix => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/stateful-reconciliation-bugfix/issue.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/stateful-reconciliation-bugfix/docs/invariants.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/stateful-reconciliation-bugfix/logs/incident.log",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/normalize.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/project.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/normalize.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/project.ts",
+            }),
+            json!({
+                "tool": "cmd.exec",
+                "command": "bun test",
+            }),
+        ],
         ProfileScenarioKind::TerminalRepair => vec![
             json!({
                 "tool": "cmd.exec",
@@ -827,6 +948,16 @@ pub(crate) fn profile_scenario_optional_tool_calls(scenario: ProfileScenarioKind
             "tool": "fs.read",
             "path": ".spark-scenarios/multi-module-bugfix/src/tax.ts",
         })],
+        ProfileScenarioKind::StatefulReconciliationBugfix => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/types.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/stateful-reconciliation-bugfix/tests/projection.test.ts",
+            }),
+        ],
         ProfileScenarioKind::TerminalRepair => vec![
             json!({
                 "tool": "fs.read",
