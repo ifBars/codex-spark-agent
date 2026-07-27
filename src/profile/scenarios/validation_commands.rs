@@ -120,6 +120,68 @@ pub(crate) fn profile_scenario_validation_checks(
                 ],
             },
         ],
+        ProfileScenarioKind::ExperimentRolloutAudit => &[
+            ProfileScenarioValidationCheck {
+                name: "exact audit schema",
+                weight: 10,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $a = Get-Content -LiteralPath 'audit.json' -Raw | ConvertFrom-Json; if ((@($a.psobject.Properties.Name | Sort-Object) -join ',') -ne 'control,dataQuality,decision,treatment,uplifts') { throw 'top-level schema mismatch' }; $variant = 'conversionRatePct,converters,eligibleUsers,grossRevenueCents,netRevenueCents,netRevenuePerEligibleCents,orders,refundCents,refundedOrders,refundRatePct'; foreach ($name in @('control','treatment')) { if ((@($a.$name.psobject.Properties.Name | Sort-Object) -join ',') -ne $variant) { throw \"$name schema mismatch\" } }; if ((@($a.dataQuality.psobject.Properties.Name | Sort-Object) -join ',') -ne 'assignmentRows,conflictedUsers,duplicateAssignmentRows,duplicateEventRows,duplicateOrderEvents,eventRows,excludedUsers,orphanEvents,outOfWindowCheckouts') { throw 'dataQuality schema mismatch' }; if ((@($a.uplifts.psobject.Properties.Name | Sort-Object) -join ',') -ne 'conversionUpliftPercentagePoints,netRevenuePerEligibleUpliftPct,refundRateDeltaPercentagePoints,relativeConversionUpliftPct') { throw 'uplifts schema mismatch' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "assignment and event data quality",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $d = (Get-Content -LiteralPath 'audit.json' -Raw | ConvertFrom-Json).dataQuality; foreach ($pair in @(@('assignmentRows',25),@('duplicateAssignmentRows',1),@('conflictedUsers',1),@('excludedUsers',2),@('eventRows',27),@('duplicateEventRows',1),@('orphanEvents',4),@('outOfWindowCheckouts',2),@('duplicateOrderEvents',1))) { if ([decimal]$d.($pair[0]) -ne [decimal]$pair[1]) { throw \"dataQuality $($pair[0]) mismatch\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "control attribution metrics",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $p = (Get-Content -LiteralPath 'audit.json' -Raw | ConvertFrom-Json).control; foreach ($pair in @(@('eligibleUsers',10),@('converters',5),@('conversionRatePct',50),@('orders',5),@('grossRevenueCents',47000),@('refundedOrders',1),@('refundRatePct',20),@('refundCents',8000),@('netRevenueCents',39000),@('netRevenuePerEligibleCents',3900))) { if ([decimal]$p.($pair[0]) -ne [decimal]$pair[1]) { throw \"control $($pair[0]) mismatch\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "treatment attribution metrics",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $p = (Get-Content -LiteralPath 'audit.json' -Raw | ConvertFrom-Json).treatment; foreach ($pair in @(@('eligibleUsers',10),@('converters',7),@('conversionRatePct',70),@('orders',8),@('grossRevenueCents',65000),@('refundedOrders',2),@('refundRatePct',25),@('refundCents',24000),@('netRevenueCents',41000),@('netRevenuePerEligibleCents',4100))) { if ([decimal]$p.($pair[0]) -ne [decimal]$pair[1]) { throw \"treatment $($pair[0]) mismatch\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "uplift and guardrail calculations",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $u = (Get-Content -LiteralPath 'audit.json' -Raw | ConvertFrom-Json).uplifts; foreach ($pair in @(@('conversionUpliftPercentagePoints',20),@('relativeConversionUpliftPct',40),@('netRevenuePerEligibleUpliftPct',5.13),@('refundRateDeltaPercentagePoints',5))) { if ([math]::Abs([decimal]$u.($pair[0]) - [decimal]$pair[1]) -gt 0.001) { throw \"uplifts $($pair[0]) mismatch\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "decision memo evaluates launch gates",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $a = Get-Content -LiteralPath 'audit.json' -Raw | ConvertFrom-Json; if ($a.decision -ne 'hold') { throw 'decision must be hold' }; $memo = Get-Content -LiteralPath 'memo.md' -Raw; foreach ($term in @('hold','refund','5','3','conversion','revenue','duplicate','orphan')) { if ($memo -notmatch [regex]::Escape($term)) { throw \"memo missing $term\" } }",
+                ],
+            },
+        ],
         _ => &[],
     }
 }
@@ -241,6 +303,15 @@ pub(crate) fn profile_scenario_validation_command(
                 "-NoProfile",
                 "-Command",
                 "$ErrorActionPreference='Stop'; $plan = Get-Content -LiteralPath 'plan.json' -Raw | ConvertFrom-Json; $top = @($plan.psobject.Properties.Name | Sort-Object); if (($top -join ',') -ne 'basePlan,contingencyPlan,incrementalNetBenefit') { throw 'top-level schema mismatch' }; $expected = 'budget,grossAvoidedPenalty,netBenefit,remainingBudget,selectedOptionIds,totalCost,totalUnits'; function Check-Plan($p,$name,$budget,$ids,$units,$cost,$gross,$net,$remaining) { $keys = @($p.psobject.Properties.Name | Sort-Object); if (($keys -join ',') -ne $expected) { throw \"$name schema mismatch\" }; if ((@($p.selectedOptionIds) -join ',') -ne $ids) { throw \"$name selection mismatch\" }; foreach ($pair in @(@('budget',$budget),@('totalUnits',$units),@('totalCost',$cost),@('grossAvoidedPenalty',$gross),@('netBenefit',$net),@('remainingBudget',$remaining))) { if ([decimal]$p.($pair[0]) -ne [decimal]$pair[1]) { throw \"$name $($pair[0]) mismatch\" } } }; Check-Plan $plan.basePlan 'base' 325 'T05,T07,T08,T11,T12' 72 307 2950 2643 18; Check-Plan $plan.contingencyPlan 'contingency' 250 'T02,T03,T11,T12' 52 247 2470 2223 3; if ([decimal]$plan.incrementalNetBenefit -ne 420) { throw 'incrementalNetBenefit mismatch' }; $memo = Get-Content -LiteralPath 'memo.md' -Raw; foreach ($term in @('base','contingency','T14','lead','420')) { if ($memo -notmatch [regex]::Escape($term)) { throw \"memo missing $term\" } }; if ($memo -notmatch '(?i)(surplus|origin)' -or $memo -notmatch '(?i)(deficit|destination)' -or $memo -notmatch '(?i)budget') { throw 'memo missing constraint explanation' }",
+            ],
+        }),
+        ProfileScenarioKind::ExperimentRolloutAudit => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/experiment-rollout-audit",
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $a = Get-Content -LiteralPath 'audit.json' -Raw | ConvertFrom-Json; if ((@($a.psobject.Properties.Name | Sort-Object) -join ',') -ne 'control,dataQuality,decision,treatment,uplifts') { throw 'top-level schema mismatch' }; $variant = 'conversionRatePct,converters,eligibleUsers,grossRevenueCents,netRevenueCents,netRevenuePerEligibleCents,orders,refundCents,refundedOrders,refundRatePct'; foreach ($name in @('control','treatment')) { if ((@($a.$name.psobject.Properties.Name | Sort-Object) -join ',') -ne $variant) { throw \"$name schema mismatch\" } }; if ((@($a.dataQuality.psobject.Properties.Name | Sort-Object) -join ',') -ne 'assignmentRows,conflictedUsers,duplicateAssignmentRows,duplicateEventRows,duplicateOrderEvents,eventRows,excludedUsers,orphanEvents,outOfWindowCheckouts') { throw 'dataQuality schema mismatch' }; if ((@($a.uplifts.psobject.Properties.Name | Sort-Object) -join ',') -ne 'conversionUpliftPercentagePoints,netRevenuePerEligibleUpliftPct,refundRateDeltaPercentagePoints,relativeConversionUpliftPct') { throw 'uplifts schema mismatch' }; foreach ($pair in @(@('assignmentRows',25),@('duplicateAssignmentRows',1),@('conflictedUsers',1),@('excludedUsers',2),@('eventRows',27),@('duplicateEventRows',1),@('orphanEvents',4),@('outOfWindowCheckouts',2),@('duplicateOrderEvents',1))) { if ([decimal]$a.dataQuality.($pair[0]) -ne [decimal]$pair[1]) { throw \"dataQuality $($pair[0]) mismatch\" } }; foreach ($pair in @(@('eligibleUsers',10),@('converters',5),@('conversionRatePct',50),@('orders',5),@('grossRevenueCents',47000),@('refundedOrders',1),@('refundRatePct',20),@('refundCents',8000),@('netRevenueCents',39000),@('netRevenuePerEligibleCents',3900))) { if ([decimal]$a.control.($pair[0]) -ne [decimal]$pair[1]) { throw \"control $($pair[0]) mismatch\" } }; foreach ($pair in @(@('eligibleUsers',10),@('converters',7),@('conversionRatePct',70),@('orders',8),@('grossRevenueCents',65000),@('refundedOrders',2),@('refundRatePct',25),@('refundCents',24000),@('netRevenueCents',41000),@('netRevenuePerEligibleCents',4100))) { if ([decimal]$a.treatment.($pair[0]) -ne [decimal]$pair[1]) { throw \"treatment $($pair[0]) mismatch\" } }; foreach ($pair in @(@('conversionUpliftPercentagePoints',20),@('relativeConversionUpliftPct',40),@('netRevenuePerEligibleUpliftPct',5.13),@('refundRateDeltaPercentagePoints',5))) { if ([math]::Abs([decimal]$a.uplifts.($pair[0]) - [decimal]$pair[1]) -gt 0.001) { throw \"uplifts $($pair[0]) mismatch\" } }; if ($a.decision -ne 'hold') { throw 'decision must be hold' }; $memo = Get-Content -LiteralPath 'memo.md' -Raw; foreach ($term in @('hold','refund','5','3','conversion','revenue','duplicate','orphan')) { if ($memo -notmatch [regex]::Escape($term)) { throw \"memo missing $term\" } }",
             ],
         }),
         ProfileScenarioKind::ShellRecovery => Some(ProfileScenarioValidationCommand {

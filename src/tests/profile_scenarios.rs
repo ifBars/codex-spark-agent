@@ -1242,6 +1242,7 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::ConfigMigration,
             ProfileScenarioKind::OpsReport,
             ProfileScenarioKind::InventoryRebalancePlan,
+            ProfileScenarioKind::ExperimentRolloutAudit,
             ProfileScenarioKind::MultiModuleBugfix,
             ProfileScenarioKind::TerminalRepair,
             ProfileScenarioKind::MultiHopAnalysis,
@@ -1329,6 +1330,21 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
         ProfileBenchmarkSuiteKind::RealWorld
             .scenarios()
             .contains(&ProfileScenarioKind::InventoryRebalancePlan)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::Quantitative
+            .scenarios()
+            .contains(&ProfileScenarioKind::ExperimentRolloutAudit)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::Analysis
+            .scenarios()
+            .contains(&ProfileScenarioKind::ExperimentRolloutAudit)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::ExperimentRolloutAudit)
     );
     assert!(
         ProfileBenchmarkSuiteKind::RealWorld
@@ -1429,6 +1445,11 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
             ProfileScenarioKind::InventoryRebalancePlan,
             ".spark-scenarios/inventory-rebalance-plan/data/transfer_options.csv",
             "T14,Atlas,NORTH,EAST,10,1,15,5",
+        ),
+        (
+            ProfileScenarioKind::ExperimentRolloutAudit,
+            ".spark-scenarios/experiment-rollout-audit/data/events.csv",
+            "ET06,T06,checkout,2026-07-04T00:00:00Z",
         ),
         (
             ProfileScenarioKind::MultiModuleBugfix,
@@ -2365,6 +2386,390 @@ fn inventory_rebalance_fixture_optima_are_derived_from_the_published_inputs() {
             net_benefit: 2223,
             remaining_budget: 3,
         }
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn experiment_rollout_audit_validation_is_exact_and_granular() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::ExperimentRolloutAudit)
+        .expect("prepare experiment rollout audit");
+    let root = dir.path().join(".spark-scenarios/experiment-rollout-audit");
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::ExperimentRolloutAudit)
+            .expect("validation");
+    let perfect_audit = r#"{
+  "control": {
+    "eligibleUsers": 10,
+    "converters": 5,
+    "conversionRatePct": 50,
+    "orders": 5,
+    "grossRevenueCents": 47000,
+    "refundedOrders": 1,
+    "refundRatePct": 20,
+    "refundCents": 8000,
+    "netRevenueCents": 39000,
+    "netRevenuePerEligibleCents": 3900
+  },
+  "treatment": {
+    "eligibleUsers": 10,
+    "converters": 7,
+    "conversionRatePct": 70,
+    "orders": 8,
+    "grossRevenueCents": 65000,
+    "refundedOrders": 2,
+    "refundRatePct": 25,
+    "refundCents": 24000,
+    "netRevenueCents": 41000,
+    "netRevenuePerEligibleCents": 4100
+  },
+  "uplifts": {
+    "conversionUpliftPercentagePoints": 20,
+    "relativeConversionUpliftPct": 40,
+    "netRevenuePerEligibleUpliftPct": 5.13,
+    "refundRateDeltaPercentagePoints": 5
+  },
+  "dataQuality": {
+    "assignmentRows": 25,
+    "duplicateAssignmentRows": 1,
+    "conflictedUsers": 1,
+    "excludedUsers": 2,
+    "eventRows": 27,
+    "duplicateEventRows": 1,
+    "orphanEvents": 4,
+    "outOfWindowCheckouts": 2,
+    "duplicateOrderEvents": 1
+  },
+  "decision": "hold"
+}
+"#;
+    std::fs::write(root.join("audit.json"), perfect_audit).expect("write perfect audit");
+    std::fs::write(
+        root.join("memo.md"),
+        "# Hold recommendation\n\nConversion passes with 40% relative uplift and revenue per eligible passes at 5.13%, but the refund-rate delta is 5 percentage points versus the 3 point guardrail. Hold the rollout. The audit removed duplicate rows and tracked conflicted, excluded, and orphan events before attribution.\n",
+    )
+    .expect("write grounded memo");
+
+    let good = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        good.status.success(),
+        "expected exact audit to pass: {}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    let checks = profile_scenario_validation_checks(ProfileScenarioKind::ExperimentRolloutAudit);
+    assert_eq!(checks.iter().map(|check| check.weight).sum::<u32>(), 100);
+    let perfect_score = checks
+        .iter()
+        .filter(|check| {
+            std::process::Command::new(check.program)
+                .args(check.args)
+                .current_dir(&root)
+                .output()
+                .expect("run granular validation check")
+                .status
+                .success()
+        })
+        .map(|check| check.weight)
+        .sum::<u32>();
+    assert_eq!(perfect_score, 100);
+
+    std::fs::write(
+        root.join("audit.json"),
+        perfect_audit.replacen(r#""refundRatePct": 25"#, r#""refundRatePct": 20"#, 1),
+    )
+    .expect("write incorrect treatment rate");
+    let bad = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run invalid validation");
+    assert!(
+        !bad.status.success(),
+        "incorrect treatment rate should fail"
+    );
+    let partial_score = checks
+        .iter()
+        .filter(|check| {
+            std::process::Command::new(check.program)
+                .args(check.args)
+                .current_dir(&root)
+                .output()
+                .expect("run granular validation check")
+                .status
+                .success()
+        })
+        .map(|check| check.weight)
+        .sum::<u32>();
+    assert_eq!(partial_score, 80);
+
+    let prompt = benchmark_task_prompt(ProfileScenarioKind::ExperimentRolloutAudit);
+    assert!(prompt.contains("deduplicate rows"));
+    assert!(prompt.contains("half-open 72-hour window") || prompt.contains("72-hour"));
+    assert!(prompt.contains("Do not hand-count"));
+}
+
+#[test]
+fn experiment_rollout_fixture_metrics_are_derived_from_the_published_inputs() {
+    #[derive(Clone)]
+    struct Order {
+        variant: String,
+        user: String,
+        amount: i64,
+        occurred_minute: i64,
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct VariantMetrics {
+        eligible_users: usize,
+        converters: usize,
+        conversion_rate_pct: f64,
+        orders: usize,
+        gross_revenue_cents: i64,
+        refunded_orders: usize,
+        refund_rate_pct: f64,
+        refund_cents: i64,
+        net_revenue_cents: i64,
+        net_revenue_per_eligible_cents: i64,
+    }
+
+    fn timestamp_minute(value: &str) -> i64 {
+        let fields = value
+            .split(['-', 'T', ':', 'Z'])
+            .filter(|part| !part.is_empty())
+            .map(|part| part.parse::<i64>().expect("timestamp field"))
+            .collect::<Vec<_>>();
+        fields[2] * 24 * 60 + fields[3] * 60 + fields[4]
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::ExperimentRolloutAudit)
+        .expect("prepare experiment rollout audit");
+    let data = dir
+        .path()
+        .join(".spark-scenarios/experiment-rollout-audit/data");
+
+    let assignments = std::fs::read_to_string(data.join("assignments.csv")).expect("assignments");
+    let assignment_rows = assignments.lines().skip(1).count();
+    let mut seen_assignment_rows = std::collections::HashSet::new();
+    let mut duplicate_assignment_rows = 0;
+    let mut assignments_by_user: std::collections::HashMap<String, Vec<(String, i64)>> =
+        std::collections::HashMap::new();
+    for line in assignments.lines().skip(1) {
+        if !seen_assignment_rows.insert(line.to_string()) {
+            duplicate_assignment_rows += 1;
+            continue;
+        }
+        let fields = line.split(',').collect::<Vec<_>>();
+        assignments_by_user
+            .entry(fields[0].to_string())
+            .or_default()
+            .push((fields[1].to_string(), timestamp_minute(fields[2])));
+    }
+    let exclusions = std::fs::read_to_string(data.join("exclusions.csv")).expect("exclusions");
+    let excluded_users = exclusions
+        .lines()
+        .skip(1)
+        .map(|line| line.split(',').next().expect("excluded user").to_string())
+        .collect::<std::collections::HashSet<_>>();
+    let conflicted_users = assignments_by_user
+        .values()
+        .filter(|rows| {
+            rows.iter()
+                .map(|(variant, _)| variant)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                > 1
+        })
+        .count();
+    let counted_excluded_users = excluded_users
+        .iter()
+        .filter(|user| {
+            assignments_by_user.get(*user).is_some_and(|rows| {
+                rows.iter()
+                    .map(|(variant, _)| variant)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    == 1
+            })
+        })
+        .count();
+    let eligible = assignments_by_user
+        .iter()
+        .filter_map(|(user, rows)| {
+            let variants = rows
+                .iter()
+                .map(|(variant, _)| variant)
+                .collect::<std::collections::HashSet<_>>();
+            (variants.len() == 1 && !excluded_users.contains(user))
+                .then(|| (user.clone(), (rows[0].0.clone(), rows[0].1)))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let events = std::fs::read_to_string(data.join("events.csv")).expect("events");
+    let event_rows = events.lines().skip(1).count();
+    let mut seen_event_ids = std::collections::HashSet::new();
+    let mut duplicate_event_rows = 0;
+    let mut orphan_events = 0;
+    let mut out_of_window_checkouts = 0;
+    let mut duplicate_order_events = 0;
+    let mut orders: std::collections::HashMap<String, Order> = std::collections::HashMap::new();
+    let mut refunds = Vec::new();
+    for line in events.lines().skip(1) {
+        let fields = line.split(',').collect::<Vec<_>>();
+        if !seen_event_ids.insert(fields[0].to_string()) {
+            duplicate_event_rows += 1;
+            continue;
+        }
+        let Some((variant, assigned_minute)) = eligible.get(fields[1]) else {
+            orphan_events += 1;
+            continue;
+        };
+        let occurred_minute = timestamp_minute(fields[3]);
+        match fields[2] {
+            "checkout" => {
+                if occurred_minute < *assigned_minute
+                    || occurred_minute >= *assigned_minute + 72 * 60
+                {
+                    out_of_window_checkouts += 1;
+                    continue;
+                }
+                let order = Order {
+                    variant: variant.clone(),
+                    user: fields[1].to_string(),
+                    amount: fields[5].parse::<i64>().expect("checkout amount"),
+                    occurred_minute,
+                };
+                match orders.get(fields[4]) {
+                    Some(current) => {
+                        duplicate_order_events += 1;
+                        if order.occurred_minute < current.occurred_minute {
+                            orders.insert(fields[4].to_string(), order);
+                        }
+                    }
+                    None => {
+                        orders.insert(fields[4].to_string(), order);
+                    }
+                }
+            }
+            "refund" => refunds.push((
+                fields[4].to_string(),
+                fields[5].parse::<i64>().expect("refund amount"),
+                occurred_minute,
+            )),
+            _ => {}
+        }
+    }
+    let refund_cutoff = timestamp_minute("2026-07-08T00:00:00Z");
+    let mut refunded_orders = std::collections::HashMap::new();
+    for (order_id, amount, occurred_minute) in refunds {
+        if occurred_minute <= refund_cutoff && orders.contains_key(&order_id) {
+            refunded_orders.entry(order_id).or_insert(amount);
+        }
+    }
+
+    let metrics = |variant: &str| {
+        let eligible_users = eligible
+            .values()
+            .filter(|(row_variant, _)| row_variant == variant)
+            .count();
+        let variant_orders = orders
+            .iter()
+            .filter(|(_, order)| order.variant == variant)
+            .collect::<Vec<_>>();
+        let converters = variant_orders
+            .iter()
+            .map(|(_, order)| order.user.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        let gross_revenue_cents = variant_orders
+            .iter()
+            .map(|(_, order)| order.amount)
+            .sum::<i64>();
+        let variant_refunds = variant_orders
+            .iter()
+            .filter_map(|(order_id, _)| refunded_orders.get(*order_id))
+            .copied()
+            .collect::<Vec<_>>();
+        let refund_cents = variant_refunds.iter().sum::<i64>();
+        let orders = variant_orders.len();
+        let net_revenue_cents = gross_revenue_cents - refund_cents;
+        VariantMetrics {
+            eligible_users,
+            converters,
+            conversion_rate_pct: converters as f64 / eligible_users as f64 * 100.0,
+            orders,
+            gross_revenue_cents,
+            refunded_orders: variant_refunds.len(),
+            refund_rate_pct: variant_refunds.len() as f64 / orders as f64 * 100.0,
+            refund_cents,
+            net_revenue_cents,
+            net_revenue_per_eligible_cents: (net_revenue_cents as f64 / eligible_users as f64)
+                .round() as i64,
+        }
+    };
+
+    assert_eq!(assignment_rows, 25);
+    assert_eq!(duplicate_assignment_rows, 1);
+    assert_eq!(conflicted_users, 1);
+    assert_eq!(counted_excluded_users, 2);
+    assert_eq!(event_rows, 27);
+    assert_eq!(duplicate_event_rows, 1);
+    assert_eq!(orphan_events, 4);
+    assert_eq!(out_of_window_checkouts, 2);
+    assert_eq!(duplicate_order_events, 1);
+
+    let control = metrics("control");
+    let treatment = metrics("treatment");
+    assert_eq!(
+        control,
+        VariantMetrics {
+            eligible_users: 10,
+            converters: 5,
+            conversion_rate_pct: 50.0,
+            orders: 5,
+            gross_revenue_cents: 47_000,
+            refunded_orders: 1,
+            refund_rate_pct: 20.0,
+            refund_cents: 8_000,
+            net_revenue_cents: 39_000,
+            net_revenue_per_eligible_cents: 3_900,
+        }
+    );
+    assert_eq!(
+        treatment,
+        VariantMetrics {
+            eligible_users: 10,
+            converters: 7,
+            conversion_rate_pct: 70.0,
+            orders: 8,
+            gross_revenue_cents: 65_000,
+            refunded_orders: 2,
+            refund_rate_pct: 25.0,
+            refund_cents: 24_000,
+            net_revenue_cents: 41_000,
+            net_revenue_per_eligible_cents: 4_100,
+        }
+    );
+    let relative_conversion_uplift = (treatment.conversion_rate_pct - control.conversion_rate_pct)
+        / control.conversion_rate_pct
+        * 100.0;
+    let revenue_uplift = (treatment.net_revenue_per_eligible_cents
+        - control.net_revenue_per_eligible_cents) as f64
+        / control.net_revenue_per_eligible_cents as f64
+        * 100.0;
+    let refund_delta = treatment.refund_rate_pct - control.refund_rate_pct;
+    assert!((relative_conversion_uplift - 40.0).abs() < 0.001);
+    assert!((revenue_uplift - 5.128205).abs() < 0.001);
+    assert!((refund_delta - 5.0).abs() < 0.001);
+    assert!(
+        relative_conversion_uplift >= 20.0 && revenue_uplift >= 5.0 && refund_delta > 3.0,
+        "fixture should pass the upside gates but fail the refund guardrail"
     );
 }
 

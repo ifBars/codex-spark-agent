@@ -110,6 +110,12 @@ independently weighted validation signals. Its initial cross-runner development
 evidence, including excluded prompt and provider failures, is documented in
 [`benchmarks/inventory-rebalance-pilot-2026-07-26.md`](benchmarks/inventory-rebalance-pilot-2026-07-26.md).
 
+`experiment-rollout-audit` adds a separate data-quality surface: assignment
+conflicts and exclusions, event and order deduplication, half-open attribution
+windows, refund joins, uplift calculations, and a multi-gate rollout decision.
+Its expected metrics are recomputed from the published fixtures in tests rather
+than trusted as unexplained constants.
+
 Run a focused category exactly like any other suite:
 
 ```powershell
@@ -126,6 +132,11 @@ bun scripts/build_benchmark_views.mjs
 The view specification, generated category CSV, and web JSON are checked in so the aggregation is reviewable without rerunning provider benchmarks.
 
 The quick comparison script preflights native Codex before spending a Spark run and writes resumable status artifacts when the provider is unavailable. Comparison reports keep provider failures separate from task failures and record runner versions, scenario coverage, and input freshness.
+
+The quick harness script also fails after preserving its report when every row is
+a request failure, preventing an infrastructure-only batch from appearing to be
+task-performance evidence. Use `-AllowRequestFailureReport` only when intentionally
+capturing provider diagnostics.
 
 Reports are written under `.spark-profile/`. Keep reports and traces private unless you have reviewed their contents.
 

@@ -976,6 +976,7 @@ fn quick_harness_script_reports_exact_run_manifest() {
     assert!(script.contains("New-Item -ItemType Directory -Force -Path $BenchmarkDir"));
     assert!(script.contains("benchmark_report=skipped reason=no-trace"));
     assert!(script.contains("[switch]$ListScenarios"));
+    assert!(script.contains("[switch]$AllowRequestFailureReport"));
     assert!(script.contains("[string[]]$Scenario = @()"));
     assert!(script.contains("quick_benchmark_scenarios.ps1"));
     assert!(script.contains("$Scenario = @(Get-QuickRealWorldScenario)"));
@@ -998,6 +999,10 @@ fn quick_harness_script_reports_exact_run_manifest() {
     assert!(script.contains("--run-manifest $harnessManifest"));
     assert!(script.contains("Write-Host \"harness_manifest=$harnessManifest\""));
     assert!(script.contains("Write-Host \"harness_report=$harnessReport\""));
+    assert!(script.contains("Write-Host \"harness_request_failures=$requestFailureRows\""));
+    assert!(script.contains("Write-Host \"comparable_harness_rows=$comparableRows\""));
+    assert!(script.contains("Harness benchmark produced only request-failure rows"));
+    assert!(script.contains("-AllowRequestFailureReport"));
     let no_trace_marker = script
         .find("benchmark_report=skipped reason=no-trace")
         .expect("no-trace report skip marker");

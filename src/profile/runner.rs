@@ -333,6 +333,9 @@ fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
         ProfileScenarioKind::InventoryRebalancePlan => {
             "This scenario measures constrained quantitative planning, not prose fluency. Read the brief, policy, and all three CSVs; enumerate every feasible subset independently for both budgets with a Windows-compatible Bun or PowerShell command from the benchmark workspace root; enforce lead time, origin surplus, destination deficit, and cost constraints before ranking candidates; apply both tie-breakers; write the exact JSON schema and grounded memo to the fully qualified fixture paths; then verify each selected set and arithmetic total once before stopping."
         }
+        ProfileScenarioKind::ExperimentRolloutAudit => {
+            "This scenario measures data-quality reasoning and policy-grounded experiment analysis. Read the brief, policy, and all three CSVs; use a Windows-compatible Bun or PowerShell script to deduplicate assignments and events, remove conflicts and exclusions, attribute unique orders inside the half-open 72-hour window, join refunds only to attributed orders, and calculate both variants from eligible-user denominators. Write the exact JSON schema and a memo that evaluates every launch gate, then re-read both outputs and verify the decisive refund guardrail before stopping."
+        }
         ProfileScenarioKind::ConfigMigration => {
             "Comparison evidence: Spark completed migration tasks but lost process quality through repeated/extra calls and incomplete proof. Spend extra effort here only on targeted verification: read each required file, patch the three required artifacts, validate JSON, search for stale names, and stop after the migration evidence is complete."
         }

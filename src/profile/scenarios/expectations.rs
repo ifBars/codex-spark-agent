@@ -117,6 +117,9 @@ pub(crate) fn profile_scenario_expected_tool_groups(
         ProfileScenarioKind::InventoryRebalancePlan => {
             vec![vec!["fs.read"], vec!["cmd.exec"], vec!["fs.write"]]
         }
+        ProfileScenarioKind::ExperimentRolloutAudit => {
+            vec![vec!["fs.read"], vec!["cmd.exec"], vec!["fs.write"]]
+        }
         ProfileScenarioKind::MultiModuleBugfix => {
             vec![
                 vec!["fs.read"],
@@ -802,6 +805,47 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.read",
                 "path": ".spark-scenarios/inventory-rebalance-plan/memo.md",
+            }),
+        ],
+        ProfileScenarioKind::ExperimentRolloutAudit => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/experiment-rollout-audit/brief.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/experiment-rollout-audit/policy.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/experiment-rollout-audit/data/assignments.csv",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/experiment-rollout-audit/data/exclusions.csv",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/experiment-rollout-audit/data/events.csv",
+            }),
+            json!({
+                "tool": "cmd.exec",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/experiment-rollout-audit/audit.json",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/experiment-rollout-audit/memo.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/experiment-rollout-audit/audit.json",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/experiment-rollout-audit/memo.md",
             }),
         ],
         ProfileScenarioKind::MultiModuleBugfix => vec![

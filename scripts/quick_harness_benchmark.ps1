@@ -7,6 +7,7 @@ param(
     [string]$Suite = "real-world",
     [string[]]$Scenario = @(),
     [switch]$ListScenarios,
+    [switch]$AllowRequestFailureReport,
     [switch]$NoTrace
 )
 
@@ -129,6 +130,18 @@ try {
     $harnessReport = Get-LatestHarnessReportFile -Directory $BenchmarkDir -Suite $Suite -SinceUtc $harnessReportStartedAt
     Write-Host "harness_manifest=$harnessManifest"
     Write-Host "harness_report=$harnessReport"
+    $report = Get-Content -LiteralPath $harnessReport -Raw | ConvertFrom-Json
+    $requestFailureRows = @(
+        $report.rows | Where-Object {
+            @([string]$_.diagnostics -split ";" | ForEach-Object { $_.Trim() }) -contains "request_failure"
+        }
+    ).Count
+    $comparableRows = @($report.rows).Count - $requestFailureRows
+    Write-Host "harness_request_failures=$requestFailureRows"
+    Write-Host "comparable_harness_rows=$comparableRows"
+    if (-not $AllowRequestFailureReport -and $requestFailureRows -gt 0 -and $comparableRows -eq 0) {
+        throw "Harness benchmark produced only request-failure rows. The report was preserved at '$harnessReport', but it is not task-performance evidence. Re-run after the provider recovers, or pass -AllowRequestFailureReport to accept an infrastructure-only report."
+    }
 }
 finally {
     Pop-Location

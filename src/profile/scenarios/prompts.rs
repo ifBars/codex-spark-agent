@@ -430,6 +430,20 @@ pub(crate) fn profile_scenario_prompts(
              Finish with both selected option sets, their net benefits, and the incremental net benefit."
                 .to_string(),
         ]),
+        ProfileScenarioKind::ExperimentRolloutAudit => Ok(vec![
+            "Profile scenario: experiment-rollout-audit.\n\
+             Work only under .spark-scenarios/experiment-rollout-audit.\n\
+             Produce a defensible experiment rollout audit from dirty assignment and event data.\n\
+             Required actions:\n\
+             1. Read brief.md and policy.md.\n\
+             2. Read data/assignments.csv, data/exclusions.csv, and data/events.csv.\n\
+             3. Use a short Bun or PowerShell script from the benchmark workspace root to canonicalize assignments and events, attribute orders, apply refunds, and calculate both variants; do not hand-count the CSV or use Bash-only heredoc syntax.\n\
+             4. Write .spark-scenarios/experiment-rollout-audit/audit.json with the exact schema and rounded values requested in the brief.\n\
+             5. Write .spark-scenarios/experiment-rollout-audit/memo.md explaining every launch gate, the decisive guardrail, and the important data-quality exclusions.\n\
+             6. Re-read both fully qualified outputs and verify denominators, order deduplication, refund attribution, and the final decision.\n\
+             Finish with the decision and the four uplift/guardrail values."
+                .to_string(),
+        ]),
         ProfileScenarioKind::MultiModuleBugfix => Ok(vec![
             "Profile scenario: multi-module-bugfix.\n\
              Work only under .spark-scenarios/multi-module-bugfix.\n\
@@ -801,6 +815,20 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              5. Write .spark-scenarios/inventory-rebalance-plan/memo.md explaining the budget tradeoff, the binding constraints, and why T14 is ineligible.\n\
              6. Re-read both fully qualified output paths and verify every total once before finishing.\n\
              Finish with both option sets, total cost, net benefit, and incremental net benefit."
+                .to_string()
+        }
+        ProfileScenarioKind::ExperimentRolloutAudit => {
+            "Benchmark scenario: experiment-rollout-audit.\n\
+             Work only under .spark-scenarios/experiment-rollout-audit.\n\
+             Audit the treatment rollout using the supplied policy and dirty assignment/event data. This is a scoped fixture task; do not inspect unrelated repository files or edit inputs.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/experiment-rollout-audit/brief.md and policy.md.\n\
+             2. Read data/assignments.csv, data/exclusions.csv, and data/events.csv.\n\
+             3. Use a short Bun or PowerShell script from the benchmark workspace root to deduplicate rows, resolve assignment eligibility, attribute 72-hour orders, apply refunds, and calculate the requested metrics. Do not hand-count rows or use Bash-only heredoc syntax.\n\
+             4. Write .spark-scenarios/experiment-rollout-audit/audit.json with the exact schema and rounding from the brief.\n\
+             5. Write .spark-scenarios/experiment-rollout-audit/memo.md explaining which launch gates pass, which fail, the decisive guardrail, and the important data-quality exclusions.\n\
+             6. Re-read both fully qualified outputs and verify every denominator, order/refund join, uplift, and the final decision once before finishing.\n\
+             Finish with the decision, conversion uplift, revenue-per-eligible uplift, and refund-rate delta."
                 .to_string()
         }
         ProfileScenarioKind::MultiModuleBugfix => {

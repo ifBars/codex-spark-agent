@@ -27,6 +27,7 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
         ProfileScenarioKind::ConfigMigration => Some("config-migration"),
         ProfileScenarioKind::OpsReport => Some("ops-report"),
         ProfileScenarioKind::InventoryRebalancePlan => Some("inventory-rebalance-plan"),
+        ProfileScenarioKind::ExperimentRolloutAudit => Some("experiment-rollout-audit"),
         ProfileScenarioKind::MultiModuleBugfix => Some("multi-module-bugfix"),
         ProfileScenarioKind::StatefulReconciliationBugfix => Some("stateful-reconciliation-bugfix"),
         ProfileScenarioKind::TerminalRepair => Some("terminal-repair"),
@@ -525,6 +526,37 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
             .map_err(|error| {
                 anyhow::anyhow!("failed to write fixture transfer_options.csv: {error}")
             })?;
+        }
+        ProfileScenarioKind::ExperimentRolloutAudit => {
+            std::fs::create_dir_all(dir.join("data"))
+                .map_err(|error| anyhow::anyhow!("failed to create data fixture: {error}"))?;
+            std::fs::write(
+                dir.join("brief.md"),
+                "# Experiment Rollout Audit\n\nAudit the `control` and `treatment` variants using `policy.md` and all three CSV files. Write `.spark-scenarios/experiment-rollout-audit/audit.json` and `.spark-scenarios/experiment-rollout-audit/memo.md`. The JSON must contain exactly the top-level keys `control`, `dataQuality`, `decision`, `treatment`, and `uplifts`. Each variant must contain exactly `conversionRatePct`, `converters`, `eligibleUsers`, `grossRevenueCents`, `netRevenueCents`, `netRevenuePerEligibleCents`, `orders`, `refundCents`, `refundRatePct`, and `refundedOrders`. `uplifts` must contain exactly `conversionUpliftPercentagePoints`, `netRevenuePerEligibleUpliftPct`, `refundRateDeltaPercentagePoints`, and `relativeConversionUpliftPct`. `dataQuality` must contain exactly `assignmentRows`, `conflictedUsers`, `duplicateAssignmentRows`, `duplicateEventRows`, `duplicateOrderEvents`, `eventRows`, `excludedUsers`, `orphanEvents`, and `outOfWindowCheckouts`. Use numeric percentages, not fractions. `decision` must be `launch` or `hold`. Do not edit the inputs. Use a short Bun or PowerShell audit script rather than hand-counting rows.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
+            std::fs::write(
+                dir.join("policy.md"),
+                "# Experiment Policy\n\n- Collapse exact duplicate assignment rows. `duplicateAssignmentRows` counts only the removed rows.\n- A user assigned to more than one distinct variant is conflicted and excluded. Count the user once in `conflictedUsers`.\n- Remove users listed in `exclusions.csv`; `excludedUsers` counts distinct listed users that otherwise have a non-conflicted assignment.\n- The remaining canonical assignments are the denominators for each variant.\n- Collapse exact duplicate event rows by `event_id`; `duplicateEventRows` counts removed rows.\n- An event whose user has no remaining eligible assignment is an orphan event, including events for conflicted, excluded, or unknown users.\n- A checkout is attributed when it occurs at or after assignment and strictly before 72 hours after assignment. Count eligible-user checkouts outside that window in `outOfWindowCheckouts`.\n- Deduplicate attributed checkouts by `order_id`, keeping the earliest event. Count later attributed checkout events for an already-counted order in `duplicateOrderEvents`.\n- A user converts once when they have at least one attributed unique order. `orders` counts attributed unique orders. Gross revenue is the sum of their checkout `amount_cents`.\n- A refund counts only when it references an attributed order and occurs by `2026-07-08T00:00:00Z`. Count refunded orders once and subtract the first matching refund amount from net revenue.\n- Conversion rate is converters divided by eligible users. Refund rate is refunded orders divided by attributed orders. Net revenue per eligible user is net revenue divided by eligible users. Report rates as percentages rounded to two decimals and revenue-per-eligible cents rounded to the nearest whole cent.\n- Uplifts are treatment minus control. Relative conversion uplift and net-revenue-per-eligible uplift divide that difference by the control value and are percentages rounded to two decimals.\n- Recommend `launch` only when both variants have at least 10 eligible users, relative conversion uplift is at least 20%, net-revenue-per-eligible uplift is at least 5%, and treatment refund rate is no more than 3 percentage points above control. Otherwise recommend `hold`.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture policy.md: {error}"))?;
+            std::fs::write(
+                dir.join("data").join("assignments.csv"),
+                "user_id,variant,assigned_at\nC01,control,2026-07-01T00:00:00Z\nC02,control,2026-07-01T00:00:00Z\nC03,control,2026-07-01T00:00:00Z\nC04,control,2026-07-01T00:00:00Z\nC05,control,2026-07-01T00:00:00Z\nC06,control,2026-07-01T00:00:00Z\nC07,control,2026-07-01T00:00:00Z\nC08,control,2026-07-01T00:00:00Z\nC09,control,2026-07-01T00:00:00Z\nC10,control,2026-07-01T00:00:00Z\nT01,treatment,2026-07-01T00:00:00Z\nT02,treatment,2026-07-01T00:00:00Z\nT03,treatment,2026-07-01T00:00:00Z\nT04,treatment,2026-07-01T00:00:00Z\nT05,treatment,2026-07-01T00:00:00Z\nT06,treatment,2026-07-01T00:00:00Z\nT07,treatment,2026-07-01T00:00:00Z\nT08,treatment,2026-07-01T00:00:00Z\nT09,treatment,2026-07-01T00:00:00Z\nT10,treatment,2026-07-01T00:00:00Z\nC03,control,2026-07-01T00:00:00Z\nX01,control,2026-07-01T00:00:00Z\nX01,treatment,2026-07-01T01:00:00Z\nE01,control,2026-07-01T00:00:00Z\nB01,treatment,2026-07-01T00:00:00Z\n",
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to write fixture assignments.csv: {error}")
+            })?;
+            std::fs::write(
+                dir.join("data").join("exclusions.csv"),
+                "user_id,reason\nE01,employee\nB01,automation\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture exclusions.csv: {error}"))?;
+            std::fs::write(
+                dir.join("data").join("events.csv"),
+                "event_id,user_id,event_type,occurred_at,order_id,amount_cents\nEC01,C01,checkout,2026-07-01T01:00:00Z,OC01,12000\nEC02,C02,checkout,2026-07-01T02:00:00Z,OC02,8000\nRC02,C02,refund,2026-07-02T00:00:00Z,OC02,8000\nEC03,C03,checkout,2026-07-01T03:00:00Z,OC03,5000\nEC03,C03,checkout,2026-07-01T03:00:00Z,OC03,5000\nEC05,C05,checkout,2026-07-04T00:00:00Z,OC05,9000\nEC06A,C06,checkout,2026-07-01T05:00:00Z,OC06,15000\nEC06B,C06,checkout,2026-07-01T06:00:00Z,OC06,15000\nEC08,C08,checkout,2026-07-02T00:00:00Z,OC08,7000\nRC09,C09,refund,2026-07-02T01:00:00Z,UNKNOWN,5000\nET01,T01,checkout,2026-07-01T01:00:00Z,OT01,10000\nET02,T02,checkout,2026-07-01T02:00:00Z,OT02,9000\nET03A,T03,checkout,2026-07-01T03:00:00Z,OT03A,6000\nET03B,T03,checkout,2026-07-01T04:00:00Z,OT03B,4000\nET04,T04,checkout,2026-07-01T05:00:00Z,OT04,11000\nRT04,T04,refund,2026-07-02T00:00:00Z,OT04,11000\nET05,T05,checkout,2026-07-01T06:00:00Z,OT05,7000\nET06,T06,checkout,2026-07-04T00:00:00Z,OT06,8000\nET08,T08,checkout,2026-07-01T08:00:00Z,OT08,13000\nRT08,T08,refund,2026-07-03T00:00:00Z,OT08,13000\nET09,T09,checkout,2026-07-01T09:00:00Z,OT09,5000\nEX01,X01,checkout,2026-07-01T02:00:00Z,OX01,3000\nEE01,E01,checkout,2026-07-01T02:00:00Z,OE01,3000\nEB01,B01,checkout,2026-07-01T02:00:00Z,OB01,3000\nEZ99,Z99,checkout,2026-07-01T02:00:00Z,OZ99,3000\nVC04,C04,view,2026-07-01T02:00:00Z,,0\nST07,T07,session_start,2026-07-01T02:00:00Z,,0\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture events.csv: {error}"))?;
         }
         ProfileScenarioKind::MultiModuleBugfix => {
             std::fs::create_dir_all(dir.join("src"))
