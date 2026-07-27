@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { datasets } from "./benchmarks.js";
+import { coverageLabel, datasets } from "./benchmarks.js";
 
 describe("expanded reasoning dataset", () => {
   const expanded = datasets[0];
@@ -45,5 +45,31 @@ describe("expanded reasoning dataset", () => {
         expect(row.durationMax).toBeGreaterThanOrEqual(row.duration);
       }
     }
+  });
+
+  it("publishes an explicit evidence contract for every dataset", () => {
+    for (const dataset of datasets) {
+      expect(dataset.evidence.scenarioCount).toBeGreaterThan(0);
+      expect(dataset.evidence.taskRuns).toBeGreaterThan(0);
+      expect(dataset.evidence.taskRuns).toBe(
+        dataset.rows.reduce((total, row) => total + row.runs, 0),
+      );
+      expect(typeof dataset.evidence.taskFailuresRetained).toBe("boolean");
+      expect(dataset.evidence.note.length).toBeGreaterThan(40);
+      expect(
+        dataset.evidence.providerExclusions === null
+          || dataset.evidence.providerExclusions >= 0,
+      ).toBe(true);
+      expect(dataset.views[0].scenarioCount).toBe(dataset.evidence.scenarioCount);
+      expect(dataset.views[0].runCount).toBe(dataset.rows[0].runs);
+    }
+  });
+
+  it("labels narrow category coverage without implying mature rankings", () => {
+    expect(coverageLabel(1)).toBe("Pilot coverage");
+    expect(coverageLabel(2)).toBe("Early coverage");
+    expect(coverageLabel(4)).toBe("Developing coverage");
+    expect(coverageLabel(9)).toBe("Broad coverage");
+    expect(coverageLabel(null)).toBe("Historical");
   });
 });

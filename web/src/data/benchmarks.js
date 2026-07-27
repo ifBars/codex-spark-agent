@@ -35,6 +35,16 @@ const datasetDefinitions = [
       "https://github.com/ifBars/codex-spark-agent/blob/main/docs/benchmarks/reasoning-cost-quality-categories-2026-07-26.csv",
     description:
       "A 162-run matrix with scenario-balanced averages, behavioral quality scoring, and zero provider/API failures.",
+    evidence: {
+      status: "Reviewed snapshot",
+      scenarioCount: 9,
+      pendingScenarioCount: 2,
+      taskRuns: 162,
+      providerExclusions: 0,
+      taskFailuresRetained: true,
+      note:
+        "Inventory planning and experiment rollout audit are newer fixtures. They remain outside this snapshot until balanced reruns are available.",
+    },
     views: expandedViews,
     rows: expandedViews[0].rows,
   },
@@ -49,6 +59,16 @@ const datasetDefinitions = [
       "https://github.com/ifBars/codex-spark-agent/blob/main/docs/benchmarks/reasoning-cost-quality-pilot-2026-07-26.csv",
     description:
       "Weighted behavioral validation keeps incomplete task work visible instead of collapsing every failure to a blanket score.",
+    evidence: {
+      status: "Development pilot",
+      scenarioCount: 1,
+      pendingScenarioCount: 0,
+      taskRuns: 18,
+      providerExclusions: null,
+      taskFailuresRetained: true,
+      note:
+        "A single stateful task reveals scoring behavior, but it is not broad enough to support model-wide conclusions.",
+    },
     rows: [
       point("spark", "low", {
         quality: 30, qualityMin: 0, qualityMax: 65,
@@ -99,6 +119,16 @@ const datasetDefinitions = [
       "https://github.com/ifBars/codex-spark-agent/blob/main/docs/benchmarks/reasoning-cost-quality-2026-07-26.csv",
     description:
       "The earlier paired matrix reports successful-row means across eight real-world tasks. It is useful for comparison, but its success-only quality scores are visibly saturated.",
+    evidence: {
+      status: "Legacy baseline",
+      scenarioCount: 8,
+      pendingScenarioCount: 0,
+      taskRuns: 144,
+      providerExclusions: null,
+      taskFailuresRetained: false,
+      note:
+        "This legacy artifact averages successful rows and does not classify infrastructure exclusions. Prefer the expanded suite for current methodology.",
+    },
     rows: [
       point("spark", "low", {
         quality: 99.04, qualityMin: 97.67, qualityMax: 100,
@@ -149,13 +179,22 @@ export const datasets = datasetDefinitions.map((dataset) => ({
       label: "Overall",
       description: dataset.description,
       sample: dataset.sample,
-      scenarioCount: null,
+      scenarioCount: dataset.evidence.scenarioCount,
+      runCount: dataset.rows[0]?.runs ?? null,
       rows: dataset.rows,
     }],
 }));
 
 export const runnerOptions = Object.values(runnerMeta);
 export const reasoningOptions = ["low", "medium", "high"];
+
+export function coverageLabel(scenarioCount) {
+  if (scenarioCount === null) return "Historical";
+  if (scenarioCount <= 1) return "Pilot coverage";
+  if (scenarioCount <= 2) return "Early coverage";
+  if (scenarioCount <= 4) return "Developing coverage";
+  return "Broad coverage";
+}
 
 export const xMetrics = {
   tokens: {

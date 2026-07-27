@@ -1,8 +1,14 @@
 import { useMemo, useState } from "react";
 import { ArrowRight, Flask, Info } from "@phosphor-icons/react";
-import { datasets, reasoningOptions, runnerOptions } from "../data/benchmarks.js";
+import {
+  coverageLabel,
+  datasets,
+  reasoningOptions,
+  runnerOptions,
+} from "../data/benchmarks.js";
 import { BenchmarkAtlasNav } from "./BenchmarkAtlasNav.jsx";
 import { CostQualityChart } from "./CostQualityChart.jsx";
+import { EvidenceStrip } from "./EvidenceStrip.jsx";
 import { FilterStrip } from "./FilterStrip.jsx";
 import { RankingLedger } from "./RankingLedger.jsx";
 import { ResultsLedger } from "./ResultsLedger.jsx";
@@ -62,6 +68,8 @@ export function BenchmarkExplorer() {
             </div>
           </header>
 
+          <EvidenceStrip evidence={dataset.evidence} />
+
           <FilterStrip
             datasetId={datasetId}
             onDatasetChange={(value) => {
@@ -101,7 +109,7 @@ export function BenchmarkExplorer() {
               rangeKind={dataset.rangeKind}
               contextLabel={overallView.label}
               description={overallView.description}
-              meta={`${overallView.scenarioCount ?? "Historical"} tasks · ${overallView.runCount ?? rows[0]?.runs ?? 0} runs per level`}
+              meta={`${overallView.scenarioCount ?? "Historical"} tasks · ${overallView.runCount ?? rows[0]?.runs ?? 0} runs per level · ${coverageLabel(overallView.scenarioCount)}`}
               wide
               showInspector={false}
             />
@@ -127,7 +135,7 @@ export function BenchmarkExplorer() {
                     rangeKind={dataset.rangeKind}
                     contextLabel={view.label}
                     description={view.description}
-                    meta={`${view.scenarioCount} tasks · ${view.runCount} runs per level`}
+                    meta={`${view.scenarioCount} tasks · ${view.runCount} runs per level · ${coverageLabel(view.scenarioCount)}`}
                     compact
                     showInspector={false}
                   />
@@ -166,7 +174,7 @@ export function BenchmarkExplorer() {
             <article>
               <h3>Failure handling</h3>
               <p>
-                Genuine task failures stay in the aggregate. Provider and API failures are excluded because they do not measure task performance.
+                Genuine task failures stay in current-method aggregates. Provider and API failures are excluded because they do not measure task performance; the selected dataset&apos;s count appears above.
               </p>
             </article>
             <article>
