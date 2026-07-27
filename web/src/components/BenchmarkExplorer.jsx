@@ -31,7 +31,6 @@ export function BenchmarkExplorer() {
   const [enabledRunners, setEnabledRunners] = useState(new Set(runnerOptions.map((runner) => runner.id)));
   const [enabledReasoning, setEnabledReasoning] = useState(new Set(reasoningOptions));
   const [showRanges, setShowRanges] = useState(true);
-  const [selectedPoint, setSelectedPoint] = useState(null);
 
   const dataset = datasets.find((candidate) => candidate.id === datasetId) ?? datasets[0];
   const visibleViews = useMemo(
@@ -46,7 +45,6 @@ export function BenchmarkExplorer() {
   );
   const overallView = visibleViews[0];
   const rows = overallView.rows;
-  const selectedVisible = selectedPoint && rows.includes(selectedPoint) ? selectedPoint : rows[0];
 
   return (
     <>
@@ -78,7 +76,6 @@ export function BenchmarkExplorer() {
             datasetId={datasetId}
             onDatasetChange={(value) => {
               setDatasetId(value);
-              setSelectedPoint(null);
             }}
             xMetric={xMetric}
             onXMetricChange={setXMetric}
@@ -87,12 +84,10 @@ export function BenchmarkExplorer() {
             enabledRunners={enabledRunners}
             onToggleRunner={(runner) => {
               setEnabledRunners((current) => toggleSet(current, runner));
-              setSelectedPoint(null);
             }}
             enabledReasoning={enabledReasoning}
             onToggleReasoning={(reasoning) => {
               setEnabledReasoning((current) => toggleSet(current, reasoning));
-              setSelectedPoint(null);
             }}
             showRanges={showRanges}
             onShowRangesChange={setShowRanges}
@@ -108,14 +103,11 @@ export function BenchmarkExplorer() {
               xMetric={xMetric}
               yMetric={yMetric}
               showRanges={showRanges}
-              selectedPoint={selectedVisible}
-              onSelectPoint={setSelectedPoint}
               rangeKind={dataset.rangeKind}
               contextLabel={overallView.label}
               description={overallView.description}
               meta={`${overallView.scenarioCount ?? "Historical"} tasks · ${overallView.runCount ?? rows[0]?.runs ?? 0} runs per level · ${coverageLabel(overallView.scenarioCount)}`}
               wide
-              showInspector={false}
             />
             <RankingLedger rows={rows} xMetric={xMetric} yMetric={yMetric} />
           </section>
@@ -134,14 +126,11 @@ export function BenchmarkExplorer() {
                     xMetric={xMetric}
                     yMetric={yMetric}
                     showRanges={showRanges}
-                    selectedPoint={null}
-                    onSelectPoint={setSelectedPoint}
                     rangeKind={dataset.rangeKind}
                     contextLabel={view.label}
                     description={view.description}
                     meta={`${view.scenarioCount} tasks · ${view.runCount} runs per level · ${coverageLabel(view.scenarioCount)}`}
                     compact
-                    showInspector={false}
                   />
                 </section>
               ))}

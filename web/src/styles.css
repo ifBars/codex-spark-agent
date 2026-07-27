@@ -640,16 +640,14 @@ a {
 }
 
 .chart-legend span,
-.runner-cell,
-.point-inspector__runner {
+.runner-cell {
   display: inline-flex;
   align-items: center;
   gap: 0.48rem;
 }
 
 .chart-legend i,
-.runner-cell i,
-.point-inspector__runner i {
+.runner-cell i {
   width: 0.55rem;
   height: 0.55rem;
   border-radius: 50%;
@@ -665,8 +663,7 @@ a {
 }
 
 .chart-canvas {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 13rem;
+  display: block;
   min-height: 33rem;
 }
 
@@ -998,12 +995,18 @@ a {
 
 .point-target {
   cursor: pointer;
-  transition: r 140ms ease, stroke-width 140ms ease;
+  outline: none;
+  transition:
+    r 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    filter 160ms ease,
+    opacity 160ms ease;
 }
 
 .point-target:hover,
-.point-target:focus {
+.point-target:focus-visible,
+.point-target.is-active {
   r: 10;
+  filter: drop-shadow(0 0 5px currentcolor);
 }
 
 .point-label {
@@ -1018,49 +1021,53 @@ a {
   stroke-width: 4px;
 }
 
-.point-inspector {
-  align-self: stretch;
-  padding: 1.4rem 1.2rem;
-  border-left: 1px solid var(--rule);
-  background: var(--paper-muted);
+.chart-tooltip {
+  pointer-events: none;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: chart-tooltip-enter 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  filter: drop-shadow(0 9px 14px rgb(36 31 25 / 0.14));
 }
 
-.point-inspector__runner {
-  color: var(--ink);
-  font-size: 0.82rem;
-  font-weight: 600;
+.chart-tooltip rect {
+  fill: var(--paper);
+  stroke: var(--rule-strong);
+  stroke-width: 1;
 }
 
-.point-inspector dl {
-  margin: 1.4rem 0 0;
+.chart-tooltip line {
+  stroke: var(--rule);
+  stroke-width: 1;
 }
 
-.point-inspector dl > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.75rem 0;
-  border-bottom: 1px solid var(--rule);
+.chart-tooltip text {
+  dominant-baseline: auto;
 }
 
-.point-inspector dt {
-  color: var(--ink-muted);
-  font-size: 0.7rem;
+.chart-tooltip__title {
+  fill: var(--ink);
+  font-family: "Geist", sans-serif;
+  font-size: 12px;
+  font-weight: 650;
 }
 
-.point-inspector dd {
-  margin: 0;
+.chart-tooltip__label,
+.chart-tooltip__meta {
+  fill: var(--ink-muted);
+  font-family: "Geist", sans-serif;
+  font-size: 9px;
+}
+
+.chart-tooltip__label {
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chart-tooltip__value {
+  fill: var(--ink);
   font-family: "JetBrains Mono", monospace;
-  font-size: 0.8rem;
-  font-weight: 500;
-}
-
-.point-inspector p {
-  margin: 1rem 0 0;
-  color: var(--ink-muted);
-  font-size: 0.7rem;
-  line-height: 1.55;
+  font-size: 14px;
+  font-weight: 550;
 }
 
 .ledger {
@@ -1242,6 +1249,17 @@ a {
   }
 }
 
+@keyframes chart-tooltip-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 @media (max-width: 1180px) {
   .atlas-overview {
     grid-template-columns: 1fr;
@@ -1369,25 +1387,6 @@ a {
 
   .benchmark-chart {
     min-height: 24rem;
-  }
-
-  .point-inspector {
-    border-top: 1px solid var(--rule);
-    border-left: 0;
-  }
-
-  .point-inspector dl {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1rem;
-  }
-
-  .point-inspector dl > div {
-    display: block;
-  }
-
-  .point-inspector dd {
-    margin-top: 0.35rem;
   }
 
   .methodology-copy {

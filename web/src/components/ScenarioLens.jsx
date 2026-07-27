@@ -11,7 +11,6 @@ export function ScenarioLens({
   source,
 }) {
   const [scenarioId, setScenarioId] = useState(scenarioViews[0]?.id ?? "");
-  const [selectedPoint, setSelectedPoint] = useState(null);
   const scenario = scenarioViews.find((candidate) => candidate.id === scenarioId)
     ?? scenarioViews[0];
   const rows = useMemo(
@@ -21,8 +20,6 @@ export function ScenarioLens({
       ),
     [enabledReasoning, enabledRunners, scenario],
   );
-  const selectedVisible =
-    selectedPoint && rows.includes(selectedPoint) ? selectedPoint : rows[0];
 
   return (
     <section
@@ -47,7 +44,6 @@ export function ScenarioLens({
             value={scenario.id}
             onChange={(event) => {
               setScenarioId(event.target.value);
-              setSelectedPoint(null);
             }}
           >
             {scenarioViews.map((candidate) => (
@@ -65,14 +61,11 @@ export function ScenarioLens({
           xMetric={xMetric}
           yMetric={yMetric}
           showRanges={false}
-          selectedPoint={selectedVisible}
-          onSelectPoint={setSelectedPoint}
           rangeKind={scenario.rangeKind}
           contextLabel={scenario.label}
           description={scenario.description}
           meta={`1 measured task · ${scenario.runCount} runs per level`}
           wide
-          showInspector={false}
         />
       </div>
 

@@ -1,10 +1,11 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 import { xMetrics, yMetrics } from "../data/benchmarks.js";
 import { chartDomain, formatMetric, metricRange, sentenceCase } from "../lib/format.js";
 
 const WIDTH = 1000;
 const HEIGHT = 520;
 const FRAME = { left: 78, right: 34, top: 34, bottom: 70 };
+const TOOLTIP = { width: 236, height: 104, gap: 18 };
 const reasoningOrder = { low: 0, medium: 1, high: 2 };
 const labelOffsets = {
   spark: {
@@ -33,22 +34,25 @@ function clamp(value, [min, max]) {
   return Math.min(max, Math.max(min, value));
 }
 
+function samePoint(left, right) {
+  return left?.runner === right?.runner && left?.reasoning === right?.reasoning;
+}
+
 export function CostQualityChart({
   rows,
   xMetric,
   yMetric,
   showRanges,
-  selectedPoint,
-  onSelectPoint,
   rangeKind,
   contextLabel,
   description,
   meta,
   compact = false,
   wide = false,
-  showInspector = true,
 }) {
   const titleId = useId();
+  const [hoveredPoint, setHoveredPoint] = useState(null);
+  const [pinnedPoint, setPinnedPoint] = useState(null);
   const condensed = compact || wide;
   const height = condensed ? 360 : HEIGHT;
   const frame = condensed
@@ -64,6 +68,9 @@ export function CostQualityChart({
   const rangeY = (value) => y(clamp(value, yDomain));
   const xTicks = ticks(...xDomain);
   const yTicks = ticks(...yDomain);
+  const visiblePinnedPoint = rows.find((row) => samePoint(row, pinnedPoint)) ?? null;
+  const visibleHoveredPoint = rows.find((row) => samePoint(row, hoveredPoint)) ?? null;
+  const activePoint = visibleHoveredPoint ?? visiblePinnedPoint;
 
   const grouped = ["spark", "codex"]
     .map((runner) => rows.filter((row) => row.runner === runner).sort((a, b) => reasoningOrder[a.reasoning] - reasoningOrder[b.reasoning]))
@@ -172,8 +179,7 @@ export function CostQualityChart({
           {rows.map((row) => {
             const xRange = metricRange(row, xMetric, xMetrics);
             const yRange = metricRange(row, yMetric, yMetrics);
-            const active =
-              selectedPoint?.runner === row.runner && selectedPoint?.reasoning === row.reasoning;
+            const active = samePoint(activePoint, row);
             const cx = x(row[xMetrics[xMetric].key]);
             const cy = y(row[yMetrics[yMetric].key]);
             const labelToLeft = cx > WIDTH - 190;
@@ -198,19 +204,29 @@ export function CostQualityChart({
                   </g>
                 )}
                 <circle
-                  className="point-target"
+                  className={`point-target${active ? " is-active" : ""}`}
                   cx={cx}
                   cy={cy}
                   r={active ? 10 : 8}
                   fill={row.color}
-                  stroke={active ? "#171715" : "#fffaf2"}
-                  strokeWidth={active ? 4 : 3}
+                  stroke="#fffaf2"
+                  strokeWidth="3"
+                  style={{ color: row.color }}
                   tabIndex="0"
                   role="button"
                   aria-label={`${row.runnerName}, ${row.reasoning} reasoning: ${formatMetric(yMetric, row[yMetrics[yMetric].key])} ${yMetrics[yMetric].label}, ${formatMetric(xMetric, row[xMetrics[xMetric].key])} ${xMetrics[xMetric].label}`}
-                  onClick={() => onSelectPoint(row)}
-                  onFocus={() => onSelectPoint(row)}
-                  onMouseEnter={() => onSelectPoint(row)}
+                  aria-pressed={samePoint(visiblePinnedPoint, row)}
+                  onClick={() => setPinnedPoint((current) => samePoint(current, row) ? null : row)}
+                  onFocus={() => setHoveredPoint(row)}
+                  onBlur={() => setHoveredPoint(null)}
+                  onMouseEnter={() => setHoveredPoint(row)}
+                  onMouseLeave={() => setHoveredPoint(null)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setPinnedPoint((current) => samePoint(current, row) ? null : row);
+                    }
+                  }}
                 />
                 <text
                   className="point-label"
@@ -223,37 +239,54 @@ export function CostQualityChart({
               </g>
             );
           })}
+
+          {activePoint && (() => {
+            const cx = x(activePoint[xMetrics[xMetric].key]);
+            const cy = y(activePoint[yMetrics[yMetric].key]);
+            const placeLeft = cx + TOOLTIP.gap + TOOLTIP.width > WIDTH - frame.right;
+            const tooltipX = clamp(
+              placeLeft ? cx - TOOLTIP.width - TOOLTIP.gap : cx + TOOLTIP.gap,
+              [frame.left + 8, WIDTH - frame.right - TOOLTIP.width - 8],
+            );
+            const tooltipY = clamp(
+              cy - TOOLTIP.height / 2,
+              [frame.top + 8, height - frame.bottom - TOOLTIP.height - 8],
+            );
+
+            return (
+              <g
+                className="chart-tooltip-position"
+                transform={`translate(${tooltipX} ${tooltipY})`}
+                aria-hidden="true"
+              >
+                <g className="chart-tooltip">
+                  <rect width={TOOLTIP.width} height={TOOLTIP.height} rx="10" />
+                  <circle cx="18" cy="20" r="4" fill={activePoint.color} />
+                  <text className="chart-tooltip__title" x="30" y="24">
+                    {activePoint.runnerShortName} · {sentenceCase(activePoint.reasoning)}
+                  </text>
+                  <text className="chart-tooltip__label" x="16" y="51">
+                    {yMetrics[yMetric].shortLabel}
+                  </text>
+                  <text className="chart-tooltip__value" x="16" y="70">
+                    {formatMetric(yMetric, activePoint[yMetrics[yMetric].key])}
+                  </text>
+                  <text className="chart-tooltip__label" x="126" y="51">
+                    {xMetrics[xMetric].shortLabel}
+                  </text>
+                  <text className="chart-tooltip__value" x="126" y="70">
+                    {formatMetric(xMetric, activePoint[xMetrics[xMetric].key])}
+                  </text>
+                  <line x1="16" x2={TOOLTIP.width - 16} y1="80" y2="80" />
+                  <text className="chart-tooltip__meta" x="16" y="96">
+                    {activePoint.runs} runs · {samePoint(visiblePinnedPoint, activePoint) ? "Pinned" : "Click to pin"}
+                  </text>
+                </g>
+              </g>
+            );
+          })()}
         </svg>
 
-        {showInspector && <aside className="point-inspector" aria-live="polite">
-          {selectedPoint ? (
-            <>
-              <div className="point-inspector__runner">
-                <i style={{ background: selectedPoint.color }} />
-                {selectedPoint.runnerShortName} — {sentenceCase(selectedPoint.reasoning)}
-              </div>
-              <dl>
-                <div>
-                  <dt>{yMetrics[yMetric].shortLabel}</dt>
-                  <dd>{formatMetric(yMetric, selectedPoint[yMetrics[yMetric].key])}</dd>
-                </div>
-                <div>
-                  <dt>{xMetrics[xMetric].shortLabel}</dt>
-                  <dd>{formatMetric(xMetric, selectedPoint[xMetrics[xMetric].key])}</dd>
-                </div>
-                <div>
-                  <dt>Runs</dt>
-                  <dd>{selectedPoint.runs}</dd>
-                </div>
-              </dl>
-              {showRanges && (
-                <p>{rangeKind} is shown directly on the chart.</p>
-              )}
-            </>
-          ) : (
-            <p>Hover or focus a point to inspect it.</p>
-          )}
-        </aside>}
       </div>
     </div>
   );
