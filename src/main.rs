@@ -625,6 +625,7 @@ async fn run_command(command: Command) -> Result<()> {
             llm_judge_report,
             group_by_reasoning,
             group_by_model,
+            successful_only,
             fail_on_directional_comparison,
             output_dir,
         } => {
@@ -647,6 +648,7 @@ async fn run_command(command: Command) -> Result<()> {
                     llm_judge_report,
                     group_by_reasoning,
                     group_by_model,
+                    successful_only,
                     output_dir,
                 },
             )?;

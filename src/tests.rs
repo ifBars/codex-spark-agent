@@ -413,6 +413,7 @@ fn quick_comparison_script_guards_harness_request_failures_by_default() {
     assert!(script.contains("Invoke-CodexPreflight `"));
     assert!(script.contains("-TimeoutSeconds $CodexPreflightTimeoutSeconds"));
     assert!(script.contains("$comparisonArgs = @("));
+    assert!(script.contains("\"--successful-only\""));
     assert!(script.contains("if ($FailOnDirectionalComparison)"));
     assert!(script.contains("$comparisonArgs += \"--fail-on-directional-comparison\""));
     assert!(script.contains("& cargo @comparisonArgs"));

@@ -4,7 +4,7 @@ param(
     [string]$ReasoningEffort = "medium",
     [int]$Repeat = 1,
     [int]$TimeoutSeconds = 900,
-    [ValidateSet("core", "survey", "scaffolding", "editing", "reasoning", "coding", "quantitative", "analysis", "operations", "writing", "real-world")]
+    [ValidateSet("core", "survey", "scaffolding", "editing", "reasoning", "coding", "quantitative", "analysis", "operations", "writing", "frontier", "real-world")]
     [string]$Suite = "real-world",
     [string[]]$Scenario = @(),
     [string]$CodexBin = "codex",
@@ -972,7 +972,8 @@ try {
         "--suite", $Suite,
         "--harness-report", $harnessManifest,
         "--codex-cli-report", $codexReport,
-        "--group-by-reasoning"
+        "--group-by-reasoning",
+        "--successful-only"
     )
     if ($FailOnDirectionalComparison) {
         $comparisonArgs += "--fail-on-directional-comparison"

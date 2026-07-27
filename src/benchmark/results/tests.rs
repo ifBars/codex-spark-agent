@@ -295,6 +295,7 @@ fn benchmark_comparison_records_input_report_provenance() {
         llm_judge_report: None,
         group_by_reasoning: false,
         group_by_model: false,
+        successful_only: false,
         output_dir: dir.path().join("out"),
     })
     .expect("write comparison");
@@ -1052,6 +1053,23 @@ fn comparison_aggregate_reports_skipped_external_infrastructure_rows() {
         aggregate["diagnostics"]["skipped_infrastructure_retry_hints"]["codex-cli"]["config-migration"],
         "try again at 5:38 PM"
     );
+}
+
+#[test]
+fn successful_only_comparisons_exclude_failed_attempts_before_averaging() {
+    let mut successful = comparison_row("spark-harness", "one");
+    successful.success = true;
+    let mut failed = comparison_row("spark-harness", "one");
+    failed.success = false;
+    failed.quality_score = 0.0;
+    let mut rows = vec![successful, failed];
+
+    let excluded = retain_successful_comparison_attempts(&mut rows, true);
+
+    assert_eq!(excluded, 1);
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].success);
+    assert_ne!(rows[0].quality_score, 0.0);
 }
 
 #[test]

@@ -132,7 +132,7 @@ The published web views are rebuilt from reviewed scenario rows with Bun:
 bun scripts/build_benchmark_views.mjs
 ```
 
-The view specification includes the category membership and measured scenario catalog used by the web task drill-down. The view specification, evidence manifest, generated category CSV, and web JSON are checked in so the aggregation and displayed provenance are reviewable without rerunning provider benchmarks. Verify that all generated artifacts are current with:
+The view specification includes the category membership and measured scenario catalog used by the web task drill-down. Published comparisons use `benchmark-compare --successful-only`; failed task attempts and provider/API failures are excluded before aggregation and reported separately in the evidence contract. The view specification, evidence manifest, generated category CSV, and web JSON are checked in so the aggregation and displayed provenance are reviewable without rerunning provider benchmarks. Verify that all generated artifacts are current with:
 
 ```powershell
 bun scripts/build_benchmark_views.mjs --check

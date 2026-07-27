@@ -8,9 +8,10 @@
       "date": "July 26, 2026",
       "scenarioCount": 9,
       "pendingScenarioCount": 4,
-      "taskRuns": 162,
+      "taskRuns": 129,
       "providerExclusions": 0,
-      "taskFailuresRetained": true,
+      "taskFailureExclusions": 33,
+      "taskFailuresRetained": false,
       "pendingScenarios": [
         {
           "id": "inventory-rebalance-plan",
@@ -71,7 +72,7 @@
           "path": "docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.md"
         }
       ],
-      "note": "Four validated fixtures, including the experimental frontier suite, remain outside this snapshot until balanced reruns and difficulty calibration are available."
+      "note": "Only validation-passing task runs are plotted; 33 failed task attempts and all provider/API failures are excluded. Four validated fixtures, including the experimental frontier suite, remain outside this snapshot until balanced reruns and difficulty calibration are available."
     },
     {
       "id": "granular-pilot",
@@ -81,6 +82,7 @@
       "pendingScenarioCount": 0,
       "taskRuns": 18,
       "providerExclusions": null,
+      "taskFailureExclusions": null,
       "taskFailuresRetained": true,
       "pendingScenarios": [],
       "sources": [
@@ -97,8 +99,9 @@
       "date": "July 26, 2026",
       "scenarioCount": 8,
       "pendingScenarioCount": 0,
-      "taskRuns": 144,
+      "taskRuns": 140,
       "providerExclusions": null,
+      "taskFailureExclusions": 4,
       "taskFailuresRetained": false,
       "pendingScenarios": [],
       "sources": [
@@ -107,7 +110,7 @@
           "path": "docs/benchmarks/reasoning-cost-quality-2026-07-26.csv"
         }
       ],
-      "note": "This legacy artifact averages successful rows and does not classify infrastructure exclusions. Prefer the expanded suite for current methodology."
+      "note": "This legacy artifact plots 141 successful rows and excludes four failed attempts. It does not classify infrastructure exclusions; prefer the expanded suite for current methodology."
     }
   ]
 }

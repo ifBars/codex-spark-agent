@@ -12,6 +12,10 @@ const evidenceSpecPath = join(
   "reasoning-benchmark-evidence-2026-07-26.json",
 );
 const outputCsvPath = join(benchmarkDir, "reasoning-cost-quality-categories-2026-07-26.csv");
+const outputOverallCsvPath = join(
+  benchmarkDir,
+  "reasoning-cost-quality-expanded-2026-07-26.csv",
+);
 const outputJsonPath = join(webDataDir, "expanded-reasoning-views.json");
 const outputEvidenceJsonPath = join(webDataDir, "benchmark-evidence.json");
 const checkMode = process.argv.includes("--check");
@@ -131,11 +135,26 @@ const sourceRows = parseCsv(
   reasoning: row.reasoning_effort,
   scenario: row.scenario,
   runs: Number(row.runs),
+  excludedRuns: Number(row.failed_runs_excluded ?? 0),
   successfulRuns: Number(row.successful_runs),
   quality: Number(row.average_quality),
   tokens: Number(row.average_total_tokens),
   duration: Number(row.average_duration_seconds),
 }));
+if (
+  sourceRows.some(
+    (row) =>
+      !Number.isFinite(row.runs)
+      || row.runs <= 0
+      || row.successfulRuns !== row.runs
+      || !Number.isFinite(row.excludedRuns)
+      || row.excludedRuns < 0,
+  )
+) {
+  throw new Error(
+    "Measured chart rows must contain successful runs only with explicit non-negative exclusions",
+  );
+}
 
 const availableScenarios = new Set(sourceRows.map((row) => row.scenario));
 if (!Array.isArray(spec.scenarioCatalog) || spec.scenarioCatalog.length === 0) {
@@ -193,6 +212,23 @@ for (const definition of evidenceSpec.datasets) {
     }
     providerExclusions = exclusionValues.reduce((sum, value) => sum + value, 0);
   }
+  let taskFailureExclusions = null;
+  if (typeof definition.taskFailureExclusions === "number") {
+    taskFailureExclusions = definition.taskFailureExclusions;
+    if (!Number.isFinite(taskFailureExclusions) || taskFailureExclusions < 0) {
+      throw new Error(`${definition.id} has invalid task failure exclusions`);
+    }
+  } else if (definition.taskFailureExclusions) {
+    const exclusionRows = parseCsv(
+      await readFile(join(benchmarkDir, definition.taskFailureExclusions.source), "utf8"),
+    );
+    const exclusionValues = exclusionRows.map((row) =>
+      Number(row[definition.taskFailureExclusions.field]));
+    if (exclusionValues.some((value) => !Number.isFinite(value) || value < 0)) {
+      throw new Error(`${definition.id} has invalid task failure exclusion values`);
+    }
+    taskFailureExclusions = exclusionValues.reduce((sum, value) => sum + value, 0);
+  }
 
   for (const source of definition.sources) {
     await readFile(join(repoRoot, source.path), "utf8");
@@ -209,6 +245,7 @@ for (const definition of evidenceSpec.datasets) {
     pendingScenarioCount: definition.pendingScenarios.length,
     taskRuns,
     providerExclusions,
+    taskFailureExclusions,
     taskFailuresRetained: definition.taskFailuresRetained,
     pendingScenarios: definition.pendingScenarios,
     sources: definition.sources,
@@ -243,9 +280,9 @@ const views = spec.views.map((view) => {
           row.reasoning === reasoning &&
           view.scenarios.includes(row.scenario),
       );
-      if (group.length !== view.scenarios.length) {
+      if (group.length === 0) {
         throw new Error(
-          `${view.id}/${runner}/${reasoning} has ${group.length} of ${view.scenarios.length} scenarios`,
+          `${view.id}/${runner}/${reasoning} has no successful scenario rows`,
         );
       }
 
@@ -260,6 +297,8 @@ const views = spec.views.map((view) => {
       const durationCi = confidence95(durationValues);
       const runs = group.reduce((sum, row) => sum + row.runs, 0);
       const successfulRuns = group.reduce((sum, row) => sum + row.successfulRuns, 0);
+      const excludedRuns = group.reduce((sum, row) => sum + row.excludedRuns, 0)
+        + (view.scenarios.length - group.length) * 3;
 
       rows.push({
         runner: runnerId(runner),
@@ -268,6 +307,7 @@ const views = spec.views.map((view) => {
         runs,
         scenarios: group.length,
         successfulRuns,
+        excludedRuns,
         successRate: round((successfulRuns / runs) * 100),
         quality: round(quality),
         qualityMin: round(Math.max(0, quality - qualityCi)),
@@ -288,8 +328,8 @@ const views = spec.views.map((view) => {
   return {
     ...view,
     scenarioCount: view.scenarios.length,
-    runCount: rows[0].runs,
-    sample: `${view.scenarios.length} ${view.scenarios.length === 1 ? "task" : "tasks"} × 3 runs per level`,
+    runCount: null,
+    sample: `${view.scenarios.length} ${view.scenarios.length === 1 ? "task" : "tasks"}; successful runs only`,
     rows,
   };
 });
@@ -302,26 +342,27 @@ const scenarioViews = spec.scenarioCatalog.map((scenario) => {
       runnerLabel: row.runner,
       reasoning: row.reasoning,
       runs: row.runs,
+      excludedRuns: row.excludedRuns,
       successfulRuns: row.successfulRuns,
       successRate: round((row.successfulRuns / row.runs) * 100),
       quality: row.quality,
       tokens: row.tokens,
       duration: row.duration,
     }));
-  if (rows.length !== 6) {
-    throw new Error(`${scenario.id} has ${rows.length} of 6 runner/reasoning rows`);
+  if (rows.length === 0 || rows.length > 6) {
+    throw new Error(`${scenario.id} has invalid successful-only row count: ${rows.length}`);
   }
   const combinations = new Set(rows.map((row) => `${row.runner}/${row.reasoning}`));
-  if (combinations.size !== 6) {
+  if (combinations.size !== rows.length) {
     throw new Error(`${scenario.id} has duplicate runner/reasoning rows`);
   }
 
   return {
     ...scenario,
     scenarioCount: 1,
-    runCount: rows[0].runs,
-    sample: `${rows[0].runs} measured runs per runner/reasoning point`,
-    rangeKind: "Three-run mean; no per-run interval published",
+    runCount: null,
+    sample: "Successful runs only; up to three attempts per runner/reasoning point",
+    rangeKind: "Successful-run mean; no per-run interval published",
     rows,
   };
 });
@@ -334,6 +375,7 @@ const csvHeaders = [
   "runs",
   "scenarios",
   "successful_runs",
+  "failed_runs_excluded",
   "success_rate",
   "average_quality",
   "quality_ci95",
@@ -351,6 +393,7 @@ const csvRows = views.flatMap((view) =>
     row.runs,
     row.scenarios,
     row.successfulRuns,
+    row.excludedRuns,
     row.successRate.toFixed(2),
     row.quality.toFixed(2),
     row.qualityCi.toFixed(2),
@@ -363,6 +406,44 @@ const csvRows = views.flatMap((view) =>
 const csv = [
   csvHeaders.map(csvCell).join(","),
   ...csvRows.map((row) => row.map(csvCell).join(",")),
+].join("\n");
+const overallView = views.find((view) => view.id === "overall");
+if (!overallView) throw new Error("View specification must include an overall view");
+const overallHeaders = [
+  "runner",
+  "reasoning_effort",
+  "runs",
+  "scenarios",
+  "provider_api_failures",
+  "failed_runs_excluded",
+  "successful_runs",
+  "success_rate",
+  "average_quality",
+  "quality_ci95",
+  "average_total_tokens",
+  "tokens_ci95",
+  "average_duration_seconds",
+  "duration_ci95",
+];
+const overallRows = overallView.rows.map((row) => [
+  row.runnerLabel,
+  row.reasoning,
+  row.runs,
+  row.scenarios,
+  0,
+  row.excludedRuns,
+  row.successfulRuns,
+  row.successRate.toFixed(2),
+  row.quality.toFixed(2),
+  row.qualityCi.toFixed(2),
+  row.tokens,
+  row.tokensCi,
+  row.duration.toFixed(2),
+  row.durationCi.toFixed(2),
+]);
+const overallCsv = [
+  overallHeaders.map(csvCell).join(","),
+  ...overallRows.map((row) => row.map(csvCell).join(",")),
 ].join("\n");
 
 async function emitGenerated(path, content) {
@@ -377,6 +458,7 @@ async function emitGenerated(path, content) {
 }
 
 await emitGenerated(outputCsvPath, `${csv}\n`);
+await emitGenerated(outputOverallCsvPath, `${overallCsv}\n`);
 await emitGenerated(
   outputJsonPath,
   `${JSON.stringify(
@@ -409,5 +491,6 @@ console.log(`benchmark_views=${views.length}`);
 console.log(`scenario_views=${scenarioViews.length}`);
 console.log(`category_rows=${csvRows.length}`);
 console.log(`csv=${outputCsvPath}`);
+console.log(`overall_csv=${outputOverallCsvPath}`);
 console.log(`web_json=${outputJsonPath}`);
 console.log(`evidence_json=${outputEvidenceJsonPath}`);

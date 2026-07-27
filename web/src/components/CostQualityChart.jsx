@@ -5,7 +5,7 @@ import { chartDomain, formatMetric, metricRange, sentenceCase } from "../lib/for
 const WIDTH = 1000;
 const HEIGHT = 520;
 const FRAME = { left: 78, right: 34, top: 34, bottom: 70 };
-const TOOLTIP = { width: 236, height: 104, gap: 18 };
+const TOOLTIP = { width: 284, height: 104, gap: 18 };
 const reasoningOrder = { low: 0, medium: 1, high: 2 };
 const labelOffsets = {
   spark: {
@@ -272,15 +272,15 @@ export function CostQualityChart({
                   <text className="chart-tooltip__value" x="16" y="70">
                     {formatMetric(yMetric, activePoint[yMetrics[yMetric].key])}
                   </text>
-                  <text className="chart-tooltip__label" x="126" y="51">
+                  <text className="chart-tooltip__label" x="152" y="51">
                     {xMetrics[xMetric].shortLabel}
                   </text>
-                  <text className="chart-tooltip__value" x="126" y="70">
+                  <text className="chart-tooltip__value" x="152" y="70">
                     {formatMetric(xMetric, activePoint[xMetrics[xMetric].key])}
                   </text>
                   <line x1="16" x2={TOOLTIP.width - 16} y1="80" y2="80" />
                   <text className="chart-tooltip__meta" x="16" y="96">
-                    {activePoint.runs} runs · {samePoint(visiblePinnedPoint, activePoint) ? "Pinned" : "Click to pin"}
+                    {activePoint.runs} successful · {activePoint.excludedRuns ?? 0} excluded · {samePoint(visiblePinnedPoint, activePoint) ? "Pinned" : "Click to pin"}
                   </text>
                 </g>
               </g>

@@ -39,7 +39,7 @@ function point(runner, reasoning, values) {
   };
 }
 
-const expandedViews = expandedReasoningData.views.map((view) => ({
+const measuredExpandedViews = expandedReasoningData.views.map((view) => ({
   ...view,
   rows: view.rows.map(({ runner, reasoning, ...values }) =>
     point(runner, reasoning, values),
@@ -53,8 +53,25 @@ const expandedScenarioViews = expandedReasoningData.scenarioViews.map((view) => 
 }));
 
 const expandedEvidence = evidenceFor("expanded-reasoning-suite");
-const pilotEvidence = evidenceFor("granular-pilot");
 const baselineEvidence = evidenceFor("success-baseline");
+const frontierScenarios = expandedEvidence.pendingScenarios.filter((scenario) =>
+  scenario.categories.includes("frontier"));
+const frontierView = {
+  id: "frontier",
+  label: "Frontier",
+  status: "pending",
+  wide: true,
+  description:
+    "Two deliberately out-of-reach transfer and consistency tasks are ready, but quota-limited attempts are excluded until a balanced successful matrix can be measured.",
+  scenarioCount: frontierScenarios.length,
+  scenarios: frontierScenarios.map((scenario) => scenario.id),
+  scenarioDetails: frontierScenarios,
+  targetCeiling: 65,
+  runCount: null,
+  sample: "2 frontier tasks · calibration pending",
+  rows: [],
+};
+const expandedViews = [...measuredExpandedViews, frontierView];
 
 const datasetDefinitions = [
   {
@@ -62,72 +79,22 @@ const datasetDefinitions = [
     label: "Expanded reasoning suite",
     shortLabel: "Expanded",
     date: expandedEvidence.date,
-    sample: `${expandedEvidence.scenarioCount} difficult tasks × 3 runs per level`,
+    sample: `${expandedEvidence.taskRuns} successful task runs`,
     rangeKind: "95% CI across scenario means",
     source: expandedEvidence.sources[0].url,
     description:
-      `A ${expandedEvidence.taskRuns}-run matrix with scenario-balanced averages, behavioral quality scoring, and zero provider/API failures.`,
+      `A ${expandedEvidence.taskRuns}-run successful-only matrix with scenario-balanced averages; ${expandedEvidence.taskFailureExclusions} failed task attempts and all provider/API failures are excluded.`,
     evidence: expandedEvidence,
     views: expandedViews,
     scenarioViews: expandedScenarioViews,
     rows: expandedViews[0].rows,
   },
   {
-    id: "granular-pilot",
-    label: "Granular pilot",
-    shortLabel: "Pilot",
-    date: pilotEvidence.date,
-    sample: `${pilotEvidence.scenarioCount} stateful task × 3 runs per level`,
-    rangeKind: "Observed min–max",
-    source: pilotEvidence.sources[0].url,
-    description:
-      "Weighted behavioral validation keeps incomplete task work visible instead of collapsing every failure to a blanket score.",
-    evidence: pilotEvidence,
-    rows: [
-      point("spark", "low", {
-        quality: 30, qualityMin: 0, qualityMax: 65,
-        tokens: 92256, tokensMin: 72239, tokensMax: 110410,
-        duration: 13.03, durationMin: 8.197, durationMax: 15.475,
-        successRate: 0, runs: 3,
-      }),
-      point("spark", "medium", {
-        quality: 65, qualityMin: 45, qualityMax: 85,
-        tokens: 105836, tokensMin: 95940, tokensMax: 122852,
-        duration: 15.92, durationMin: 13.348, durationMax: 19.282,
-        successRate: 0, runs: 3,
-      }),
-      point("spark", "high", {
-        quality: 83.33, qualityMin: 65, qualityMax: 100,
-        tokens: 155585, tokensMin: 114098, tokensMax: 190849,
-        duration: 21.15, durationMin: 16.324, durationMax: 27.87,
-        successRate: 33.33, runs: 3,
-      }),
-      point("codex", "low", {
-        quality: 63.33, qualityMin: 45, qualityMax: 80,
-        tokens: 150039, tokensMin: 119485, tokensMax: 184990,
-        duration: 24.11, durationMin: 18.589, durationMax: 27.74,
-        successRate: 0, runs: 3,
-      }),
-      point("codex", "medium", {
-        quality: 68.33, qualityMin: 45, qualityMax: 100,
-        tokens: 150080, tokensMin: 118989, tokensMax: 205713,
-        duration: 26.45, durationMin: 18.565, durationMax: 40.226,
-        successRate: 33.33, runs: 3,
-      }),
-      point("codex", "high", {
-        quality: 93.33, qualityMin: 80, qualityMax: 100,
-        tokens: 200418, tokensMin: 124929, tokensMax: 282246,
-        duration: 24.96, durationMin: 19.673, durationMax: 30.632,
-        successRate: 66.67, runs: 3,
-      }),
-    ],
-  },
-  {
     id: "success-baseline",
     label: "Eight-task baseline",
     shortLabel: "Baseline",
     date: baselineEvidence.date,
-    sample: `${baselineEvidence.scenarioCount} tasks × 3 runs per level`,
+    sample: `${baselineEvidence.taskRuns} successful task runs`,
     rangeKind: "95% confidence interval",
     source: baselineEvidence.sources[0].url,
     description:
@@ -138,37 +105,37 @@ const datasetDefinitions = [
         quality: 99.04, qualityMin: 97.67, qualityMax: 100,
         tokens: 80538, tokensMin: 71365, tokensMax: 89711,
         duration: 11, durationMin: 9.3, durationMax: 12.7,
-        successRate: 95.83, runs: 24,
+        successRate: 100, runs: 23, excludedRuns: 1,
       }),
       point("spark", "medium", {
         quality: 99.08, qualityMin: 97.77, qualityMax: 100,
         tokens: 85762, tokensMin: 73374, tokensMax: 98150,
         duration: 12.2, durationMin: 9.7, durationMax: 14.7,
-        successRate: 100, runs: 24,
+        successRate: 100, runs: 24, excludedRuns: 0,
       }),
       point("spark", "high", {
         quality: 99.08, qualityMin: 97.77, qualityMax: 100,
         tokens: 86065, tokensMin: 74150, tokensMax: 97980,
         duration: 12.5, durationMin: 10.5, durationMax: 14.5,
-        successRate: 100, runs: 24,
+        successRate: 100, runs: 24, excludedRuns: 0,
       }),
       point("codex", "low", {
         quality: 94.17, qualityMin: 91.31, qualityMax: 97.03,
         tokens: 146390, tokensMin: 127094, tokensMax: 165686,
         duration: 25.3, durationMin: 20.3, durationMax: 30.3,
-        successRate: 95.83, runs: 24,
+        successRate: 100, runs: 23, excludedRuns: 1,
       }),
       point("codex", "medium", {
         quality: 97.22, qualityMin: 95.03, qualityMax: 99.41,
         tokens: 149439, tokensMin: 109441, tokensMax: 189437,
         duration: 27.3, durationMin: 21.7, durationMax: 32.9,
-        successRate: 95.83, runs: 24,
+        successRate: 100, runs: 23, excludedRuns: 1,
       }),
       point("codex", "high", {
         quality: 97.83, qualityMin: 95.72, qualityMax: 99.94,
         tokens: 135090, tokensMin: 119621, tokensMax: 150559,
         duration: 21.3, durationMin: 19.1, durationMax: 23.5,
-        successRate: 95.83, runs: 24,
+        successRate: 100, runs: 23, excludedRuns: 1,
       }),
     ],
   },

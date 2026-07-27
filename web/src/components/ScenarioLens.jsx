@@ -32,9 +32,9 @@ export function ScenarioLens({
           <p>Measured task detail</p>
           <h2 id="scenario-lens-title">Scenario lens</h2>
           <span>
-            Inspect the six runner/reasoning means behind the category curves.
-            Per-run dispersion is unavailable in the published aggregate, so this
-            view deliberately omits error bars.
+            Inspect the available successful-run means behind the category
+            curves. Configurations with no passing attempt are absent; per-run
+            dispersion is unavailable, so this view omits error bars.
           </span>
         </div>
 
@@ -64,7 +64,7 @@ export function ScenarioLens({
           rangeKind={scenario.rangeKind}
           contextLabel={scenario.label}
           description={scenario.description}
-          meta={`1 measured task · ${scenario.runCount} runs per level`}
+          meta={`1 measured task · ${rows.reduce((sum, row) => sum + row.runs, 0)} successful runs · failures excluded`}
           wide
         />
       </div>

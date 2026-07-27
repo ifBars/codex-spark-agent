@@ -1,6 +1,12 @@
-function exclusionText(value) {
-  if (value === null) return "Not classified";
-  return `${value} provider/API`;
+function exclusionText(evidence) {
+  const parts = [];
+  if (evidence.taskFailureExclusions !== null) {
+    parts.push(`${evidence.taskFailureExclusions} task`);
+  }
+  if (evidence.providerExclusions !== null) {
+    parts.push(`${evidence.providerExclusions} provider/API`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "Not classified";
 }
 
 export function EvidenceStrip({ evidence }) {
@@ -29,7 +35,7 @@ export function EvidenceStrip({ evidence }) {
         </div>
         <div>
           <dt>Exclusions</dt>
-          <dd>{exclusionText(evidence.providerExclusions)}</dd>
+          <dd>{exclusionText(evidence)}</dd>
         </div>
         <div>
           <dt>Scoring</dt>

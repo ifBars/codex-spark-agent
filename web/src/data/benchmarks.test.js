@@ -14,20 +14,25 @@ describe("expanded reasoning dataset", () => {
       "analysis-research",
       "terminal-operations",
       "writing-configuration",
+      "frontier",
     ]);
     expect(expanded.rows).toHaveLength(6);
-    expect(expanded.rows.every((row) => row.runs === 27)).toBe(true);
+    expect(expanded.rows.every((row) => row.runs > 0 && row.runs <= 27)).toBe(true);
+    expect(expanded.rows.every((row) => row.successfulRuns === row.runs)).toBe(true);
+    expect(expanded.rows.reduce((sum, row) => sum + row.runs, 0)).toBe(129);
     expect(new Set(expanded.rows.map((row) => row.runner))).toEqual(new Set(["spark", "codex"]));
     expect(new Set(expanded.rows.map((row) => row.reasoning))).toEqual(
       new Set(["low", "medium", "high"]),
     );
   });
 
-  it("keeps every category view complete and traceable to measured scenarios", () => {
-    for (const view of expanded.views) {
+  it("keeps every measured category successful-only and traceable", () => {
+    for (const view of expanded.views.filter((candidate) => candidate.status !== "pending")) {
       expect(view.scenarioCount).toBe(view.scenarios.length);
       expect(view.rows).toHaveLength(6);
-      expect(view.rows.every((row) => row.runs === view.scenarioCount * 3)).toBe(true);
+      expect(view.rows.every((row) => row.runs > 0)).toBe(true);
+      expect(view.rows.every((row) => row.successfulRuns === row.runs)).toBe(true);
+      expect(view.rows.every((row) => row.excludedRuns >= 0)).toBe(true);
       expect(new Set(view.rows.map((row) => row.runner))).toEqual(new Set(["spark", "codex"]));
       expect(new Set(view.rows.map((row) => row.reasoning))).toEqual(
         new Set(["low", "medium", "high"]),
@@ -42,9 +47,11 @@ describe("expanded reasoning dataset", () => {
     );
     for (const scenario of expanded.scenarioViews) {
       expect(scenario.description.length).toBeGreaterThan(50);
-      expect(scenario.runCount).toBe(3);
-      expect(scenario.rows).toHaveLength(6);
-      expect(scenario.rows.every((row) => row.runs === 3)).toBe(true);
+      expect(scenario.runCount).toBeNull();
+      expect(scenario.rows.length).toBeGreaterThan(0);
+      expect(scenario.rows.length).toBeLessThanOrEqual(6);
+      expect(scenario.rows.every((row) => row.runs > 0 && row.runs <= 3)).toBe(true);
+      expect(scenario.rows.every((row) => row.successfulRuns === row.runs)).toBe(true);
       expect(scenario.rows.every((row) => row.qualityMin === undefined)).toBe(true);
       expect(
         scenario.rows.every(
@@ -53,18 +60,14 @@ describe("expanded reasoning dataset", () => {
             === Number(((row.successfulRuns / row.runs) * 100).toFixed(2)),
         ),
       ).toBe(true);
-      expect(new Set(scenario.rows.map((row) => row.runner))).toEqual(
-        new Set(["spark", "codex"]),
-      );
-      expect(new Set(scenario.rows.map((row) => row.reasoning))).toEqual(
-        new Set(["low", "medium", "high"]),
-      );
+      expect(new Set(scenario.rows.map((row) => `${row.runner}/${row.reasoning}`)).size)
+        .toBe(scenario.rows.length);
     }
   });
 
   it("keeps every confidence interval around its displayed mean", () => {
     for (const view of expanded.views) {
-      for (const row of view.rows) {
+      for (const row of view.rows ?? []) {
         expect(row.qualityMin).toBeLessThanOrEqual(row.quality);
         expect(row.qualityMax).toBeGreaterThanOrEqual(row.quality);
         expect(row.tokensMin).toBeLessThanOrEqual(row.tokens);
@@ -83,13 +86,14 @@ describe("expanded reasoning dataset", () => {
         dataset.rows.reduce((total, row) => total + row.runs, 0),
       );
       expect(typeof dataset.evidence.taskFailuresRetained).toBe("boolean");
+      expect(dataset.evidence.taskFailuresRetained).toBe(false);
+      expect(dataset.evidence.taskFailureExclusions).toBeGreaterThanOrEqual(0);
       expect(dataset.evidence.note.length).toBeGreaterThan(40);
       expect(
         dataset.evidence.providerExclusions === null
           || dataset.evidence.providerExclusions >= 0,
       ).toBe(true);
       expect(dataset.views[0].scenarioCount).toBe(dataset.evidence.scenarioCount);
-      expect(dataset.views[0].runCount).toBe(dataset.rows[0].runs);
       expect(dataset.evidence.pendingScenarioCount).toBe(
         dataset.evidence.pendingScenarios.length,
       );
@@ -99,6 +103,20 @@ describe("expanded reasoning dataset", () => {
           source.url.startsWith("https://github.com/ifBars/codex-spark-agent/blob/main/")),
       ).toBe(true);
     }
+  });
+
+  it("publishes the frontier suite as an honest pending chart", () => {
+    const frontier = expanded.views.find((view) => view.id === "frontier");
+    expect(frontier.status).toBe("pending");
+    expect(frontier.targetCeiling).toBe(65);
+    expect(frontier.scenarioCount).toBe(2);
+    expect(frontier.rows).toEqual([]);
+    expect(frontier.scenarioDetails.map((scenario) => scenario.id)).toEqual([
+      "feature-rollout-consistency-bugfix",
+      "frontier-rule-transfer",
+    ]);
+    expect(frontier.scenarioDetails.every((scenario) => scenario.validationSignals === 6))
+      .toBe(true);
   });
 
   it("publishes validated harder fixtures separately from measured points", () => {

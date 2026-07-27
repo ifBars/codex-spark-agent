@@ -6,17 +6,18 @@ This dataset compares `gpt-5.3-codex-spark` at low, medium, and high reasoning t
 
 - Nine difficulty-focused scenarios
 - Three repeats per scenario and reasoning level
-- Twenty-seven task-runs per chart point
-- 162 task-runs total
+- Up to twenty-seven successful task-runs per chart point
+- 129 successful task-runs plotted
+- 33 failed task attempts excluded
 - Zero provider/API failures
 
 The scenarios are `technical-essay`, `config-migration`, `ops-report`, `multi-module-bugfix`, `terminal-repair`, `multi-hop-analysis`, `policy-support-agent`, `rust-notes-tui-scaffold`, and `stateful-reconciliation-bugfix`.
 
-The three reasoning levels ran concurrently within each runner family. Spark and native Codex ran in separate phases. Ordinary task failures, validation failures, tool failures, and timeouts remain in the score. Only explicit provider/API failures would be excluded; none occurred.
+The three reasoning levels ran concurrently within each runner family. Spark and native Codex ran in separate phases. Chart inputs are generated with `benchmark-compare --successful-only`: failed task attempts, validation failures, and timed-out attempts are excluded before scenario means are computed. Explicit provider/API failures are excluded separately; none occurred in this snapshot.
 
 ## Aggregation
 
-Each scenario contributes equally to the headline mean. The error bars are 95% Student's t intervals across the nine scenario means (`df = 8`), rather than treating the three repeats as fully independent observations. This keeps repeated runs from creating false precision.
+Each scenario with at least one successful attempt contributes equally to a runner/reasoning headline mean. The error bars are 95% Student's t intervals across the available successful-only scenario means, rather than treating repeated runs as fully independent observations. This keeps repeated runs from creating false precision while preventing a failed attempt from becoming an artificial zero.
 
 Weighted quality uses the benchmark's scenario-specific behavioral validation. Success rate remains a separate binary measure. Total tokens are input plus output tokens summed per task-run; Spark totals come from reported API usage for every request, while native Codex totals come from its JSON event report. Duration is wall-clock task time.
 
@@ -36,12 +37,18 @@ These are different views of one measured matrix, not additional benchmark runs.
 
 ## Scenario lens
 
-The explorer also exposes each of the nine measured scenarios as a six-point runner/reasoning chart. These points are the published three-run scenario means from the same 162-task-run matrix, not additional runs. The scenario-level source artifact does not retain per-run dispersion, so the task drill-down deliberately omits error bars rather than inferring or fabricating intervals. Overall and category charts continue to show their scenario-level 95% intervals.
+The explorer also exposes each of the nine measured scenarios as a runner/reasoning chart. A configuration is absent when none of its three attempts passed validation; otherwise its point is the mean of one to three successful attempts. The scenario-level source artifact does not retain per-run dispersion, so the task drill-down deliberately omits error bars rather than inferring or fabricating intervals. Overall and category charts continue to show their scenario-level 95% intervals.
 
 Rebuild the category aggregates and web data with:
 
 ```powershell
 bun scripts/build_benchmark_views.mjs
+```
+
+To regenerate the successful-only scenario source from a reviewed comparison report:
+
+```powershell
+bun scripts/export_successful_comparison_rows.mjs --input <comparison.json> --output docs/benchmarks/reasoning-cost-quality-expanded-scenarios-2026-07-26.csv --expected-repeats 3 --expected-groups 54
 ```
 
 ## Artifacts

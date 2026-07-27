@@ -10,6 +10,7 @@ import { BenchmarkAtlasNav } from "./BenchmarkAtlasNav.jsx";
 import { CostQualityChart } from "./CostQualityChart.jsx";
 import { EvidenceStrip } from "./EvidenceStrip.jsx";
 import { FilterStrip } from "./FilterStrip.jsx";
+import { FrontierPendingChart } from "./FrontierPendingChart.jsx";
 import { RankingLedger } from "./RankingLedger.jsx";
 import { ResultsLedger } from "./ResultsLedger.jsx";
 import { ScenarioLens } from "./ScenarioLens.jsx";
@@ -37,7 +38,7 @@ export function BenchmarkExplorer() {
     () =>
       dataset.views.map((view) => ({
         ...view,
-        rows: view.rows.filter(
+        rows: (view.rows ?? []).filter(
           (row) => enabledRunners.has(row.runner) && enabledReasoning.has(row.reasoning),
         ),
       })),
@@ -106,7 +107,7 @@ export function BenchmarkExplorer() {
               rangeKind={dataset.rangeKind}
               contextLabel={overallView.label}
               description={overallView.description}
-              meta={`${overallView.scenarioCount ?? "Historical"} tasks · ${overallView.runCount ?? rows[0]?.runs ?? 0} runs per level · ${coverageLabel(overallView.scenarioCount)}`}
+              meta={`${overallView.scenarioCount ?? "Historical"} tasks · ${dataset.evidence.taskRuns} successful runs · ${coverageLabel(overallView.scenarioCount)}`}
               wide
               showTooltip={false}
             />
@@ -117,22 +118,30 @@ export function BenchmarkExplorer() {
             <div className="atlas-category-grid" aria-label="Category benchmarks">
               {visibleViews.slice(1).map((view) => (
                 <section
-                  className="atlas-category"
+                  className={`atlas-category${view.wide ? " atlas-category--wide" : ""}`}
                   id={`benchmark-${view.id}`}
                   key={view.id}
                   aria-label={`${view.label} benchmark`}
                 >
-                  <CostQualityChart
-                    rows={view.rows}
-                    xMetric={xMetric}
-                    yMetric={yMetric}
-                    showRanges={showRanges}
-                    rangeKind={dataset.rangeKind}
-                    contextLabel={view.label}
-                    description={view.description}
-                    meta={`${view.scenarioCount} tasks · ${view.runCount} runs per level · ${coverageLabel(view.scenarioCount)}`}
-                    compact
-                  />
+                  {view.status === "pending" ? (
+                    <FrontierPendingChart
+                      view={view}
+                      enabledRunners={enabledRunners}
+                      enabledReasoning={enabledReasoning}
+                    />
+                  ) : (
+                    <CostQualityChart
+                      rows={view.rows}
+                      xMetric={xMetric}
+                      yMetric={yMetric}
+                      showRanges={showRanges}
+                      rangeKind={dataset.rangeKind}
+                      contextLabel={view.label}
+                      description={view.description}
+                      meta={`${view.scenarioCount} tasks · ${view.rows.reduce((sum, row) => sum + row.runs, 0)} successful runs · ${coverageLabel(view.scenarioCount)}`}
+                      compact
+                    />
+                  )}
                 </section>
               ))}
             </div>
@@ -173,13 +182,13 @@ export function BenchmarkExplorer() {
             <article>
               <h3>Weighted validation</h3>
               <p>
-                Each fixture uses scenario-specific behavioral checks. Incomplete task work retains partial quality instead of receiving one blanket score.
+                Each fixture uses scenario-specific behavioral checks. Successful attempts retain granular quality differences instead of collapsing every pass to a perfect score.
               </p>
             </article>
             <article>
               <h3>Failure handling</h3>
               <p>
-                Genuine task failures stay in current-method aggregates. Provider and API failures are excluded because they do not measure task performance; the selected dataset&apos;s count appears above.
+                Failed task attempts and provider/API failures are excluded before chart aggregation. Their counts remain visible in the evidence strip so a missing run cannot silently become a zero score.
               </p>
             </article>
             <article>

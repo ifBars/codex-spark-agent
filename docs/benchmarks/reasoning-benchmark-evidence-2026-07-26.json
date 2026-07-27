@@ -13,7 +13,8 @@
         "source": "reasoning-cost-quality-expanded-2026-07-26.csv",
         "field": "provider_api_failures"
       },
-      "taskFailuresRetained": true,
+      "taskFailureExclusions": 33,
+      "taskFailuresRetained": false,
       "pendingScenarios": [
         {
           "id": "inventory-rebalance-plan",
@@ -74,7 +75,7 @@
           "path": "docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.md"
         }
       ],
-      "note": "Four validated fixtures, including the experimental frontier suite, remain outside this snapshot until balanced reruns and difficulty calibration are available."
+      "note": "Only validation-passing task runs are plotted; 33 failed task attempts and all provider/API failures are excluded. Four validated fixtures, including the experimental frontier suite, remain outside this snapshot until balanced reruns and difficulty calibration are available."
     },
     {
       "id": "granular-pilot",
@@ -100,10 +101,14 @@
       "status": "Legacy baseline",
       "date": "July 26, 2026",
       "runSource": "reasoning-cost-quality-2026-07-26.csv",
-      "runField": "total_runs",
+      "runField": "successful_runs",
       "scenarioField": null,
       "expectedScenarioCount": 8,
       "providerExclusions": null,
+      "taskFailureExclusions": {
+        "source": "reasoning-cost-quality-2026-07-26.csv",
+        "field": "failed_runs_excluded"
+      },
       "taskFailuresRetained": false,
       "pendingScenarios": [],
       "sources": [
@@ -112,7 +117,7 @@
           "path": "docs/benchmarks/reasoning-cost-quality-2026-07-26.csv"
         }
       ],
-      "note": "This legacy artifact averages successful rows and does not classify infrastructure exclusions. Prefer the expanded suite for current methodology."
+      "note": "This legacy artifact plots 141 successful rows and excludes four failed attempts. It does not classify infrastructure exclusions; prefer the expanded suite for current methodology."
     }
   ]
 }

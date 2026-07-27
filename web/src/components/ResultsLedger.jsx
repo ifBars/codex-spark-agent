@@ -45,6 +45,7 @@ export function ResultsLedger({
                 </Fragment>
               ) : null}
               <th>Runs</th>
+              <th>Excluded</th>
             </tr>
           </thead>
           <tbody>
@@ -74,6 +75,7 @@ export function ResultsLedger({
                   </Fragment>
                 ) : null}
                 <td data-label="Runs" className="numeric">{row.runs}</td>
+                <td data-label="Excluded" className="numeric">{row.excludedRuns ?? 0}</td>
               </tr>
             ))}
           </tbody>

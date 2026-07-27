@@ -51,7 +51,7 @@ export function RankingLedger({ rows, xMetric, yMetric }) {
         <strong>Methodology status</strong>
         <span>Measured task runs</span>
         <span>Scenario-balanced means</span>
-        <span>Task failures retained</span>
+        <span>Failed attempts excluded</span>
         <span>95% confidence ranges</span>
       </div>
     </aside>

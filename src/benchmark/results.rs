@@ -130,6 +130,7 @@ pub(crate) struct BenchmarkComparisonOptions {
     pub(crate) llm_judge_report: Option<PathBuf>,
     pub(crate) group_by_reasoning: bool,
     pub(crate) group_by_model: bool,
+    pub(crate) successful_only: bool,
     pub(crate) output_dir: PathBuf,
 }
 
@@ -354,6 +355,11 @@ pub(crate) fn write_benchmark_comparison(
         let judge_report = read_llm_judge_report(path)?;
         apply_llm_judge_scores(&mut rows, &judge_report);
     }
+    let excluded_task_failures =
+        retain_successful_comparison_attempts(&mut rows, options.successful_only);
+    if rows.is_empty() {
+        anyhow::bail!("no successful task rows remain after excluding failed benchmark attempts");
+    }
     let mut rows = average_comparison_attempts(rows);
     let baseline_runner = comparison_baseline_runner(&rows, "codex-cli");
     apply_comparison_indices(&mut rows, &baseline_runner);
@@ -385,6 +391,15 @@ pub(crate) fn write_benchmark_comparison(
                 .skipped_infrastructure_retry_hints,
         },
     );
+    if let Some(diagnostics) = aggregate
+        .get_mut("diagnostics")
+        .and_then(Value::as_object_mut)
+    {
+        diagnostics.insert(
+            "excluded_task_failure_rows".to_string(),
+            json!(excluded_task_failures),
+        );
+    }
     let stamp = unix_millis();
     let stem = format!("{}-comparison-{stamp}", options.suite.name());
     let json_path = options.output_dir.join(format!("{stem}.json"));
@@ -421,6 +436,18 @@ pub(crate) fn write_benchmark_comparison(
     })
 }
 
+fn retain_successful_comparison_attempts(
+    rows: &mut Vec<ComparisonRow>,
+    successful_only: bool,
+) -> usize {
+    if !successful_only {
+        return 0;
+    }
+    let before = rows.len();
+    rows.retain(|row| row.success);
+    before - rows.len()
+}
+
 fn comparison_input_metadata(options: &BenchmarkComparisonOptions) -> Value {
     let mut inputs = json!({
         "harness_reports": input_report_metadata_list(&options.cwd, &options.harness_reports),
@@ -438,6 +465,7 @@ fn comparison_input_metadata(options: &BenchmarkComparisonOptions) -> Value {
         },
         "group_by_model": options.group_by_model,
         "group_by_reasoning": options.group_by_reasoning,
+        "successful_only": options.successful_only,
     });
     let freshness = input_freshness_summary(&inputs);
     if let Some(object) = inputs.as_object_mut() {

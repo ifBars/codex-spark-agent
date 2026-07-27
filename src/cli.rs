@@ -396,6 +396,9 @@ pub(crate) enum Command {
         /// Split runner labels by recorded model, e.g. codex-cli/gpt-5.5.
         #[arg(long)]
         group_by_model: bool,
+        /// Exclude task attempts that did not pass benchmark validation before averaging.
+        #[arg(long)]
+        successful_only: bool,
         /// Exit nonzero after writing artifacts when inputs or provider skips make the headline directional.
         #[arg(long)]
         fail_on_directional_comparison: bool,
