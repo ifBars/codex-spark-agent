@@ -2444,12 +2444,9 @@ fn experiment_rollout_audit_validation_is_exact_and_granular() {
   "decision": "hold"
 }
 "#;
+    let perfect_memo = "# Hold recommendation\n\nConversion passes with 40% relative uplift and revenue per eligible passes at 5.13%, but the refund-rate delta is 5 percentage points versus the 3 point guardrail. Hold the rollout. The audit removed duplicate rows and tracked conflicted, excluded, and orphan events before attribution.\n";
     std::fs::write(root.join("audit.json"), perfect_audit).expect("write perfect audit");
-    std::fs::write(
-        root.join("memo.md"),
-        "# Hold recommendation\n\nConversion passes with 40% relative uplift and revenue per eligible passes at 5.13%, but the refund-rate delta is 5 percentage points versus the 3 point guardrail. Hold the rollout. The audit removed duplicate rows and tracked conflicted, excluded, and orphan events before attribution.\n",
-    )
-    .expect("write grounded memo");
+    std::fs::write(root.join("memo.md"), perfect_memo).expect("write grounded memo");
 
     let good = std::process::Command::new(validation.program)
         .args(validation.args)
@@ -2464,49 +2461,99 @@ fn experiment_rollout_audit_validation_is_exact_and_granular() {
 
     let checks = profile_scenario_validation_checks(ProfileScenarioKind::ExperimentRolloutAudit);
     assert_eq!(checks.iter().map(|check| check.weight).sum::<u32>(), 100);
-    let perfect_score = checks
-        .iter()
-        .filter(|check| {
-            std::process::Command::new(check.program)
-                .args(check.args)
-                .current_dir(&root)
-                .output()
-                .expect("run granular validation check")
-                .status
-                .success()
-        })
-        .map(|check| check.weight)
-        .sum::<u32>();
-    assert_eq!(perfect_score, 100);
+    let score = || {
+        checks
+            .iter()
+            .filter(|check| {
+                std::process::Command::new(check.program)
+                    .args(check.args)
+                    .current_dir(&root)
+                    .output()
+                    .expect("run granular validation check")
+                    .status
+                    .success()
+            })
+            .map(|check| check.weight)
+            .sum::<u32>()
+    };
+    assert_eq!(score(), 100);
 
-    std::fs::write(
-        root.join("audit.json"),
-        perfect_audit.replacen(r#""refundRatePct": 25"#, r#""refundRatePct": 20"#, 1),
-    )
-    .expect("write incorrect treatment rate");
-    let bad = std::process::Command::new(validation.program)
-        .args(validation.args)
-        .current_dir(&root)
-        .output()
-        .expect("run invalid validation");
-    assert!(
-        !bad.status.success(),
-        "incorrect treatment rate should fail"
-    );
-    let partial_score = checks
-        .iter()
-        .filter(|check| {
-            std::process::Command::new(check.program)
-                .args(check.args)
-                .current_dir(&root)
-                .output()
-                .expect("run granular validation check")
-                .status
-                .success()
-        })
-        .map(|check| check.weight)
-        .sum::<u32>();
-    assert_eq!(partial_score, 80);
+    let mutations = [
+        (
+            "unexpected schema field",
+            perfect_audit.replacen(
+                r#""decision": "hold""#,
+                "\"decision\": \"hold\",\n  \"unexpected\": true",
+                1,
+            ),
+            perfect_memo.to_string(),
+            90,
+        ),
+        (
+            "data-quality count",
+            perfect_audit.replacen(r#""assignmentRows": 25"#, r#""assignmentRows": 24"#, 1),
+            perfect_memo.to_string(),
+            80,
+        ),
+        (
+            "control attribution",
+            perfect_audit.replacen(r#""eligibleUsers": 10"#, r#""eligibleUsers": 11"#, 1),
+            perfect_memo.to_string(),
+            85,
+        ),
+        (
+            "treatment attribution",
+            perfect_audit.replacen(
+                "\"treatment\": {\n    \"eligibleUsers\": 10",
+                "\"treatment\": {\n    \"eligibleUsers\": 11",
+                1,
+            ),
+            perfect_memo.to_string(),
+            80,
+        ),
+        (
+            "uplift calculation",
+            perfect_audit.replacen(
+                r#""relativeConversionUpliftPct": 40"#,
+                r#""relativeConversionUpliftPct": 39"#,
+                1,
+            ),
+            perfect_memo.to_string(),
+            80,
+        ),
+        (
+            "rollout decision",
+            perfect_audit.replacen(r#""decision": "hold""#, r#""decision": "launch""#, 1),
+            perfect_memo.to_string(),
+            85,
+        ),
+        (
+            "memo evidence",
+            perfect_audit.to_string(),
+            perfect_memo.replace("orphan events", "unattributed events"),
+            85,
+        ),
+    ];
+    for (name, audit, memo, expected_score) in mutations {
+        std::fs::write(root.join("audit.json"), audit)
+            .unwrap_or_else(|error| panic!("write {name} mutation: {error}"));
+        std::fs::write(root.join("memo.md"), memo)
+            .unwrap_or_else(|error| panic!("write {name} memo: {error}"));
+        let result = std::process::Command::new(validation.program)
+            .args(validation.args)
+            .current_dir(&root)
+            .output()
+            .unwrap_or_else(|error| panic!("run {name} validation: {error}"));
+        assert!(
+            !result.status.success(),
+            "{name} mutation should fail exact validation"
+        );
+        assert_eq!(
+            score(),
+            expected_score,
+            "{name} mutation should lose only its intended score dimension"
+        );
+    }
 
     let prompt = benchmark_task_prompt(ProfileScenarioKind::ExperimentRolloutAudit);
     assert!(prompt.contains("deduplicate rows"));

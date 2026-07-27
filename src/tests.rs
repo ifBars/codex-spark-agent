@@ -837,11 +837,16 @@ fn quick_comparison_preflight_only_skips_isolated_codex_home() {
     );
 }
 
-fn quick_real_world_scenarios(helper: &str) -> Vec<String> {
-    let Some(start) = helper.find("return @(") else {
+fn quick_scenarios(helper: &str, function_name: &str) -> Vec<String> {
+    let marker = format!("function {function_name}");
+    let Some(function_start) = helper.find(&marker) else {
         return Vec::new();
     };
-    let after_start = &helper[start..];
+    let function = &helper[function_start..];
+    let Some(start) = function.find("return @(") else {
+        return Vec::new();
+    };
+    let after_start = &function[start..];
     let Some(end) = after_start.find("\n    )") else {
         return Vec::new();
     };
@@ -869,7 +874,8 @@ fn quick_script_default_scenarios_match_and_stay_in_real_world_suite() {
         .expect("read quick scenario helper");
     let agents = std::fs::read_to_string("AGENTS.md").expect("read AGENTS.md");
 
-    let scenarios = quick_real_world_scenarios(&helper);
+    let scenarios = quick_scenarios(&helper, "Get-QuickRealWorldScenario");
+    let reasoning_scenarios = quick_scenarios(&helper, "Get-QuickReasoningScenario");
     let real_world_scenarios = ProfileBenchmarkSuiteKind::RealWorld
         .scenarios()
         .iter()
@@ -883,6 +889,12 @@ fn quick_script_default_scenarios_match_and_stay_in_real_world_suite() {
     assert!(comparison.contains("if ($ListScenarios)"));
     assert!(harness.contains("if ($ListScenarios)"));
     assert!(!scenarios.is_empty());
+    assert_eq!(scenarios.len(), 19, "quick real-world slice drifted");
+    assert_eq!(
+        reasoning_scenarios.len(),
+        9,
+        "quick reasoning slice drifted"
+    );
     for scenario in &scenarios {
         assert!(
             real_world_scenarios.contains(&scenario.as_str()),
@@ -907,6 +919,16 @@ fn quick_script_default_scenarios_match_and_stay_in_real_world_suite() {
     assert!(scenarios.contains(&"merge-conflict-resolution".to_string()));
     assert!(scenarios.contains(&"rust-log-analyzer-scaffold".to_string()));
     assert!(scenarios.contains(&"rust-notes-tui-scaffold".to_string()));
+    assert!(scenarios.contains(&"experiment-rollout-audit".to_string()));
+    assert!(!scenarios.contains(&"inventory-rebalance-plan".to_string()));
+    assert!(reasoning_scenarios.contains(&"experiment-rollout-audit".to_string()));
+    assert!(!reasoning_scenarios.contains(&"inventory-rebalance-plan".to_string()));
+    for scenario in &reasoning_scenarios {
+        assert!(
+            real_world_scenarios.contains(&scenario.as_str()),
+            "quick reasoning scenario {scenario} is not in the real-world suite"
+        );
+    }
     assert!(agents.contains(".\\scripts\\quick_harness_benchmark.ps1 -ListScenarios"));
 }
 

@@ -114,7 +114,10 @@ evidence, including excluded prompt and provider failures, is documented in
 conflicts and exclusions, event and order deduplication, half-open attribution
 windows, refund joins, uplift calculations, and a multi-gate rollout decision.
 Its expected metrics are recomputed from the published fixtures in tests rather
-than trusted as unexplained constants.
+than trusted as unexplained constants. It is the current quick-slice quantitative
+task because the inventory pilot saturated too often; the inventory scenario
+remains available in the `quantitative`, `operations`, `reasoning`, and
+`real-world` suites for broader runs.
 
 Run a focused category exactly like any other suite:
 
