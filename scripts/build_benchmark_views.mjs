@@ -7,8 +7,14 @@ const repoRoot = resolve(scriptDir, "..");
 const benchmarkDir = join(repoRoot, "docs", "benchmarks");
 const webDataDir = join(repoRoot, "web", "src", "data");
 const viewSpecPath = join(benchmarkDir, "reasoning-benchmark-views-2026-07-26.json");
+const evidenceSpecPath = join(
+  benchmarkDir,
+  "reasoning-benchmark-evidence-2026-07-26.json",
+);
 const outputCsvPath = join(benchmarkDir, "reasoning-cost-quality-categories-2026-07-26.csv");
 const outputJsonPath = join(webDataDir, "expanded-reasoning-views.json");
+const outputEvidenceJsonPath = join(webDataDir, "benchmark-evidence.json");
+const checkMode = process.argv.includes("--check");
 
 function parseCsv(text) {
   const rows = [];
@@ -113,6 +119,11 @@ function runnerId(name) {
 }
 
 const spec = JSON.parse(await readFile(viewSpecPath, "utf8"));
+const evidenceSpec = JSON.parse(await readFile(evidenceSpecPath, "utf8"));
+if (evidenceSpec.schemaVersion !== 1 || !Array.isArray(evidenceSpec.datasets)) {
+  throw new Error("Benchmark evidence manifest must use schemaVersion 1 with a datasets array");
+}
+
 const sourceRows = parseCsv(
   await readFile(join(benchmarkDir, spec.source), "utf8"),
 ).map((row) => ({
@@ -127,6 +138,78 @@ const sourceRows = parseCsv(
 }));
 
 const availableScenarios = new Set(sourceRows.map((row) => row.scenario));
+const datasetIds = new Set();
+const evidenceDatasets = [];
+for (const definition of evidenceSpec.datasets) {
+  if (datasetIds.has(definition.id)) {
+    throw new Error(`Duplicate evidence dataset id: ${definition.id}`);
+  }
+  datasetIds.add(definition.id);
+
+  const runRows = parseCsv(
+    await readFile(join(benchmarkDir, definition.runSource), "utf8"),
+  );
+  const runValues = runRows.map((row) => Number(row[definition.runField]));
+  if (runValues.length === 0 || runValues.some((value) => !Number.isFinite(value) || value <= 0)) {
+    throw new Error(`${definition.id} has invalid ${definition.runField} values`);
+  }
+  const taskRuns = runValues.reduce((sum, value) => sum + value, 0);
+  const scenarioCount = definition.scenarioField
+    ? new Set(runRows.map((row) => row[definition.scenarioField])).size
+    : definition.expectedScenarioCount;
+  if (scenarioCount !== definition.expectedScenarioCount) {
+    throw new Error(
+      `${definition.id} has ${scenarioCount} scenarios; expected ${definition.expectedScenarioCount}`,
+    );
+  }
+
+  let providerExclusions = null;
+  if (definition.providerExclusions) {
+    const exclusionRows = parseCsv(
+      await readFile(join(benchmarkDir, definition.providerExclusions.source), "utf8"),
+    );
+    const exclusionValues = exclusionRows.map((row) =>
+      Number(row[definition.providerExclusions.field]));
+    if (exclusionValues.some((value) => !Number.isFinite(value) || value < 0)) {
+      throw new Error(`${definition.id} has invalid provider exclusion values`);
+    }
+    providerExclusions = exclusionValues.reduce((sum, value) => sum + value, 0);
+  }
+
+  for (const source of definition.sources) {
+    await readFile(join(repoRoot, source.path), "utf8");
+  }
+  for (const pending of definition.pendingScenarios) {
+    await readFile(join(repoRoot, pending.evidencePath), "utf8");
+  }
+
+  evidenceDatasets.push({
+    id: definition.id,
+    status: definition.status,
+    date: definition.date,
+    scenarioCount,
+    pendingScenarioCount: definition.pendingScenarios.length,
+    taskRuns,
+    providerExclusions,
+    taskFailuresRetained: definition.taskFailuresRetained,
+    pendingScenarios: definition.pendingScenarios,
+    sources: definition.sources,
+    note: definition.note,
+  });
+}
+
+const expandedEvidence = evidenceSpec.datasets.find(
+  (dataset) => dataset.id === spec.datasetId,
+);
+if (!expandedEvidence || expandedEvidence.runSource !== spec.source) {
+  throw new Error("Expanded evidence source must match the benchmark view source");
+}
+for (const pending of expandedEvidence.pendingScenarios) {
+  if (availableScenarios.has(pending.id)) {
+    throw new Error(`${pending.id} is both pending and present in measured scenario rows`);
+  }
+}
+
 const views = spec.views.map((view) => {
   const missing = view.scenarios.filter((scenario) => !availableScenarios.has(scenario));
   if (missing.length > 0) {
@@ -232,8 +315,19 @@ const csv = [
   ...csvRows.map((row) => row.map(csvCell).join(",")),
 ].join("\n");
 
-await writeFile(outputCsvPath, `${csv}\n`);
-await writeFile(
+async function emitGenerated(path, content) {
+  if (checkMode) {
+    const current = await readFile(path, "utf8");
+    if (current !== content) {
+      throw new Error(`Generated artifact is out of date: ${path}`);
+    }
+    return;
+  }
+  await writeFile(path, content);
+}
+
+await emitGenerated(outputCsvPath, `${csv}\n`);
+await emitGenerated(
   outputJsonPath,
   `${JSON.stringify(
     {
@@ -246,8 +340,22 @@ await writeFile(
     2,
   )}\n`,
 );
+await emitGenerated(
+  outputEvidenceJsonPath,
+  `${JSON.stringify(
+    {
+      schemaVersion: evidenceSpec.schemaVersion,
+      generatedFrom: "docs/benchmarks/reasoning-benchmark-evidence-2026-07-26.json",
+      datasets: evidenceDatasets,
+    },
+    null,
+    2,
+  )}\n`,
+);
 
+console.log(`mode=${checkMode ? "check" : "write"}`);
 console.log(`benchmark_views=${views.length}`);
 console.log(`category_rows=${csvRows.length}`);
 console.log(`csv=${outputCsvPath}`);
 console.log(`web_json=${outputJsonPath}`);
+console.log(`evidence_json=${outputEvidenceJsonPath}`);

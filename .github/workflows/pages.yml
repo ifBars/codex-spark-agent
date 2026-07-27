@@ -41,6 +41,7 @@ jobs:
       - name: Validate explorer
         working-directory: web
         run: |
+          bun run test:data
           bun run lint
           bun run test
 

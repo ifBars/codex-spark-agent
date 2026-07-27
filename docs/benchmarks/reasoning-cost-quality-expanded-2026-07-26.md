@@ -45,5 +45,6 @@ bun scripts/build_benchmark_views.mjs
 - [`reasoning-cost-quality-expanded-2026-07-26.csv`](reasoning-cost-quality-expanded-2026-07-26.csv) contains the six chart points.
 - [`reasoning-cost-quality-expanded-scenarios-2026-07-26.csv`](reasoning-cost-quality-expanded-scenarios-2026-07-26.csv) contains all 54 runner/reasoning/scenario aggregates.
 - [`reasoning-benchmark-views-2026-07-26.json`](reasoning-benchmark-views-2026-07-26.json) defines the published category membership.
+- [`reasoning-benchmark-evidence-2026-07-26.json`](reasoning-benchmark-evidence-2026-07-26.json) defines the reviewable evidence contract, pending validated fixtures, and linked source artifacts.
 - [`reasoning-cost-quality-categories-2026-07-26.csv`](reasoning-cost-quality-categories-2026-07-26.csv) contains all 36 overall and category chart points.
 - The ignored local comparison report was generated from three exact Spark manifests and three isolated native Codex reports with `benchmark-compare --group-by-reasoning`.

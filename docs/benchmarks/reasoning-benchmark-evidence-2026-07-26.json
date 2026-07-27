@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "datasets": [
+    {
+      "id": "expanded-reasoning-suite",
+      "status": "Reviewed snapshot",
+      "date": "July 26, 2026",
+      "runSource": "reasoning-cost-quality-expanded-scenarios-2026-07-26.csv",
+      "runField": "runs",
+      "scenarioField": "scenario",
+      "expectedScenarioCount": 9,
+      "providerExclusions": {
+        "source": "reasoning-cost-quality-expanded-2026-07-26.csv",
+        "field": "provider_api_failures"
+      },
+      "taskFailuresRetained": true,
+      "pendingScenarios": [
+        {
+          "id": "inventory-rebalance-plan",
+          "label": "Inventory rebalance plan",
+          "validationSignals": 6,
+          "categories": [
+            "math-data",
+            "terminal-operations"
+          ],
+          "evidencePath": "docs/benchmarks/inventory-rebalance-pilot-2026-07-26.md"
+        },
+        {
+          "id": "experiment-rollout-audit",
+          "label": "Experiment rollout audit",
+          "validationSignals": 6,
+          "categories": [
+            "math-data",
+            "analysis-research",
+            "terminal-operations"
+          ],
+          "evidencePath": "docs/benchmarks/experiment-rollout-audit-fixture-2026-07-26.md"
+        }
+      ],
+      "sources": [
+        {
+          "label": "Scenario rows",
+          "path": "docs/benchmarks/reasoning-cost-quality-expanded-scenarios-2026-07-26.csv"
+        },
+        {
+          "label": "Category aggregates",
+          "path": "docs/benchmarks/reasoning-cost-quality-categories-2026-07-26.csv"
+        },
+        {
+          "label": "View specification",
+          "path": "docs/benchmarks/reasoning-benchmark-views-2026-07-26.json"
+        },
+        {
+          "label": "Methodology",
+          "path": "docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.md"
+        }
+      ],
+      "note": "Inventory planning and experiment rollout audit are validated fixtures. They remain outside this snapshot until balanced reruns are available."
+    },
+    {
+      "id": "granular-pilot",
+      "status": "Development pilot",
+      "date": "July 26, 2026",
+      "runSource": "reasoning-cost-quality-pilot-2026-07-26.csv",
+      "runField": "runs",
+      "scenarioField": "scenario",
+      "expectedScenarioCount": 1,
+      "providerExclusions": null,
+      "taskFailuresRetained": true,
+      "pendingScenarios": [],
+      "sources": [
+        {
+          "label": "Pilot rows",
+          "path": "docs/benchmarks/reasoning-cost-quality-pilot-2026-07-26.csv"
+        }
+      ],
+      "note": "A single stateful task reveals scoring behavior, but it is not broad enough to support model-wide conclusions."
+    },
+    {
+      "id": "success-baseline",
+      "status": "Legacy baseline",
+      "date": "July 26, 2026",
+      "runSource": "reasoning-cost-quality-2026-07-26.csv",
+      "runField": "total_runs",
+      "scenarioField": null,
+      "expectedScenarioCount": 8,
+      "providerExclusions": null,
+      "taskFailuresRetained": false,
+      "pendingScenarios": [],
+      "sources": [
+        {
+          "label": "Baseline rows",
+          "path": "docs/benchmarks/reasoning-cost-quality-2026-07-26.csv"
+        }
+      ],
+      "note": "This legacy artifact averages successful rows and does not classify infrastructure exclusions. Prefer the expanded suite for current methodology."
+    }
+  ]
+}

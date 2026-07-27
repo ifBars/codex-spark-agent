@@ -132,7 +132,11 @@ The published web views are rebuilt from reviewed scenario rows with Bun:
 bun scripts/build_benchmark_views.mjs
 ```
 
-The view specification, generated category CSV, and web JSON are checked in so the aggregation is reviewable without rerunning provider benchmarks.
+The view specification, evidence manifest, generated category CSV, and web JSON are checked in so the aggregation and displayed provenance are reviewable without rerunning provider benchmarks. Verify that all generated artifacts are current with:
+
+```powershell
+bun scripts/build_benchmark_views.mjs --check
+```
 
 The quick comparison script preflights native Codex before spending a Spark run and writes resumable status artifacts when the provider is unavailable. Comparison reports keep provider failures separate from task failures and record runner versions, scenario coverage, and input freshness.
 

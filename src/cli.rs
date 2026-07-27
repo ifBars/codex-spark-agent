@@ -826,6 +826,7 @@ impl ProfileBenchmarkSuiteKind {
 #[cfg(test)]
 mod benchmark_suite_tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn category_suites_are_nonempty_real_world_subsets() {
@@ -880,6 +881,94 @@ mod benchmark_suite_tests {
                         .any(|scenario| scenario.name() == name),
                     "{view_id} scenario {name} is not in runner suite {}",
                     suite.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn benchmark_evidence_manifest_tracks_pending_real_world_scenarios() {
+        let evidence: serde_json::Value = serde_json::from_str(include_str!(
+            "../docs/benchmarks/reasoning-benchmark-evidence-2026-07-26.json"
+        ))
+        .expect("evidence manifest should be valid JSON");
+        let view_spec: serde_json::Value = serde_json::from_str(include_str!(
+            "../docs/benchmarks/reasoning-benchmark-views-2026-07-26.json"
+        ))
+        .expect("view spec should be valid JSON");
+
+        assert_eq!(evidence["schemaVersion"].as_u64(), Some(1));
+        let datasets = evidence["datasets"].as_array().expect("datasets array");
+        assert_eq!(datasets.len(), 3);
+        let ids = datasets
+            .iter()
+            .map(|dataset| dataset["id"].as_str().expect("dataset id"))
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), datasets.len());
+
+        let expanded = datasets
+            .iter()
+            .find(|dataset| dataset["id"].as_str() == Some("expanded-reasoning-suite"))
+            .expect("expanded evidence");
+        assert_eq!(expanded["runSource"], view_spec["source"]);
+
+        let measured = view_spec["views"]
+            .as_array()
+            .expect("views array")
+            .iter()
+            .find(|view| view["id"].as_str() == Some("overall"))
+            .expect("overall view")["scenarios"]
+            .as_array()
+            .expect("measured scenarios")
+            .iter()
+            .map(|scenario| scenario.as_str().expect("scenario name"))
+            .collect::<HashSet<_>>();
+        let real_world = ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .iter()
+            .map(|scenario| scenario.name())
+            .collect::<HashSet<_>>();
+        let pending = expanded["pendingScenarios"]
+            .as_array()
+            .expect("pending scenarios");
+        assert_eq!(
+            pending
+                .iter()
+                .map(|scenario| scenario["id"].as_str().expect("pending scenario id"))
+                .collect::<Vec<_>>(),
+            vec!["inventory-rebalance-plan", "experiment-rollout-audit"]
+        );
+        for scenario in pending {
+            let id = scenario["id"].as_str().expect("pending scenario id");
+            assert!(!measured.contains(id), "{id} is already measured");
+            assert!(
+                real_world.contains(id),
+                "{id} is not in the real-world suite"
+            );
+            assert!(
+                scenario["validationSignals"].as_u64().unwrap_or_default() > 0,
+                "{id} has no validation signals"
+            );
+            assert!(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(
+                        scenario["evidencePath"]
+                            .as_str()
+                            .expect("pending evidence path")
+                    )
+                    .is_file(),
+                "{id} evidence file is missing"
+            );
+        }
+
+        for dataset in datasets {
+            for source in dataset["sources"].as_array().expect("source artifacts") {
+                let path = source["path"].as_str().expect("source path");
+                assert!(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join(path)
+                        .is_file(),
+                    "{path} is missing"
                 );
             }
         }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import benchmarkEvidenceData from "./benchmark-evidence.json";
 import { coverageLabel, datasets } from "./benchmarks.js";
 
 describe("expanded reasoning dataset", () => {
@@ -62,7 +63,31 @@ describe("expanded reasoning dataset", () => {
       ).toBe(true);
       expect(dataset.views[0].scenarioCount).toBe(dataset.evidence.scenarioCount);
       expect(dataset.views[0].runCount).toBe(dataset.rows[0].runs);
+      expect(dataset.evidence.pendingScenarioCount).toBe(
+        dataset.evidence.pendingScenarios.length,
+      );
+      expect(dataset.evidence.sources.length).toBeGreaterThan(0);
+      expect(
+        dataset.evidence.sources.every((source) =>
+          source.url.startsWith("https://github.com/ifBars/codex-spark-agent/blob/main/")),
+      ).toBe(true);
     }
+  });
+
+  it("publishes validated harder fixtures separately from measured points", () => {
+    expect(benchmarkEvidenceData.schemaVersion).toBe(1);
+    expect(benchmarkEvidenceData.generatedFrom).toBe(
+      "docs/benchmarks/reasoning-benchmark-evidence-2026-07-26.json",
+    );
+    expect(expanded.evidence.pendingScenarios.map((scenario) => scenario.id)).toEqual([
+      "inventory-rebalance-plan",
+      "experiment-rollout-audit",
+    ]);
+    expect(
+      expanded.evidence.pendingScenarios.every(
+        (scenario) => scenario.validationSignals === 6,
+      ),
+    ).toBe(true);
   });
 
   it("labels narrow category coverage without implying mature rankings", () => {

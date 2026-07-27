@@ -1,9 +1,32 @@
+import benchmarkEvidenceData from "./benchmark-evidence.json";
 import expandedReasoningData from "./expanded-reasoning-views.json";
+
+const repositoryBlobRoot = "https://github.com/ifBars/codex-spark-agent/blob/main";
 
 const runnerMeta = {
   spark: { id: "spark", name: "Spark harness", shortName: "Spark", color: "#1769d2" },
   codex: { id: "codex", name: "Codex CLI 0.145.0", shortName: "Codex CLI", color: "#e34a18" },
 };
+
+function artifactUrl(path) {
+  return `${repositoryBlobRoot}/${path}`;
+}
+
+function evidenceFor(datasetId) {
+  const evidence = benchmarkEvidenceData.datasets.find((dataset) => dataset.id === datasetId);
+  if (!evidence) throw new Error(`Missing benchmark evidence for ${datasetId}`);
+  return {
+    ...evidence,
+    pendingScenarios: evidence.pendingScenarios.map((scenario) => ({
+      ...scenario,
+      url: artifactUrl(scenario.evidencePath),
+    })),
+    sources: evidence.sources.map((source) => ({
+      ...source,
+      url: artifactUrl(source.path),
+    })),
+  };
+}
 
 function point(runner, reasoning, values) {
   return {
@@ -23,28 +46,22 @@ const expandedViews = expandedReasoningData.views.map((view) => ({
   ),
 }));
 
+const expandedEvidence = evidenceFor("expanded-reasoning-suite");
+const pilotEvidence = evidenceFor("granular-pilot");
+const baselineEvidence = evidenceFor("success-baseline");
+
 const datasetDefinitions = [
   {
     id: "expanded-reasoning-suite",
     label: "Expanded reasoning suite",
     shortLabel: "Expanded",
-    date: "July 26, 2026",
-    sample: "9 difficult tasks × 3 runs per level",
+    date: expandedEvidence.date,
+    sample: `${expandedEvidence.scenarioCount} difficult tasks × 3 runs per level`,
     rangeKind: "95% CI across scenario means",
-    source:
-      "https://github.com/ifBars/codex-spark-agent/blob/main/docs/benchmarks/reasoning-cost-quality-categories-2026-07-26.csv",
+    source: expandedEvidence.sources[0].url,
     description:
-      "A 162-run matrix with scenario-balanced averages, behavioral quality scoring, and zero provider/API failures.",
-    evidence: {
-      status: "Reviewed snapshot",
-      scenarioCount: 9,
-      pendingScenarioCount: 2,
-      taskRuns: 162,
-      providerExclusions: 0,
-      taskFailuresRetained: true,
-      note:
-        "Inventory planning and experiment rollout audit are newer fixtures. They remain outside this snapshot until balanced reruns are available.",
-    },
+      `A ${expandedEvidence.taskRuns}-run matrix with scenario-balanced averages, behavioral quality scoring, and zero provider/API failures.`,
+    evidence: expandedEvidence,
     views: expandedViews,
     rows: expandedViews[0].rows,
   },
@@ -52,23 +69,13 @@ const datasetDefinitions = [
     id: "granular-pilot",
     label: "Granular pilot",
     shortLabel: "Pilot",
-    date: "July 26, 2026",
-    sample: "1 stateful task × 3 runs per level",
+    date: pilotEvidence.date,
+    sample: `${pilotEvidence.scenarioCount} stateful task × 3 runs per level`,
     rangeKind: "Observed min–max",
-    source:
-      "https://github.com/ifBars/codex-spark-agent/blob/main/docs/benchmarks/reasoning-cost-quality-pilot-2026-07-26.csv",
+    source: pilotEvidence.sources[0].url,
     description:
       "Weighted behavioral validation keeps incomplete task work visible instead of collapsing every failure to a blanket score.",
-    evidence: {
-      status: "Development pilot",
-      scenarioCount: 1,
-      pendingScenarioCount: 0,
-      taskRuns: 18,
-      providerExclusions: null,
-      taskFailuresRetained: true,
-      note:
-        "A single stateful task reveals scoring behavior, but it is not broad enough to support model-wide conclusions.",
-    },
+    evidence: pilotEvidence,
     rows: [
       point("spark", "low", {
         quality: 30, qualityMin: 0, qualityMax: 65,
@@ -112,23 +119,13 @@ const datasetDefinitions = [
     id: "success-baseline",
     label: "Eight-task baseline",
     shortLabel: "Baseline",
-    date: "July 26, 2026",
-    sample: "8 tasks × 3 runs per level",
+    date: baselineEvidence.date,
+    sample: `${baselineEvidence.scenarioCount} tasks × 3 runs per level`,
     rangeKind: "95% confidence interval",
-    source:
-      "https://github.com/ifBars/codex-spark-agent/blob/main/docs/benchmarks/reasoning-cost-quality-2026-07-26.csv",
+    source: baselineEvidence.sources[0].url,
     description:
       "The earlier paired matrix reports successful-row means across eight real-world tasks. It is useful for comparison, but its success-only quality scores are visibly saturated.",
-    evidence: {
-      status: "Legacy baseline",
-      scenarioCount: 8,
-      pendingScenarioCount: 0,
-      taskRuns: 144,
-      providerExclusions: null,
-      taskFailuresRetained: false,
-      note:
-        "This legacy artifact averages successful rows and does not classify infrastructure exclusions. Prefer the expanded suite for current methodology.",
-    },
+    evidence: baselineEvidence,
     rows: [
       point("spark", "low", {
         quality: 99.04, qualityMin: 97.67, qualityMax: 100,
