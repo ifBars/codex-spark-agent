@@ -12,6 +12,7 @@ import { EvidenceStrip } from "./EvidenceStrip.jsx";
 import { FilterStrip } from "./FilterStrip.jsx";
 import { RankingLedger } from "./RankingLedger.jsx";
 import { ResultsLedger } from "./ResultsLedger.jsx";
+import { ScenarioLens } from "./ScenarioLens.jsx";
 
 function toggleSet(current, value) {
   const next = new Set(current);
@@ -50,7 +51,10 @@ export function BenchmarkExplorer() {
   return (
     <>
       <div className="page-frame atlas-shell">
-        <BenchmarkAtlasNav views={dataset.views} />
+        <BenchmarkAtlasNav
+          views={dataset.views}
+          scenarioCount={dataset.scenarioViews?.length ?? 0}
+        />
 
         <main className="atlas-main">
           <header className="page-intro page-intro--atlas">
@@ -143,6 +147,17 @@ export function BenchmarkExplorer() {
               ))}
             </div>
           )}
+
+          {dataset.scenarioViews?.length > 0 ? (
+            <ScenarioLens
+              scenarioViews={dataset.scenarioViews}
+              enabledRunners={enabledRunners}
+              enabledReasoning={enabledReasoning}
+              xMetric={xMetric}
+              yMetric={yMetric}
+              source={dataset.source}
+            />
+          ) : null}
 
           <ResultsLedger
             rows={rows}

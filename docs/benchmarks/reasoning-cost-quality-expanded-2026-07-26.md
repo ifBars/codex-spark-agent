@@ -34,6 +34,10 @@ The interactive app also presents five overlapping real-world task families deri
 
 These are different views of one measured matrix, not additional benchmark runs. A scenario may appear in more than one family because real tasks cross skill boundaries. Each view again weights its included scenario means equally and computes its own 95% Student's t interval. Narrow two-scenario views produce very wide intervals and should be treated as early category coverage, not stable rankings.
 
+## Scenario lens
+
+The explorer also exposes each of the nine measured scenarios as a six-point runner/reasoning chart. These points are the published three-run scenario means from the same 162-task-run matrix, not additional runs. The scenario-level source artifact does not retain per-run dispersion, so the task drill-down deliberately omits error bars rather than inferring or fabricating intervals. Overall and category charts continue to show their scenario-level 95% intervals.
+
 Rebuild the category aggregates and web data with:
 
 ```powershell
@@ -44,7 +48,7 @@ bun scripts/build_benchmark_views.mjs
 
 - [`reasoning-cost-quality-expanded-2026-07-26.csv`](reasoning-cost-quality-expanded-2026-07-26.csv) contains the six chart points.
 - [`reasoning-cost-quality-expanded-scenarios-2026-07-26.csv`](reasoning-cost-quality-expanded-scenarios-2026-07-26.csv) contains all 54 runner/reasoning/scenario aggregates.
-- [`reasoning-benchmark-views-2026-07-26.json`](reasoning-benchmark-views-2026-07-26.json) defines the published category membership.
+- [`reasoning-benchmark-views-2026-07-26.json`](reasoning-benchmark-views-2026-07-26.json) defines the published category membership and measured scenario catalog.
 - [`reasoning-benchmark-evidence-2026-07-26.json`](reasoning-benchmark-evidence-2026-07-26.json) defines the reviewable evidence contract, pending validated fixtures, and linked source artifacts.
 - [`reasoning-cost-quality-categories-2026-07-26.csv`](reasoning-cost-quality-categories-2026-07-26.csv) contains all 36 overall and category chart points.
 - The ignored local comparison report was generated from three exact Spark manifests and three isolated native Codex reports with `benchmark-compare --group-by-reasoning`.

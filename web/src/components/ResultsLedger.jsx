@@ -1,14 +1,29 @@
+import { Fragment, useId } from "react";
 import { ArrowSquareOut } from "@phosphor-icons/react";
 import { xMetrics, yMetrics } from "../data/benchmarks.js";
 import { formatMetric, sentenceCase } from "../lib/format.js";
 
-export function ResultsLedger({ rows, xMetric, yMetric, source, rangeKind }) {
+export function ResultsLedger({
+  rows,
+  xMetric,
+  yMetric,
+  source,
+  rangeKind,
+  title = "Visible points",
+  pointLabel = "aggregate points",
+  showRangeColumns = true,
+}) {
+  const titleId = useId();
+
   return (
-    <section className="ledger" aria-labelledby="ledger-title">
+    <section
+      className={`ledger${showRangeColumns ? "" : " ledger--compact"}`}
+      aria-labelledby={titleId}
+    >
       <div className="ledger__heading">
         <div>
-          <h2 id="ledger-title">Visible points</h2>
-          <p>{rows.length} aggregate points · {rangeKind}</p>
+          <h2 id={titleId}>{title}</h2>
+          <p>{rows.length} {pointLabel} · {rangeKind}</p>
         </div>
         <a href={source} target="_blank" rel="noreferrer">
           Source CSV <ArrowSquareOut aria-hidden="true" />
@@ -23,8 +38,12 @@ export function ResultsLedger({ rows, xMetric, yMetric, source, rangeKind }) {
               <th>Reasoning</th>
               <th>{yMetrics[yMetric].shortLabel}</th>
               <th>{xMetrics[xMetric].shortLabel}</th>
-              <th>Quality range</th>
-              <th>Token range</th>
+              {showRangeColumns ? (
+                <Fragment>
+                  <th>Quality range</th>
+                  <th>Token range</th>
+                </Fragment>
+              ) : null}
               <th>Runs</th>
             </tr>
           </thead>
@@ -44,12 +63,16 @@ export function ResultsLedger({ rows, xMetric, yMetric, source, rangeKind }) {
                 <td data-label={xMetrics[xMetric].shortLabel} className="numeric">
                   {formatMetric(xMetric, row[xMetrics[xMetric].key])}
                 </td>
-                <td data-label="Quality range" className="numeric">
-                  {formatMetric("quality", row.qualityMin)}–{formatMetric("quality", row.qualityMax)}
-                </td>
-                <td data-label="Token range" className="numeric">
-                  {formatMetric("tokens", row.tokensMin)}–{formatMetric("tokens", row.tokensMax)}
-                </td>
+                {showRangeColumns ? (
+                  <Fragment>
+                    <td data-label="Quality range" className="numeric">
+                      {formatMetric("quality", row.qualityMin)}–{formatMetric("quality", row.qualityMax)}
+                    </td>
+                    <td data-label="Token range" className="numeric">
+                      {formatMetric("tokens", row.tokensMin)}–{formatMetric("tokens", row.tokensMax)}
+                    </td>
+                  </Fragment>
+                ) : null}
                 <td data-label="Runs" className="numeric">{row.runs}</td>
               </tr>
             ))}

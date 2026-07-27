@@ -35,6 +35,33 @@ describe("expanded reasoning dataset", () => {
     }
   });
 
+  it("publishes all measured scenarios as six-point drill-down views", () => {
+    expect(expanded.scenarioViews).toHaveLength(9);
+    expect(new Set(expanded.scenarioViews.map((view) => view.id))).toEqual(
+      new Set(expanded.views[0].scenarios),
+    );
+    for (const scenario of expanded.scenarioViews) {
+      expect(scenario.description.length).toBeGreaterThan(50);
+      expect(scenario.runCount).toBe(3);
+      expect(scenario.rows).toHaveLength(6);
+      expect(scenario.rows.every((row) => row.runs === 3)).toBe(true);
+      expect(scenario.rows.every((row) => row.qualityMin === undefined)).toBe(true);
+      expect(
+        scenario.rows.every(
+          (row) =>
+            row.successRate
+            === Number(((row.successfulRuns / row.runs) * 100).toFixed(2)),
+        ),
+      ).toBe(true);
+      expect(new Set(scenario.rows.map((row) => row.runner))).toEqual(
+        new Set(["spark", "codex"]),
+      );
+      expect(new Set(scenario.rows.map((row) => row.reasoning))).toEqual(
+        new Set(["low", "medium", "high"]),
+      );
+    }
+  });
+
   it("keeps every confidence interval around its displayed mean", () => {
     for (const view of expanded.views) {
       for (const row of view.rows) {

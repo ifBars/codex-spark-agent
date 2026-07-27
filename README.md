@@ -48,7 +48,7 @@ Spark is intentionally smaller than the official Codex CLI. I am not trying to r
 
 [**Explore the interactive benchmark charts →**](https://ifbars.github.io/codex-spark-agent/)
 
-Switch among overall, coding, math/data, analysis, terminal/operations, and writing/configuration charts; then toggle runners and reasoning levels, change cost axes, and inspect uncertainty ranges. The evidence strip exposes measured and pending scenario coverage, task-run counts, provider exclusions, and scoring behavior for every dataset. The granular pilot and earlier eight-task baseline remain available as historical evidence sets.
+Switch among overall, coding, math/data, analysis, terminal/operations, and writing/configuration charts; then toggle runners and reasoning levels, change cost axes, inspect uncertainty ranges, and drill into every measured task through the scenario lens. The evidence strip exposes measured and pending scenario coverage, task-run counts, provider exclusions, and scoring behavior for every dataset. The granular pilot and earlier eight-task baseline remain available as historical evidence sets.
 
 The current dataset covers nine difficult scenarios with three repeats at every runner/reasoning combination: 162 task-runs total. Error bars are 95% intervals across scenario means, ordinary task failures remain scored, and no provider/API failures occurred. `inventory-rebalance-plan` and `experiment-rollout-audit` are newer validated fixtures but remain explicitly pending until balanced reruns are available; they are not silently mixed into the published curves. The measured ordering is not forced to be monotonic, and category labels distinguish broad, developing, early, and pilot coverage.
 

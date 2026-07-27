@@ -77,7 +77,12 @@ export function CostQualityChart({
           <p>
             {description ?? "Lower is better horizontally; higher is better vertically."}
           </p>
-          {meta && <small>{meta} · {rangeKind} · Axes fit estimates; long ranges clip at bounds</small>}
+          {meta && (
+            <small>
+              {meta} · {rangeKind} · Axes fit estimates
+              {showRanges ? "; long ranges clip at bounds" : ""}
+            </small>
+          )}
         </div>
         <div className="chart-legend" aria-label="Runner legend">
           {grouped.map((group) => (

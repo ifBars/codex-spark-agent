@@ -854,5 +854,700 @@
         }
       ]
     }
+  ],
+  "scenarioViews": [
+    {
+      "id": "technical-essay",
+      "label": "Technical essay",
+      "description": "Sourced technical synthesis from three local notes with citation, structure, and word-count constraints.",
+      "scenarioCount": 1,
+      "runCount": 3,
+      "sample": "3 measured runs per runner/reasoning point",
+      "rangeKind": "Three-run mean; no per-run interval published",
+      "rows": [
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 92.7,
+          "tokens": 88454,
+          "duration": 12.82
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 76898,
+          "duration": 10.87
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 96.3,
+          "tokens": 98177,
+          "duration": 15.92
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 92,
+          "tokens": 179428,
+          "duration": 26.43
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 95,
+          "tokens": 134606,
+          "duration": 26.13
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 2,
+          "successRate": 66.67,
+          "quality": 82.7,
+          "tokens": 159383,
+          "duration": 26.93
+        }
+      ]
+    },
+    {
+      "id": "config-migration",
+      "label": "Configuration migration",
+      "description": "Coordinated schema-v2 migration across JSON, TypeScript, and documentation with stale-key checks.",
+      "scenarioCount": 1,
+      "runCount": 3,
+      "sample": "3 measured runs per runner/reasoning point",
+      "rangeKind": "Three-run mean; no per-run interval published",
+      "rows": [
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 77909,
+          "duration": 10.55
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 78241,
+          "duration": 11.48
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 84592,
+          "duration": 13.51
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 149559,
+          "duration": 22.38
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 95,
+          "tokens": 168817,
+          "duration": 24.62
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 99.5,
+          "tokens": 168992,
+          "duration": 24.27
+        }
+      ]
+    },
+    {
+      "id": "ops-report",
+      "label": "Operations report",
+      "description": "Operational metrics and risk ranking computed from ticket data under explicit tie-break rules.",
+      "scenarioCount": 1,
+      "runCount": 3,
+      "sample": "3 measured runs per runner/reasoning point",
+      "rangeKind": "Three-run mean; no per-run interval published",
+      "rows": [
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 69689,
+          "duration": 9.81
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 58347,
+          "duration": 7.24
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 2,
+          "successRate": 66.67,
+          "quality": 76.7,
+          "tokens": 55671,
+          "duration": 9.07
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 95,
+          "tokens": 148199,
+          "duration": 23.89
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 2,
+          "successRate": 66.67,
+          "quality": 81.7,
+          "tokens": 164556,
+          "duration": 22.61
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 94.5,
+          "tokens": 156139,
+          "duration": 22.62
+        }
+      ]
+    },
+    {
+      "id": "multi-module-bugfix",
+      "label": "Multi-module bugfix",
+      "description": "Two-module TypeScript repair preserving fractional precision and applying discounts before tax.",
+      "scenarioCount": 1,
+      "runCount": 3,
+      "sample": "3 measured runs per runner/reasoning point",
+      "rangeKind": "Three-run mean; no per-run interval published",
+      "rows": [
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 93425,
+          "duration": 12.98
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 88650,
+          "duration": 11.99
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 126668,
+          "duration": 16.34
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 115584,
+          "duration": 17.52
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 118150,
+          "duration": 26.4
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 99.5,
+          "tokens": 143680,
+          "duration": 25
+        }
+      ]
+    },
+    {
+      "id": "terminal-repair",
+      "label": "Terminal repair",
+      "description": "Terminal-first diagnosis of a failing reporting service followed by the smallest configuration repair.",
+      "scenarioCount": 1,
+      "runCount": 3,
+      "sample": "3 measured runs per runner/reasoning point",
+      "rangeKind": "Three-run mean; no per-run interval published",
+      "rows": [
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 96.3,
+          "tokens": 69399,
+          "duration": 7.71
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 96.3,
+          "tokens": 95499,
+          "duration": 15.77
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 83.3,
+          "tokens": 86582,
+          "duration": 9.8
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 85,
+          "tokens": 138968,
+          "duration": 16.92
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 85,
+          "tokens": 159434,
+          "duration": 20.91
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 85,
+          "tokens": 197686,
+          "duration": 34.75
+        }
+      ]
+    },
+    {
+      "id": "multi-hop-analysis",
+      "label": "Multi-hop analysis",
+      "description": "Policy-guided join across orders and refunds to compute a constrained revenue answer.",
+      "scenarioCount": 1,
+      "runCount": 3,
+      "sample": "3 measured runs per runner/reasoning point",
+      "rangeKind": "Three-run mean; no per-run interval published",
+      "rows": [
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 85309,
+          "duration": 11.25
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 62131,
+          "duration": 6.88
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 62778,
+          "duration": 8.6
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 98.7,
+          "tokens": 72628,
+          "duration": 28.79
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 66196,
+          "duration": 16.51
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 99,
+          "tokens": 89279,
+          "duration": 17.11
+        }
+      ]
+    },
+    {
+      "id": "policy-support-agent",
+      "label": "Policy support agent",
+      "description": "Two-turn support resolution that must update correctly when new evidence changes policy eligibility.",
+      "scenarioCount": 1,
+      "runCount": 3,
+      "sample": "3 measured runs per runner/reasoning point",
+      "rangeKind": "Three-run mean; no per-run interval published",
+      "rows": [
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 104018,
+          "duration": 13.85
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 100604,
+          "duration": 11.62
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 100,
+          "tokens": 113380,
+          "duration": 14.86
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 0,
+          "successRate": 0,
+          "quality": 59,
+          "tokens": 66772,
+          "duration": 17.74
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 0,
+          "successRate": 0,
+          "quality": 60,
+          "tokens": 65701,
+          "duration": 18.02
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 0,
+          "successRate": 0,
+          "quality": 60,
+          "tokens": 66197,
+          "duration": 14.99
+        }
+      ]
+    },
+    {
+      "id": "rust-notes-tui-scaffold",
+      "label": "Rust notes TUI scaffold",
+      "description": "Greenfield Rust notes CLI/TUI with parsing, persistence, search, export, tests, and smoke validation.",
+      "scenarioCount": 1,
+      "runCount": 3,
+      "sample": "3 measured runs per runner/reasoning point",
+      "rangeKind": "Three-run mean; no per-run interval published",
+      "rows": [
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 98.5,
+          "tokens": 202608,
+          "duration": 35.63
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 89.8,
+          "tokens": 275922,
+          "duration": 32.82
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 3,
+          "successRate": 100,
+          "quality": 97.6,
+          "tokens": 453841,
+          "duration": 62.25
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 1,
+          "successRate": 33.33,
+          "quality": 56.5,
+          "tokens": 360310,
+          "duration": 39.72
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 0,
+          "successRate": 0,
+          "quality": 47.8,
+          "tokens": 319471,
+          "duration": 33.31
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 0,
+          "successRate": 0,
+          "quality": 42.1,
+          "tokens": 384919,
+          "duration": 45.52
+        }
+      ]
+    },
+    {
+      "id": "stateful-reconciliation-bugfix",
+      "label": "Stateful reconciliation bugfix",
+      "description": "Production-incident repair across normalization and projection modules under documented state invariants.",
+      "scenarioCount": 1,
+      "runCount": 3,
+      "sample": "3 measured runs per runner/reasoning point",
+      "rangeKind": "Three-run mean; no per-run interval published",
+      "rows": [
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 0,
+          "successRate": 0,
+          "quality": 56.7,
+          "tokens": 93067,
+          "duration": 14.94
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 0,
+          "successRate": 0,
+          "quality": 74,
+          "tokens": 109310,
+          "duration": 16.54
+        },
+        {
+          "runner": "spark",
+          "runnerLabel": "Spark harness",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 1,
+          "successRate": 33.33,
+          "quality": 90,
+          "tokens": 153415,
+          "duration": 20.44
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "low",
+          "runs": 3,
+          "successfulRuns": 2,
+          "successRate": 66.67,
+          "quality": 81.7,
+          "tokens": 174435,
+          "duration": 23.35
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "medium",
+          "runs": 3,
+          "successfulRuns": 1,
+          "successRate": 33.33,
+          "quality": 72.5,
+          "tokens": 190119,
+          "duration": 25.94
+        },
+        {
+          "runner": "codex",
+          "runnerLabel": "Codex CLI 0.145.0",
+          "reasoning": "high",
+          "runs": 3,
+          "successfulRuns": 1,
+          "successRate": 33.33,
+          "quality": 75,
+          "tokens": 125932,
+          "duration": 22.29
+        }
+      ]
+    }
   ]
 }

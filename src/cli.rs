@@ -887,6 +887,54 @@ mod benchmark_suite_tests {
     }
 
     #[test]
+    fn published_scenario_catalog_matches_measured_real_world_tasks() {
+        let value: serde_json::Value = serde_json::from_str(include_str!(
+            "../docs/benchmarks/reasoning-benchmark-views-2026-07-26.json"
+        ))
+        .expect("view spec should be valid JSON");
+        let catalog = value["scenarioCatalog"]
+            .as_array()
+            .expect("scenario catalog");
+        let catalog_ids = catalog
+            .iter()
+            .map(|scenario| scenario["id"].as_str().expect("scenario id"))
+            .collect::<HashSet<_>>();
+        assert_eq!(catalog_ids.len(), catalog.len());
+
+        let overall_ids = value["views"]
+            .as_array()
+            .expect("views array")
+            .iter()
+            .find(|view| view["id"].as_str() == Some("overall"))
+            .expect("overall view")["scenarios"]
+            .as_array()
+            .expect("overall scenarios")
+            .iter()
+            .map(|scenario| scenario.as_str().expect("scenario id"))
+            .collect::<HashSet<_>>();
+        assert_eq!(catalog_ids, overall_ids);
+
+        let real_world = ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .iter()
+            .map(|scenario| scenario.name())
+            .collect::<HashSet<_>>();
+        for scenario in catalog {
+            let id = scenario["id"].as_str().expect("scenario id");
+            assert!(
+                real_world.contains(id),
+                "{id} is not in the real-world suite"
+            );
+            assert!(
+                scenario["description"]
+                    .as_str()
+                    .is_some_and(|description| description.len() > 40),
+                "{id} needs a useful task description"
+            );
+        }
+    }
+
+    #[test]
     fn benchmark_evidence_manifest_tracks_pending_real_world_scenarios() {
         let evidence: serde_json::Value = serde_json::from_str(include_str!(
             "../docs/benchmarks/reasoning-benchmark-evidence-2026-07-26.json"

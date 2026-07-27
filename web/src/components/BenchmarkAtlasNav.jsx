@@ -1,4 +1,4 @@
-export function BenchmarkAtlasNav({ views }) {
+export function BenchmarkAtlasNav({ views, scenarioCount = 0 }) {
   return (
     <aside className="atlas-nav" aria-label="Benchmark sections">
       <p>Benchmark atlas</p>
@@ -14,6 +14,13 @@ export function BenchmarkAtlasNav({ views }) {
             {view.scenarioCount && <small>{view.scenarioCount}</small>}
           </a>
         ))}
+        {scenarioCount > 0 ? (
+          <a href="#benchmark-scenarios">
+            <i aria-hidden="true" />
+            <span>Scenario lens</span>
+            <small>{scenarioCount}</small>
+          </a>
+        ) : null}
       </nav>
       <a className="atlas-nav__method" href="#methodology">
         About this atlas

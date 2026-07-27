@@ -138,6 +138,24 @@ const sourceRows = parseCsv(
 }));
 
 const availableScenarios = new Set(sourceRows.map((row) => row.scenario));
+if (!Array.isArray(spec.scenarioCatalog) || spec.scenarioCatalog.length === 0) {
+  throw new Error("Benchmark view specification must define a scenarioCatalog");
+}
+const catalogIds = spec.scenarioCatalog.map((scenario) => scenario.id);
+if (new Set(catalogIds).size !== catalogIds.length) {
+  throw new Error("Benchmark scenario catalog contains duplicate ids");
+}
+const missingCatalogEntries = [...availableScenarios].filter(
+  (scenario) => !catalogIds.includes(scenario),
+);
+const unmeasuredCatalogEntries = catalogIds.filter(
+  (scenario) => !availableScenarios.has(scenario),
+);
+if (missingCatalogEntries.length > 0 || unmeasuredCatalogEntries.length > 0) {
+  throw new Error(
+    `Scenario catalog mismatch; missing=${missingCatalogEntries.join("|") || "none"}; unmeasured=${unmeasuredCatalogEntries.join("|") || "none"}`,
+  );
+}
 const datasetIds = new Set();
 const evidenceDatasets = [];
 for (const definition of evidenceSpec.datasets) {
@@ -276,6 +294,38 @@ const views = spec.views.map((view) => {
   };
 });
 
+const scenarioViews = spec.scenarioCatalog.map((scenario) => {
+  const rows = sourceRows
+    .filter((row) => row.scenario === scenario.id)
+    .map((row) => ({
+      runner: runnerId(row.runner),
+      runnerLabel: row.runner,
+      reasoning: row.reasoning,
+      runs: row.runs,
+      successfulRuns: row.successfulRuns,
+      successRate: round((row.successfulRuns / row.runs) * 100),
+      quality: row.quality,
+      tokens: row.tokens,
+      duration: row.duration,
+    }));
+  if (rows.length !== 6) {
+    throw new Error(`${scenario.id} has ${rows.length} of 6 runner/reasoning rows`);
+  }
+  const combinations = new Set(rows.map((row) => `${row.runner}/${row.reasoning}`));
+  if (combinations.size !== 6) {
+    throw new Error(`${scenario.id} has duplicate runner/reasoning rows`);
+  }
+
+  return {
+    ...scenario,
+    scenarioCount: 1,
+    runCount: rows[0].runs,
+    sample: `${rows[0].runs} measured runs per runner/reasoning point`,
+    rangeKind: "Three-run mean; no per-run interval published",
+    rows,
+  };
+});
+
 const csvHeaders = [
   "view",
   "view_label",
@@ -335,6 +385,7 @@ await emitGenerated(
       method: spec.method,
       generatedFrom: spec.source,
       views,
+      scenarioViews,
     },
     null,
     2,
@@ -355,6 +406,7 @@ await emitGenerated(
 
 console.log(`mode=${checkMode ? "check" : "write"}`);
 console.log(`benchmark_views=${views.length}`);
+console.log(`scenario_views=${scenarioViews.length}`);
 console.log(`category_rows=${csvRows.length}`);
 console.log(`csv=${outputCsvPath}`);
 console.log(`web_json=${outputJsonPath}`);

@@ -45,6 +45,12 @@ const expandedViews = expandedReasoningData.views.map((view) => ({
     point(runner, reasoning, values),
   ),
 }));
+const expandedScenarioViews = expandedReasoningData.scenarioViews.map((view) => ({
+  ...view,
+  rows: view.rows.map(({ runner, reasoning, ...values }) =>
+    point(runner, reasoning, values),
+  ),
+}));
 
 const expandedEvidence = evidenceFor("expanded-reasoning-suite");
 const pilotEvidence = evidenceFor("granular-pilot");
@@ -63,6 +69,7 @@ const datasetDefinitions = [
       `A ${expandedEvidence.taskRuns}-run matrix with scenario-balanced averages, behavioral quality scoring, and zero provider/API failures.`,
     evidence: expandedEvidence,
     views: expandedViews,
+    scenarioViews: expandedScenarioViews,
     rows: expandedViews[0].rows,
   },
   {
