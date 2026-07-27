@@ -48,11 +48,30 @@ Spark is intentionally smaller than the official Codex CLI. I am not trying to r
 
 [**Explore the interactive benchmark charts →**](https://ifbars.github.io/codex-spark-agent/)
 
-Toggle runners and reasoning levels, switch between token cost and duration, inspect uncertainty ranges, and compare the expanded suite with the granular pilot and earlier eight-task baseline.
+Switch among overall, coding, math/data, analysis, terminal/operations, and writing/configuration charts; then toggle runners and reasoning levels, change cost axes, and inspect uncertainty ranges. The granular pilot and earlier eight-task baseline remain available as historical evidence sets.
 
 The current dataset covers nine difficult scenarios with three repeats at every runner/reasoning combination: 162 task-runs total. Error bars are 95% intervals across scenario means, ordinary task failures remain scored, and no provider/API failures occurred. The measured ordering is not forced to be monotonic; the intervals make the remaining uncertainty visible.
 
-The aggregate values are in [`docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.csv`](docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.csv), with [scenario-level rows](docs/benchmarks/reasoning-cost-quality-expanded-scenarios-2026-07-26.csv) and [methodology](docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.md). The original granular pilot and 144-run success-only chart remain archived under `docs/`.
+The [category aggregates](docs/benchmarks/reasoning-cost-quality-categories-2026-07-26.csv) are reproducibly derived from the [scenario-level rows](docs/benchmarks/reasoning-cost-quality-expanded-scenarios-2026-07-26.csv) using the published [view specification](docs/benchmarks/reasoning-benchmark-views-2026-07-26.json). The [overall aggregate](docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.csv) and [methodology](docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.md) remain available, as do the original pilot and 144-run success-only chart.
+
+List the quick comparison slice before running it:
+
+```powershell
+.\scripts\quick_comparison_benchmark.ps1 -ListScenarios
+.\scripts\quick_harness_benchmark.ps1 -ListScenarios
+```
+
+Comparison reports include a **Report Inputs** section so results remain auditable. It records `benchmark_suite`, `benchmark_model`, `reasoning_effort`, `repeat`, `timeout_seconds`, `scenario_count`, `codex_bin`, `codex_command_path`, `codex_command_version`, `command_path`, `command_version`, and the complete `inputs` manifest. It also records comparison controls including `codex_preflight_timeout_seconds`, `ignore_user_config`, `isolated_codex_home`, `allow_harness_request_failure_comparison`, `allow_codex_request_failure_comparison`, `skip_codex_preflight`, `preflight_only`, and `fail_on_directional_comparison`. Reports emit an **input freshness warning** when their source rows no longer match those inputs. Use `--fail-on-directional-comparison` when a directional result should fail the command.
+
+The PowerShell wrapper exposes the equivalent `-FailOnDirectionalComparison` switch. Machine-readable output also carries `scenarios`, `rerun_command`, `resume_command`, `retry_after_seconds`, `retry_at_local`, and `retry_at_utc`. A preflight-only run prints these stable fields for automation:
+
+```text
+codex_preflight_status=...
+codex_preflight_codex_path=...
+codex_preflight_codex_version=...
+codex_preflight_rerun_command=...
+codex_preflight_resume_command=...
+```
 
 ## Use Spark
 

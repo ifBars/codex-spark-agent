@@ -6,8 +6,6 @@ const WIDTH = 1000;
 const HEIGHT = 520;
 const FRAME = { left: 78, right: 34, top: 34, bottom: 70 };
 const reasoningOrder = { low: 0, medium: 1, high: 2 };
-const plotWidth = WIDTH - FRAME.left - FRAME.right;
-const plotHeight = HEIGHT - FRAME.top - FRAME.bottom;
 const labelOffsets = {
   spark: {
     low: { dx: -12, dy: -10, anchor: "end" },
@@ -39,12 +37,25 @@ export function CostQualityChart({
   selectedPoint,
   onSelectPoint,
   rangeKind,
+  contextLabel,
+  description,
+  meta,
+  compact = false,
+  wide = false,
+  showInspector = true,
 }) {
   const titleId = useId();
+  const condensed = compact || wide;
+  const height = condensed ? 360 : HEIGHT;
+  const frame = condensed
+    ? { left: 70, right: 28, top: 28, bottom: 62 }
+    : FRAME;
+  const plotWidth = WIDTH - frame.left - frame.right;
+  const plotHeight = height - frame.top - frame.bottom;
   const xDomain = chartDomain(rows, xMetric, xMetrics);
   const yDomain = chartDomain(rows, yMetric, yMetrics, { fixedPercent: true });
-  const x = (value) => scale(value, xDomain, [FRAME.left, WIDTH - FRAME.right]);
-  const y = (value) => scale(value, yDomain, [HEIGHT - FRAME.bottom, FRAME.top]);
+  const x = (value) => scale(value, xDomain, [frame.left, WIDTH - frame.right]);
+  const y = (value) => scale(value, yDomain, [height - frame.bottom, frame.top]);
   const xTicks = ticks(...xDomain);
   const yTicks = ticks(...yDomain);
 
@@ -53,11 +64,14 @@ export function CostQualityChart({
     .filter((group) => group.length > 0);
 
   return (
-    <div className="chart-region">
+    <div className={`chart-region${compact ? " chart-region--compact" : ""}`}>
       <div className="chart-region__heading">
         <div>
-          <h2>{yMetrics[yMetric].label} vs. {xMetrics[xMetric].label}</h2>
-          <p>Lower is better horizontally; higher is better vertically. The upper-left is the ideal zone.</p>
+          <h2>{contextLabel} — {yMetrics[yMetric].label} vs. {xMetrics[xMetric].label}</h2>
+          <p>
+            {description ?? "Lower is better horizontally; higher is better vertically."}
+          </p>
+          {meta && <small>{meta} · {rangeKind}</small>}
         </div>
         <div className="chart-legend" aria-label="Runner legend">
           {grouped.map((group) => (
@@ -76,60 +90,60 @@ export function CostQualityChart({
       <div className="chart-canvas">
         <svg
           className="benchmark-chart"
-          viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+          viewBox={`0 0 ${WIDTH} ${height}`}
           role="img"
           aria-labelledby={titleId}
         >
           <title id={titleId}>
-            {yMetrics[yMetric].label} versus {xMetrics[xMetric].label} for visible benchmark points. The upper-left quadrant marks the ideal zone.
+            {contextLabel}: {yMetrics[yMetric].label} versus {xMetrics[xMetric].label} for visible benchmark points. The upper-left quadrant marks the ideal zone.
           </title>
 
           <g className="ideal-zone" aria-hidden="true">
             <rect
-              x={FRAME.left}
-              y={FRAME.top}
+              x={frame.left}
+              y={frame.top}
               width={plotWidth / 2}
               height={plotHeight / 2}
             />
-            <text x={FRAME.left + 14} y={FRAME.top + 22}>
+            <text x={frame.left + 14} y={frame.top + 22}>
               Ideal zone
             </text>
           </g>
 
           <g className="chart-grid">
             {yTicks.map((tick) => (
-              <line key={`y-${tick}`} x1={FRAME.left} x2={WIDTH - FRAME.right} y1={y(tick)} y2={y(tick)} />
+              <line key={`y-${tick}`} x1={frame.left} x2={WIDTH - frame.right} y1={y(tick)} y2={y(tick)} />
             ))}
             {xTicks.map((tick) => (
-              <line key={`x-${tick}`} x1={x(tick)} x2={x(tick)} y1={FRAME.top} y2={HEIGHT - FRAME.bottom} />
+              <line key={`x-${tick}`} x1={x(tick)} x2={x(tick)} y1={frame.top} y2={height - frame.bottom} />
             ))}
           </g>
 
           <g className="chart-axes">
-            <line x1={FRAME.left} x2={FRAME.left} y1={FRAME.top} y2={HEIGHT - FRAME.bottom} />
-            <line x1={FRAME.left} x2={WIDTH - FRAME.right} y1={HEIGHT - FRAME.bottom} y2={HEIGHT - FRAME.bottom} />
+            <line x1={frame.left} x2={frame.left} y1={frame.top} y2={height - frame.bottom} />
+            <line x1={frame.left} x2={WIDTH - frame.right} y1={height - frame.bottom} y2={height - frame.bottom} />
           </g>
 
           <g className="chart-labels">
             {yTicks.map((tick) => (
-              <text key={`yl-${tick}`} x={FRAME.left - 16} y={y(tick) + 4} textAnchor="end">
+              <text key={`yl-${tick}`} x={frame.left - 16} y={y(tick) + 4} textAnchor="end">
                 {formatMetric(yMetric, tick, true)}
               </text>
             ))}
             {xTicks.map((tick) => (
-              <text key={`xl-${tick}`} x={x(tick)} y={HEIGHT - FRAME.bottom + 28} textAnchor="middle">
+              <text key={`xl-${tick}`} x={x(tick)} y={height - frame.bottom + 28} textAnchor="middle">
                 {formatMetric(xMetric, tick, true)}
               </text>
             ))}
-            <text className="axis-title" x={(FRAME.left + WIDTH - FRAME.right) / 2} y={HEIGHT - 16} textAnchor="middle">
+            <text className="axis-title" x={(frame.left + WIDTH - frame.right) / 2} y={height - 16} textAnchor="middle">
               {xMetrics[xMetric].label}
             </text>
             <text
               className="axis-title"
               x={18}
-              y={(FRAME.top + HEIGHT - FRAME.bottom) / 2}
+              y={(frame.top + height - frame.bottom) / 2}
               textAnchor="middle"
-              transform={`rotate(-90 18 ${(FRAME.top + HEIGHT - FRAME.bottom) / 2})`}
+              transform={`rotate(-90 18 ${(frame.top + height - frame.bottom) / 2})`}
             >
               {yMetrics[yMetric].label}
             </text>
@@ -200,7 +214,7 @@ export function CostQualityChart({
           })}
         </svg>
 
-        <aside className="point-inspector" aria-live="polite">
+        {showInspector && <aside className="point-inspector" aria-live="polite">
           {selectedPoint ? (
             <>
               <div className="point-inspector__runner">
@@ -228,7 +242,7 @@ export function CostQualityChart({
           ) : (
             <p>Hover or focus a point to inspect it.</p>
           )}
-        </aside>
+        </aside>}
       </div>
     </div>
   );

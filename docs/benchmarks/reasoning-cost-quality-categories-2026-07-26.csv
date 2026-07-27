@@ -1,0 +1,37 @@
+view,view_label,runner,reasoning_effort,runs,scenarios,successful_runs,success_rate,average_quality,quality_ci95,average_total_tokens,tokens_ci95,average_duration_seconds,duration_ci95
+overall,Overall,Spark harness,low,27,9,24,88.89,93.80,10.86,98209,31341,14.39,6.35
+overall,Overall,Spark harness,medium,27,9,24,88.89,95.57,6.75,105067,50937,13.91,5.99
+overall,Overall,Spark harness,high,27,9,24,88.89,93.77,6.61,137234,94237,18.98,12.83
+overall,Overall,Codex CLI 0.145.0,low,27,9,21,77.78,85.32,12.99,156209,66329,24.08,5.50
+overall,Overall,Codex CLI 0.145.0,medium,27,9,18,66.67,81.89,14.22,154117,58422,23.83,3.88
+overall,Overall,Codex CLI 0.145.0,high,27,9,18,66.67,81.92,15.35,165801,70360,25.94,7.13
+coding,Coding,Spark harness,low,12,4,9,75.00,88.80,34.07,116752,91788,18.53,18.37
+coding,Coding,Spark harness,medium,12,4,9,75.00,90.95,19.54,138031,147692,18.21,15.92
+coding,Coding,Spark harness,high,12,4,10,83.33,96.90,7.54,204629,268146,28.13,36.47
+coding,Coding,Codex CLI 0.145.0,low,12,4,9,75.00,84.55,32.76,199972,174342,25.74,15.37
+coding,Coding,Codex CLI 0.145.0,medium,12,4,7,58.33,78.83,38.01,199139,136368,27.57,6.21
+coding,Coding,Codex CLI 0.145.0,high,12,4,7,58.33,79.03,43.26,205881,191969,29.27,17.33
+math-data,Math & data,Spark harness,low,6,2,6,100.00,100.00,0.00,77499,99234,10.53,9.15
+math-data,Math & data,Spark harness,medium,6,2,6,100.00,100.00,0.00,60239,24040,7.06,2.29
+math-data,Math & data,Spark harness,high,6,2,5,83.33,88.35,148.02,59225,45151,8.84,2.99
+math-data,Math & data,Codex CLI 0.145.0,low,6,2,6,100.00,96.85,23.51,110414,480103,26.34,31.13
+math-data,Math & data,Codex CLI 0.145.0,medium,6,2,5,83.33,90.85,116.26,115376,624881,19.56,38.75
+math-data,Math & data,Codex CLI 0.145.0,high,6,2,6,100.00,96.75,28.59,122709,424762,19.87,35.01
+analysis-research,Analysis,Spark harness,low,9,3,9,100.00,97.57,10.47,92594,24888,12.64,3.25
+analysis-research,Analysis,Spark harness,medium,9,3,9,100.00,100.00,0.00,79878,48218,9.79,6.33
+analysis-research,Analysis,Spark harness,high,9,3,9,100.00,98.77,5.31,91445,64503,13.13,9.83
+analysis-research,Analysis,Codex CLI 0.145.0,low,9,3,6,66.67,83.23,52.80,106276,157555,24.32,14.46
+analysis-research,Analysis,Codex CLI 0.145.0,medium,9,3,6,66.67,85.00,54.14,88834,98480,20.22,12.85
+analysis-research,Analysis,Codex CLI 0.145.0,high,9,3,5,55.56,80.57,48.66,104953,120565,19.68,15.83
+terminal-operations,Terminal & ops,Spark harness,low,6,2,6,100.00,98.15,23.51,69544,1842,8.76,13.34
+terminal-operations,Terminal & ops,Spark harness,medium,6,2,6,100.00,98.15,23.51,76923,236027,11.50,54.19
+terminal-operations,Terminal & ops,Spark harness,high,6,2,5,83.33,80.00,41.93,71127,196378,9.44,4.64
+terminal-operations,Terminal & ops,Codex CLI 0.145.0,low,6,2,6,100.00,90.00,63.53,143584,58645,20.41,44.28
+terminal-operations,Terminal & ops,Codex CLI 0.145.0,medium,6,2,5,83.33,83.35,20.96,161995,32540,21.76,10.80
+terminal-operations,Terminal & ops,Codex CLI 0.145.0,high,6,2,6,100.00,89.75,60.35,176913,263948,28.69,77.06
+writing-configuration,Writing & config,Spark harness,low,9,3,9,100.00,97.57,10.47,90127,32631,12.41,4.19
+writing-configuration,Writing & config,Spark harness,medium,9,3,9,100.00,100.00,0.00,85248,33081,11.32,0.99
+writing-configuration,Writing & config,Spark harness,high,9,3,9,100.00,98.77,5.31,98716,35778,14.76,3.00
+writing-configuration,Writing & config,Codex CLI 0.145.0,low,9,3,6,66.67,83.67,53.99,131920,144993,22.18,10.80
+writing-configuration,Writing & config,Codex CLI 0.145.0,medium,9,3,6,66.67,83.33,50.20,123041,130482,22.92,10.71
+writing-configuration,Writing & config,Codex CLI 0.145.0,high,9,3,5,55.56,80.73,49.25,131524,141057,22.06,15.57

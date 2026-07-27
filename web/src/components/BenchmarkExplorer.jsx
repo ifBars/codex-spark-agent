@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { ArrowRight, Flask, Info } from "@phosphor-icons/react";
 import { datasets, reasoningOptions, runnerOptions } from "../data/benchmarks.js";
+import { BenchmarkAtlasNav } from "./BenchmarkAtlasNav.jsx";
 import { CostQualityChart } from "./CostQualityChart.jsx";
 import { FilterStrip } from "./FilterStrip.jsx";
+import { RankingLedger } from "./RankingLedger.jsx";
 import { ResultsLedger } from "./ResultsLedger.jsx";
 
 function toggleSet(current, value) {
@@ -25,74 +27,123 @@ export function BenchmarkExplorer() {
   const [selectedPoint, setSelectedPoint] = useState(null);
 
   const dataset = datasets.find((candidate) => candidate.id === datasetId) ?? datasets[0];
-  const rows = useMemo(
+  const visibleViews = useMemo(
     () =>
-      dataset.rows.filter(
-        (row) => enabledRunners.has(row.runner) && enabledReasoning.has(row.reasoning),
-      ),
+      dataset.views.map((view) => ({
+        ...view,
+        rows: view.rows.filter(
+          (row) => enabledRunners.has(row.runner) && enabledReasoning.has(row.reasoning),
+        ),
+      })),
     [dataset, enabledReasoning, enabledRunners],
   );
+  const overallView = visibleViews[0];
+  const rows = overallView.rows;
   const selectedVisible = selectedPoint && rows.includes(selectedPoint) ? selectedPoint : rows[0];
 
   return (
     <>
-      <div className="page-frame">
-        <header className="page-intro">
-          <div>
-            <p className="page-intro__context">GPT-5.3 Codex Spark</p>
-            <h1>Benchmark explorer</h1>
-            <p className="page-intro__summary">
-              Compare reasoning cost, quality, duration, and full-pass rate across the Spark harness and native Codex CLI.
-            </p>
-          </div>
-          <div className="dataset-note">
-            <span>{dataset.date}</span>
-            <strong>{dataset.sample}</strong>
-            <p>{dataset.description}</p>
-          </div>
-        </header>
+      <div className="page-frame atlas-shell">
+        <BenchmarkAtlasNav views={dataset.views} />
 
-        <FilterStrip
-          datasetId={datasetId}
-          onDatasetChange={(value) => {
-            setDatasetId(value);
-            setSelectedPoint(null);
-          }}
-          xMetric={xMetric}
-          onXMetricChange={setXMetric}
-          yMetric={yMetric}
-          onYMetricChange={setYMetric}
-          enabledRunners={enabledRunners}
-          onToggleRunner={(runner) => {
-            setEnabledRunners((current) => toggleSet(current, runner));
-            setSelectedPoint(null);
-          }}
-          enabledReasoning={enabledReasoning}
-          onToggleReasoning={(reasoning) => {
-            setEnabledReasoning((current) => toggleSet(current, reasoning));
-            setSelectedPoint(null);
-          }}
-          showRanges={showRanges}
-          onShowRangesChange={setShowRanges}
-        />
+        <main className="atlas-main">
+          <header className="page-intro page-intro--atlas">
+            <div>
+              <p className="page-intro__context">GPT-5.3 Codex Spark</p>
+              <h1>Capability Atlas</h1>
+              <p className="page-intro__summary">
+                Compare reasoning cost, quality, and completion across real-world benchmark families for the Spark harness and native Codex CLI.
+              </p>
+            </div>
+            <div className="dataset-note">
+              <span>{dataset.date}</span>
+              <strong>{overallView.sample ?? dataset.sample}</strong>
+              <p>{overallView.description}</p>
+            </div>
+          </header>
 
-        <CostQualityChart
-          rows={rows}
-          xMetric={xMetric}
-          yMetric={yMetric}
-          showRanges={showRanges}
-          selectedPoint={selectedVisible}
-          onSelectPoint={setSelectedPoint}
-          rangeKind={dataset.rangeKind}
-        />
+          <FilterStrip
+            datasetId={datasetId}
+            onDatasetChange={(value) => {
+              setDatasetId(value);
+              setSelectedPoint(null);
+            }}
+            xMetric={xMetric}
+            onXMetricChange={setXMetric}
+            yMetric={yMetric}
+            onYMetricChange={setYMetric}
+            enabledRunners={enabledRunners}
+            onToggleRunner={(runner) => {
+              setEnabledRunners((current) => toggleSet(current, runner));
+              setSelectedPoint(null);
+            }}
+            enabledReasoning={enabledReasoning}
+            onToggleReasoning={(reasoning) => {
+              setEnabledReasoning((current) => toggleSet(current, reasoning));
+              setSelectedPoint(null);
+            }}
+            showRanges={showRanges}
+            onShowRangesChange={setShowRanges}
+          />
 
-        <ResultsLedger
-          rows={rows}
-          xMetric={xMetric}
-          yMetric={yMetric}
-          source={dataset.source}
-          rangeKind={dataset.rangeKind}
-        />
+          <section
+            className="atlas-overview"
+            id={`benchmark-${overallView.id}`}
+            aria-label={`${overallView.label} benchmark`}
+          >
+            <CostQualityChart
+              rows={rows}
+              xMetric={xMetric}
+              yMetric={yMetric}
+              showRanges={showRanges}
+              selectedPoint={selectedVisible}
+              onSelectPoint={setSelectedPoint}
+              rangeKind={dataset.rangeKind}
+              contextLabel={overallView.label}
+              description={overallView.description}
+              meta={`${overallView.scenarioCount ?? "Historical"} tasks · ${overallView.runCount ?? rows[0]?.runs ?? 0} runs per level`}
+              wide
+              showInspector={false}
+            />
+            <RankingLedger rows={rows} xMetric={xMetric} yMetric={yMetric} />
+          </section>
+
+          {visibleViews.length > 1 && (
+            <div className="atlas-category-grid" aria-label="Category benchmarks">
+              {visibleViews.slice(1).map((view) => (
+                <section
+                  className="atlas-category"
+                  id={`benchmark-${view.id}`}
+                  key={view.id}
+                  aria-label={`${view.label} benchmark`}
+                >
+                  <CostQualityChart
+                    rows={view.rows}
+                    xMetric={xMetric}
+                    yMetric={yMetric}
+                    showRanges={showRanges}
+                    selectedPoint={null}
+                    onSelectPoint={setSelectedPoint}
+                    rangeKind={dataset.rangeKind}
+                    contextLabel={view.label}
+                    description={view.description}
+                    meta={`${view.scenarioCount} tasks · ${view.runCount} runs per level`}
+                    compact
+                    showInspector={false}
+                  />
+                </section>
+              ))}
+            </div>
+          )}
+
+          <ResultsLedger
+            rows={rows}
+            xMetric={xMetric}
+            yMetric={yMetric}
+            source={dataset.source}
+            rangeKind={dataset.rangeKind}
+          />
+        </main>
       </div>
 
       <section className="methodology-band" id="methodology" aria-labelledby="methodology-title">
@@ -121,7 +172,7 @@ export function BenchmarkExplorer() {
             <article>
               <h3>Scope</h3>
               <p>
-                This is bounded benchmark evidence, not a general model-quality claim. Switch datasets to compare the expanded suite, pilot, and saturated baseline.
+                Category charts reuse the same measured runs and weight each included scenario equally. Narrow views have wider uncertainty and are not standalone model-quality claims.
               </p>
             </article>
           </div>

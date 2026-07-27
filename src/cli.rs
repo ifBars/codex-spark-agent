@@ -550,6 +550,16 @@ pub(crate) enum ProfileBenchmarkSuiteKind {
     Editing,
     /// Difficulty-focused compound tasks intended to preserve reasoning-level headroom.
     Reasoning,
+    /// Real-world implementation, repair, migration, and project-scaffolding tasks.
+    Coding,
+    /// Quantitative reasoning over operational data, policies, and exact computed outputs.
+    Quantitative,
+    /// Evidence synthesis, investigation, review, and multi-source reasoning tasks.
+    Analysis,
+    /// Terminal repair, incident diagnosis, configuration, and operational reporting tasks.
+    Operations,
+    /// Grounded long-form, review, support, and configuration-writing tasks.
+    Writing,
     /// Mixed real-world suite for broad Spark profiling.
     RealWorld,
 }
@@ -660,6 +670,11 @@ impl ProfileBenchmarkSuiteKind {
             Self::Scaffolding => "scaffolding",
             Self::Editing => "editing",
             Self::Reasoning => "reasoning",
+            Self::Coding => "coding",
+            Self::Quantitative => "quantitative",
+            Self::Analysis => "analysis",
+            Self::Operations => "operations",
+            Self::Writing => "writing",
             Self::RealWorld => "real-world",
         }
     }
@@ -717,6 +732,50 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::RustNotesTuiScaffold,
                 ProfileScenarioKind::StatefulReconciliationBugfix,
             ],
+            Self::Coding => &[
+                ProfileScenarioKind::MultiFilePatch,
+                ProfileScenarioKind::GithubIssueBugfix,
+                ProfileScenarioKind::RustFailingTestBugfix,
+                ProfileScenarioKind::TypeScriptReducerBugfix,
+                ProfileScenarioKind::MergeConflictResolution,
+                ProfileScenarioKind::ConfigMigration,
+                ProfileScenarioKind::ReactCalculatorScaffold,
+                ProfileScenarioKind::RustLogAnalyzerScaffold,
+                ProfileScenarioKind::RustNotesTuiScaffold,
+                ProfileScenarioKind::MultiModuleBugfix,
+                ProfileScenarioKind::StatefulReconciliationBugfix,
+            ],
+            Self::Quantitative => &[
+                ProfileScenarioKind::OpsReport,
+                ProfileScenarioKind::MultiHopAnalysis,
+            ],
+            Self::Analysis => &[
+                ProfileScenarioKind::GithubIssueTriage,
+                ProfileScenarioKind::CiFailureTriage,
+                ProfileScenarioKind::PullRequestReview,
+                ProfileScenarioKind::DependencyUpgradeTriage,
+                ProfileScenarioKind::TechnicalEssay,
+                ProfileScenarioKind::MultiHopAnalysis,
+                ProfileScenarioKind::PolicySupportAgent,
+            ],
+            Self::Operations => &[
+                ProfileScenarioKind::ShellRecovery,
+                ProfileScenarioKind::ToolRecovery,
+                ProfileScenarioKind::CiFailureTriage,
+                ProfileScenarioKind::DependencyUpgradeTriage,
+                ProfileScenarioKind::ConfigMigration,
+                ProfileScenarioKind::OpsReport,
+                ProfileScenarioKind::TerminalRepair,
+            ],
+            Self::Writing => &[
+                ProfileScenarioKind::GithubIssueTriage,
+                ProfileScenarioKind::CiFailureTriage,
+                ProfileScenarioKind::PullRequestReview,
+                ProfileScenarioKind::DependencyUpgradeTriage,
+                ProfileScenarioKind::TechnicalEssay,
+                ProfileScenarioKind::ConfigMigration,
+                ProfileScenarioKind::PolicySupportAgent,
+            ],
             Self::RealWorld => &[
                 ProfileScenarioKind::RepoSurvey,
                 ProfileScenarioKind::RepoArchitectureSurvey,
@@ -745,6 +804,69 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::MultiHopAnalysis,
                 ProfileScenarioKind::PolicySupportAgent,
             ],
+        }
+    }
+}
+
+#[cfg(test)]
+mod benchmark_suite_tests {
+    use super::*;
+
+    #[test]
+    fn category_suites_are_nonempty_real_world_subsets() {
+        let real_world = ProfileBenchmarkSuiteKind::RealWorld.scenarios();
+        for suite in [
+            ProfileBenchmarkSuiteKind::Coding,
+            ProfileBenchmarkSuiteKind::Quantitative,
+            ProfileBenchmarkSuiteKind::Analysis,
+            ProfileBenchmarkSuiteKind::Operations,
+            ProfileBenchmarkSuiteKind::Writing,
+        ] {
+            assert!(
+                !suite.scenarios().is_empty(),
+                "{} must not be empty",
+                suite.name()
+            );
+            for scenario in suite.scenarios() {
+                assert!(
+                    real_world.contains(scenario),
+                    "{} contains non-real-world scenario {}",
+                    suite.name(),
+                    scenario.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn published_reasoning_views_align_with_runner_category_suites() {
+        let value: serde_json::Value = serde_json::from_str(include_str!(
+            "../docs/benchmarks/reasoning-benchmark-views-2026-07-26.json"
+        ))
+        .expect("view spec should be valid JSON");
+        let views = value["views"].as_array().expect("views array");
+        for (view_id, suite) in [
+            ("coding", ProfileBenchmarkSuiteKind::Coding),
+            ("math-data", ProfileBenchmarkSuiteKind::Quantitative),
+            ("analysis-research", ProfileBenchmarkSuiteKind::Analysis),
+            ("terminal-operations", ProfileBenchmarkSuiteKind::Operations),
+            ("writing-configuration", ProfileBenchmarkSuiteKind::Writing),
+        ] {
+            let view = views
+                .iter()
+                .find(|view| view["id"].as_str() == Some(view_id))
+                .unwrap_or_else(|| panic!("missing view {view_id}"));
+            for scenario in view["scenarios"].as_array().expect("scenario array") {
+                let name = scenario.as_str().expect("scenario name");
+                assert!(
+                    suite
+                        .scenarios()
+                        .iter()
+                        .any(|scenario| scenario.name() == name),
+                    "{view_id} scenario {name} is not in runner suite {}",
+                    suite.name()
+                );
+            }
         }
     }
 }

@@ -22,8 +22,28 @@ Weighted quality uses the benchmark's scenario-specific behavioral validation. S
 
 The measured ordering is not forced to be monotonic. Confidence intervals overlap, and low reasoning outperformed medium or high on some fixtures in this sample.
 
+## Category views
+
+The interactive app also presents five overlapping real-world task families derived from the same 162 task-runs:
+
+- **Coding:** four implementation, migration, scaffolding, and cross-module repair scenarios.
+- **Math & data:** two scenarios requiring exact calculations or joined quantitative evidence.
+- **Analysis:** three grounded synthesis and policy-reasoning scenarios.
+- **Terminal & ops:** two terminal-first repair and operational-reporting scenarios.
+- **Writing & config:** three grounded prose, migration, and policy-output scenarios.
+
+These are different views of one measured matrix, not additional benchmark runs. A scenario may appear in more than one family because real tasks cross skill boundaries. Each view again weights its included scenario means equally and computes its own 95% Student's t interval. Narrow two-scenario views produce very wide intervals and should be treated as early category coverage, not stable rankings.
+
+Rebuild the category aggregates and web data with:
+
+```powershell
+bun scripts/build_benchmark_views.mjs
+```
+
 ## Artifacts
 
 - [`reasoning-cost-quality-expanded-2026-07-26.csv`](reasoning-cost-quality-expanded-2026-07-26.csv) contains the six chart points.
 - [`reasoning-cost-quality-expanded-scenarios-2026-07-26.csv`](reasoning-cost-quality-expanded-scenarios-2026-07-26.csv) contains all 54 runner/reasoning/scenario aggregates.
+- [`reasoning-benchmark-views-2026-07-26.json`](reasoning-benchmark-views-2026-07-26.json) defines the published category membership.
+- [`reasoning-cost-quality-categories-2026-07-26.csv`](reasoning-cost-quality-categories-2026-07-26.csv) contains all 36 overall and category chart points.
 - The ignored local comparison report was generated from three exact Spark manifests and three isolated native Codex reports with `benchmark-compare --group-by-reasoning`.

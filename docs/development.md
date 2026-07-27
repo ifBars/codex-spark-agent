@@ -102,7 +102,22 @@ spark opencode-benchmark real-world --timeout-seconds 360 --pure
 spark benchmark-compare --suite real-world --codex-cli-report .spark-profile/codex-cli/report.json
 ```
 
-Available suites include `core`, `survey`, `scaffolding`, `editing`, `reasoning`, and `real-world`. Reasoning scenarios can report weighted validation checks while the normal exit code still records full completion.
+Available suites include `core`, `survey`, `scaffolding`, `editing`, `reasoning`, `coding`, `quantitative`, `analysis`, `operations`, `writing`, and `real-world`. The category suites intentionally overlap when a task exercises more than one real-world skill. Reasoning scenarios can report weighted validation checks while the normal exit code still records full completion.
+
+Run a focused category exactly like any other suite:
+
+```powershell
+spark profile-benchmark coding --reasoning-effort medium --repeat 3
+spark codex-cli-benchmark quantitative --reasoning-effort medium --repeat 3
+```
+
+The published web views are rebuilt from reviewed scenario rows with Bun:
+
+```powershell
+bun scripts/build_benchmark_views.mjs
+```
+
+The view specification, generated category CSV, and web JSON are checked in so the aggregation is reviewable without rerunning provider benchmarks.
 
 The quick comparison script preflights native Codex before spending a Spark run and writes resumable status artifacts when the provider is unavailable. Comparison reports keep provider failures separate from task failures and record runner versions, scenario coverage, and input freshness.
 
