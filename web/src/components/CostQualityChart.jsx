@@ -29,6 +29,10 @@ function scale(value, domain, range) {
   return r0 + ((value - d0) / (d1 - d0 || 1)) * (r1 - r0);
 }
 
+function clamp(value, [min, max]) {
+  return Math.min(max, Math.max(min, value));
+}
+
 export function CostQualityChart({
   rows,
   xMetric,
@@ -53,9 +57,11 @@ export function CostQualityChart({
   const plotWidth = WIDTH - frame.left - frame.right;
   const plotHeight = height - frame.top - frame.bottom;
   const xDomain = chartDomain(rows, xMetric, xMetrics);
-  const yDomain = chartDomain(rows, yMetric, yMetrics, { fixedPercent: true });
+  const yDomain = chartDomain(rows, yMetric, yMetrics, { bounds: [0, 100] });
   const x = (value) => scale(value, xDomain, [frame.left, WIDTH - frame.right]);
   const y = (value) => scale(value, yDomain, [height - frame.bottom, frame.top]);
+  const rangeX = (value) => x(clamp(value, xDomain));
+  const rangeY = (value) => y(clamp(value, yDomain));
   const xTicks = ticks(...xDomain);
   const yTicks = ticks(...yDomain);
 
@@ -71,7 +77,7 @@ export function CostQualityChart({
           <p>
             {description ?? "Lower is better horizontally; higher is better vertically."}
           </p>
-          {meta && <small>{meta} · {rangeKind}</small>}
+          {meta && <small>{meta} · {rangeKind} · Axes fit estimates; long ranges clip at bounds</small>}
         </div>
         <div className="chart-legend" aria-label="Runner legend">
           {grouped.map((group) => (
@@ -174,16 +180,16 @@ export function CostQualityChart({
               <g className="chart-point" key={`${row.runner}-${row.reasoning}`}>
                 {showRanges && xRange && (
                   <g className="range-mark" style={{ stroke: row.color }}>
-                    <line x1={x(xRange[0])} x2={x(xRange[1])} y1={cy} y2={cy} />
-                    <line x1={x(xRange[0])} x2={x(xRange[0])} y1={cy - 6} y2={cy + 6} />
-                    <line x1={x(xRange[1])} x2={x(xRange[1])} y1={cy - 6} y2={cy + 6} />
+                    <line x1={rangeX(xRange[0])} x2={rangeX(xRange[1])} y1={cy} y2={cy} />
+                    <line x1={rangeX(xRange[0])} x2={rangeX(xRange[0])} y1={cy - 6} y2={cy + 6} />
+                    <line x1={rangeX(xRange[1])} x2={rangeX(xRange[1])} y1={cy - 6} y2={cy + 6} />
                   </g>
                 )}
                 {showRanges && yRange && (
                   <g className="range-mark" style={{ stroke: row.color }}>
-                    <line x1={cx} x2={cx} y1={y(yRange[0])} y2={y(yRange[1])} />
-                    <line x1={cx - 6} x2={cx + 6} y1={y(yRange[0])} y2={y(yRange[0])} />
-                    <line x1={cx - 6} x2={cx + 6} y1={y(yRange[1])} y2={y(yRange[1])} />
+                    <line x1={cx} x2={cx} y1={rangeY(yRange[0])} y2={rangeY(yRange[1])} />
+                    <line x1={cx - 6} x2={cx + 6} y1={rangeY(yRange[0])} y2={rangeY(yRange[0])} />
+                    <line x1={cx - 6} x2={cx + 6} y1={rangeY(yRange[1])} y2={rangeY(yRange[1])} />
                   </g>
                 )}
                 <circle

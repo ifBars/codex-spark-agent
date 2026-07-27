@@ -14,16 +14,41 @@ export function sentenceCase(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-export function chartDomain(rows, metric, definitions, { fixedPercent = false } = {}) {
-  if (fixedPercent) return [0, 100];
+export function chartDomain(
+  rows,
+  metric,
+  definitions,
+  { bounds = [0, null], includeRanges = false } = {},
+) {
   const definition = definitions[metric];
-  const values = rows.flatMap((row) => [
-    row[definition.key],
-    definition.minKey ? row[definition.minKey] : row[definition.key],
-    definition.maxKey ? row[definition.maxKey] : row[definition.key],
-  ]);
+  const values = rows.flatMap((row) => {
+    const rowValues = [row[definition.key]];
+    if (includeRanges && definition.minKey) rowValues.push(row[definition.minKey]);
+    if (includeRanges && definition.maxKey) rowValues.push(row[definition.maxKey]);
+    return rowValues.filter(Number.isFinite);
+  });
+
+  if (values.length === 0) {
+    return [
+      bounds[0] ?? 0,
+      bounds[1] ?? 1,
+    ];
+  }
+
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const span = Math.max(max - min, max * 0.12, 1);
-  return [Math.max(0, min - span * 0.12), max + span * 0.12];
+  const boundedSpan = bounds[0] !== null && bounds[1] !== null
+    ? (bounds[1] - bounds[0]) * 0.08
+    : 0;
+  const minimumSpan = Math.max(boundedSpan, Math.abs(max) * 0.1, 1);
+  const span = Math.max(max - min, minimumSpan);
+  const center = (min + max) / 2;
+  const padding = span * 0.1;
+  const domainMin = center - span / 2 - padding;
+  const domainMax = center + span / 2 + padding;
+
+  return [
+    bounds[0] === null ? domainMin : Math.max(bounds[0], domainMin),
+    bounds[1] === null ? domainMax : Math.min(bounds[1], domainMax),
+  ];
 }
