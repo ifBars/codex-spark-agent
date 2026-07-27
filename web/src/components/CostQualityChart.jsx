@@ -49,6 +49,7 @@ export function CostQualityChart({
   meta,
   compact = false,
   wide = false,
+  showTooltip = true,
 }) {
   const titleId = useId();
   const [hoveredPoint, setHoveredPoint] = useState(null);
@@ -70,7 +71,7 @@ export function CostQualityChart({
   const yTicks = ticks(...yDomain);
   const visiblePinnedPoint = rows.find((row) => samePoint(row, pinnedPoint)) ?? null;
   const visibleHoveredPoint = rows.find((row) => samePoint(row, hoveredPoint)) ?? null;
-  const activePoint = visibleHoveredPoint ?? visiblePinnedPoint;
+  const activePoint = showTooltip ? visibleHoveredPoint ?? visiblePinnedPoint : null;
 
   const grouped = ["spark", "codex"]
     .map((runner) => rows.filter((row) => row.runner === runner).sort((a, b) => reasoningOrder[a.reasoning] - reasoningOrder[b.reasoning]))
@@ -212,21 +213,21 @@ export function CostQualityChart({
                   stroke="#fffaf2"
                   strokeWidth="3"
                   style={{ color: row.color }}
-                  tabIndex="0"
-                  role="button"
+                  tabIndex={showTooltip ? 0 : undefined}
+                  role={showTooltip ? "button" : undefined}
                   aria-label={`${row.runnerName}, ${row.reasoning} reasoning: ${formatMetric(yMetric, row[yMetrics[yMetric].key])} ${yMetrics[yMetric].label}, ${formatMetric(xMetric, row[xMetrics[xMetric].key])} ${xMetrics[xMetric].label}`}
-                  aria-pressed={samePoint(visiblePinnedPoint, row)}
-                  onClick={() => setPinnedPoint((current) => samePoint(current, row) ? null : row)}
-                  onFocus={() => setHoveredPoint(row)}
-                  onBlur={() => setHoveredPoint(null)}
-                  onMouseEnter={() => setHoveredPoint(row)}
-                  onMouseLeave={() => setHoveredPoint(null)}
-                  onKeyDown={(event) => {
+                  aria-pressed={showTooltip ? samePoint(visiblePinnedPoint, row) : undefined}
+                  onClick={showTooltip ? () => setPinnedPoint((current) => samePoint(current, row) ? null : row) : undefined}
+                  onFocus={showTooltip ? () => setHoveredPoint(row) : undefined}
+                  onBlur={showTooltip ? () => setHoveredPoint(null) : undefined}
+                  onMouseEnter={showTooltip ? () => setHoveredPoint(row) : undefined}
+                  onMouseLeave={showTooltip ? () => setHoveredPoint(null) : undefined}
+                  onKeyDown={showTooltip ? (event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       setPinnedPoint((current) => samePoint(current, row) ? null : row);
                     }
-                  }}
+                  } : undefined}
                 />
                 <text
                   className="point-label"

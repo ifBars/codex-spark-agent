@@ -108,6 +108,7 @@ export function BenchmarkExplorer() {
               description={overallView.description}
               meta={`${overallView.scenarioCount ?? "Historical"} tasks · ${overallView.runCount ?? rows[0]?.runs ?? 0} runs per level · ${coverageLabel(overallView.scenarioCount)}`}
               wide
+              showTooltip={false}
             />
             <RankingLedger rows={rows} xMetric={xMetric} yMetric={yMetric} />
           </section>
