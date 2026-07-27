@@ -3,7 +3,7 @@ param(
     [ValidateSet("minimal", "low", "medium", "high")]
     [string]$ReasoningEffort = "medium",
     [int]$Repeat = 1,
-    [ValidateSet("core", "survey", "scaffolding", "editing", "reasoning", "real-world")]
+    [ValidateSet("core", "survey", "scaffolding", "editing", "reasoning", "coding", "quantitative", "analysis", "operations", "writing", "real-world")]
     [string]$Suite = "real-world",
     [string[]]$Scenario = @(),
     [switch]$ListScenarios,
@@ -19,7 +19,7 @@ $BenchmarkDir = Join-Path $RepoRoot ".spark-profile\benchmarks"
 if (-not $Scenario -or $Scenario.Count -eq 0) {
     if ($Suite -eq "reasoning") {
         $Scenario = @(Get-QuickReasoningScenario)
-    } else {
+    } elseif ($Suite -eq "real-world") {
         $Scenario = @(Get-QuickRealWorldScenario)
     }
 }

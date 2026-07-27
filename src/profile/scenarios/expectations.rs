@@ -114,6 +114,9 @@ pub(crate) fn profile_scenario_expected_tool_groups(
             ]
         }
         ProfileScenarioKind::OpsReport => vec![vec!["fs.read"], vec!["fs.write"]],
+        ProfileScenarioKind::InventoryRebalancePlan => {
+            vec![vec!["fs.read"], vec!["cmd.exec"], vec!["fs.write"]]
+        }
         ProfileScenarioKind::MultiModuleBugfix => {
             vec![
                 vec!["fs.read"],
@@ -758,6 +761,47 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "fs.read",
                 "path": ".spark-scenarios/ops-report/report.md",
+            }),
+        ],
+        ProfileScenarioKind::InventoryRebalancePlan => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/inventory-rebalance-plan/brief.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/inventory-rebalance-plan/policy.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/inventory-rebalance-plan/data/products.csv",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/inventory-rebalance-plan/data/warehouses.csv",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/inventory-rebalance-plan/data/transfer_options.csv",
+            }),
+            json!({
+                "tool": "cmd.exec",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/inventory-rebalance-plan/plan.json",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": ".spark-scenarios/inventory-rebalance-plan/memo.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/inventory-rebalance-plan/plan.json",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/inventory-rebalance-plan/memo.md",
             }),
         ],
         ProfileScenarioKind::MultiModuleBugfix => vec![

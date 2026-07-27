@@ -5,7 +5,7 @@ use crate::profile::scenarios::{
     prepare_profile_scenario, profile_scenario_expected_skills,
     profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
     profile_scenario_optional_tool_calls, profile_scenario_prompts,
-    profile_scenario_validation_command,
+    profile_scenario_validation_checks, profile_scenario_validation_command,
 };
 use crate::{APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS};
 use serde_json::json;
@@ -1241,6 +1241,7 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::TechnicalEssay,
             ProfileScenarioKind::ConfigMigration,
             ProfileScenarioKind::OpsReport,
+            ProfileScenarioKind::InventoryRebalancePlan,
             ProfileScenarioKind::MultiModuleBugfix,
             ProfileScenarioKind::TerminalRepair,
             ProfileScenarioKind::MultiHopAnalysis,
@@ -1318,6 +1319,16 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
         ProfileBenchmarkSuiteKind::RealWorld
             .scenarios()
             .contains(&ProfileScenarioKind::OpsReport)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::Quantitative
+            .scenarios()
+            .contains(&ProfileScenarioKind::InventoryRebalancePlan)
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::InventoryRebalancePlan)
     );
     assert!(
         ProfileBenchmarkSuiteKind::RealWorld
@@ -1413,6 +1424,11 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
             ProfileScenarioKind::OpsReport,
             ".spark-scenarios/ops-report/data/tickets.csv",
             "billing,P1,open,95",
+        ),
+        (
+            ProfileScenarioKind::InventoryRebalancePlan,
+            ".spark-scenarios/inventory-rebalance-plan/data/transfer_options.csv",
+            "T14,Atlas,NORTH,EAST,10,1,15,5",
         ),
         (
             ProfileScenarioKind::MultiModuleBugfix,
@@ -2071,6 +2087,284 @@ fn multi_hop_analysis_validation_accepts_exact_answer_and_rejects_distractors() 
     assert!(
         benchmark_task_prompt(ProfileScenarioKind::MultiHopAnalysis)
             .contains("joining the policy rules with both data files")
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn inventory_rebalance_plan_validation_is_exact_and_granular() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::InventoryRebalancePlan)
+        .expect("prepare inventory rebalance plan");
+    let root = dir.path().join(".spark-scenarios/inventory-rebalance-plan");
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::InventoryRebalancePlan)
+            .expect("validation");
+    let perfect_plan = r#"{
+  "basePlan": {
+    "budget": 325,
+    "selectedOptionIds": ["T05", "T07", "T08", "T11", "T12"],
+    "totalUnits": 72,
+    "totalCost": 307,
+    "grossAvoidedPenalty": 2950,
+    "netBenefit": 2643,
+    "remainingBudget": 18
+  },
+  "contingencyPlan": {
+    "budget": 250,
+    "selectedOptionIds": ["T02", "T03", "T11", "T12"],
+    "totalUnits": 52,
+    "totalCost": 247,
+    "grossAvoidedPenalty": 2470,
+    "netBenefit": 2223,
+    "remainingBudget": 3
+  },
+  "incrementalNetBenefit": 420
+}
+"#;
+    std::fs::write(root.join("plan.json"), perfect_plan).expect("write perfect plan");
+    std::fs::write(
+        root.join("memo.md"),
+        "# Recommendation\n\nThe base budget adds 420 net benefit over the contingency plan. T14 is ineligible because its lead time is 5 days. Both plans stay within budget, origin surplus, and destination deficit constraints.\n",
+    )
+    .expect("write grounded memo");
+
+    let good = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run validation");
+    assert!(
+        good.status.success(),
+        "expected exact optimum to pass: {}",
+        String::from_utf8_lossy(&good.stderr)
+    );
+
+    let checks = profile_scenario_validation_checks(ProfileScenarioKind::InventoryRebalancePlan);
+    assert_eq!(checks.iter().map(|check| check.weight).sum::<u32>(), 100);
+    let perfect_score = checks
+        .iter()
+        .filter(|check| {
+            std::process::Command::new(check.program)
+                .args(check.args)
+                .current_dir(&root)
+                .output()
+                .expect("run granular validation check")
+                .status
+                .success()
+        })
+        .map(|check| check.weight)
+        .sum::<u32>();
+    assert_eq!(perfect_score, 100);
+
+    std::fs::write(
+        root.join("plan.json"),
+        perfect_plan.replace(
+            r#""selectedOptionIds": ["T02", "T03", "T11", "T12"]"#,
+            r#""selectedOptionIds": ["T01", "T03", "T11", "T12"]"#,
+        ),
+    )
+    .expect("write suboptimal contingency selection");
+    let bad = std::process::Command::new(validation.program)
+        .args(validation.args)
+        .current_dir(&root)
+        .output()
+        .expect("run invalid validation");
+    assert!(
+        !bad.status.success(),
+        "suboptimal contingency plan should fail"
+    );
+    let partial_score = checks
+        .iter()
+        .filter(|check| {
+            std::process::Command::new(check.program)
+                .args(check.args)
+                .current_dir(&root)
+                .output()
+                .expect("run granular validation check")
+                .status
+                .success()
+        })
+        .map(|check| check.weight)
+        .sum::<u32>();
+    assert_eq!(partial_score, 80);
+
+    let prompt = benchmark_task_prompt(ProfileScenarioKind::InventoryRebalancePlan);
+    assert!(prompt.contains("enumerate every feasible all-or-nothing option subset"));
+    assert!(prompt.contains("do not use a greedy shortcut"));
+}
+
+#[test]
+fn inventory_rebalance_fixture_optima_are_derived_from_the_published_inputs() {
+    #[derive(Clone)]
+    struct TransferOption {
+        id: String,
+        sku: String,
+        origin: String,
+        destination: String,
+        units: i64,
+        cost: i64,
+        lead_days: i64,
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct Optimum {
+        ids: String,
+        total_units: i64,
+        total_cost: i64,
+        gross_avoided_penalty: i64,
+        net_benefit: i64,
+        remaining_budget: i64,
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::InventoryRebalancePlan)
+        .expect("prepare inventory rebalance plan");
+    let data = dir
+        .path()
+        .join(".spark-scenarios/inventory-rebalance-plan/data");
+
+    let products = std::fs::read_to_string(data.join("products.csv")).expect("products");
+    let penalties = products
+        .lines()
+        .skip(1)
+        .map(|line| {
+            let fields = line.split(',').collect::<Vec<_>>();
+            (
+                fields[0].to_string(),
+                fields[1].parse::<i64>().expect("penalty"),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    let warehouses = std::fs::read_to_string(data.join("warehouses.csv")).expect("warehouses");
+    let mut surplus = std::collections::HashMap::new();
+    let mut deficit = std::collections::HashMap::new();
+    for line in warehouses.lines().skip(1) {
+        let fields = line.split(',').collect::<Vec<_>>();
+        let on_hand = fields[2].parse::<i64>().expect("on hand");
+        let forecast = fields[3].parse::<i64>().expect("forecast");
+        let safety = fields[4].parse::<i64>().expect("safety");
+        let available = on_hand - forecast - safety;
+        let key = (fields[1].to_string(), fields[0].to_string());
+        if available > 0 {
+            surplus.insert(key, available);
+        } else if available < 0 {
+            deficit.insert(key, -available);
+        }
+    }
+
+    let options_csv = std::fs::read_to_string(data.join("transfer_options.csv")).expect("options");
+    let options = options_csv
+        .lines()
+        .skip(1)
+        .map(|line| {
+            let fields = line.split(',').collect::<Vec<_>>();
+            let units = fields[4].parse::<i64>().expect("units");
+            let variable_cost = fields[5].parse::<i64>().expect("variable cost");
+            let fixed_cost = fields[6].parse::<i64>().expect("fixed cost");
+            TransferOption {
+                id: fields[0].to_string(),
+                sku: fields[1].to_string(),
+                origin: fields[2].to_string(),
+                destination: fields[3].to_string(),
+                units,
+                cost: units * variable_cost + fixed_cost,
+                lead_days: fields[7].parse::<i64>().expect("lead days"),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let solve = |budget: i64| {
+        let mut best: Option<Optimum> = None;
+        for mask in 0usize..(1usize << options.len()) {
+            let mut origin_units = std::collections::HashMap::new();
+            let mut destination_units = std::collections::HashMap::new();
+            let mut ids = Vec::new();
+            let mut total_units = 0;
+            let mut total_cost = 0;
+            let mut gross = 0;
+            let mut feasible = true;
+            for (index, option) in options.iter().enumerate() {
+                if mask & (1usize << index) == 0 {
+                    continue;
+                }
+                if option.lead_days > 3 {
+                    feasible = false;
+                    break;
+                }
+                total_cost += option.cost;
+                if total_cost > budget {
+                    feasible = false;
+                    break;
+                }
+                total_units += option.units;
+                gross += penalties[&option.sku] * option.units;
+                ids.push(option.id.clone());
+                let origin_key = (option.sku.clone(), option.origin.clone());
+                let destination_key = (option.sku.clone(), option.destination.clone());
+                let used_origin = origin_units.entry(origin_key.clone()).or_insert(0);
+                *used_origin += option.units;
+                let used_destination = destination_units
+                    .entry(destination_key.clone())
+                    .or_insert(0);
+                *used_destination += option.units;
+                if *used_origin > surplus[&origin_key]
+                    || *used_destination > deficit[&destination_key]
+                {
+                    feasible = false;
+                    break;
+                }
+            }
+            if !feasible {
+                continue;
+            }
+            ids.sort();
+            let ids = ids.join(",");
+            let net_benefit = gross - total_cost;
+            let candidate = Optimum {
+                ids,
+                total_units,
+                total_cost,
+                gross_avoided_penalty: gross,
+                net_benefit,
+                remaining_budget: budget - total_cost,
+            };
+            let should_replace = best.as_ref().is_none_or(|current| {
+                candidate.net_benefit > current.net_benefit
+                    || (candidate.net_benefit == current.net_benefit
+                        && (candidate.total_cost < current.total_cost
+                            || (candidate.total_cost == current.total_cost
+                                && candidate.ids < current.ids)))
+            });
+            if should_replace {
+                best = Some(candidate);
+            }
+        }
+        best.expect("at least the empty plan is feasible")
+    };
+
+    assert_eq!(
+        solve(325),
+        Optimum {
+            ids: "T05,T07,T08,T11,T12".to_string(),
+            total_units: 72,
+            total_cost: 307,
+            gross_avoided_penalty: 2950,
+            net_benefit: 2643,
+            remaining_budget: 18,
+        }
+    );
+    assert_eq!(
+        solve(250),
+        Optimum {
+            ids: "T02,T03,T11,T12".to_string(),
+            total_units: 52,
+            total_cost: 247,
+            gross_avoided_penalty: 2470,
+            net_benefit: 2223,
+            remaining_budget: 3,
+        }
     );
 }
 

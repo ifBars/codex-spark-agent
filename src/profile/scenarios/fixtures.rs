@@ -26,6 +26,7 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
         ProfileScenarioKind::TechnicalEssay => Some("technical-essay"),
         ProfileScenarioKind::ConfigMigration => Some("config-migration"),
         ProfileScenarioKind::OpsReport => Some("ops-report"),
+        ProfileScenarioKind::InventoryRebalancePlan => Some("inventory-rebalance-plan"),
         ProfileScenarioKind::MultiModuleBugfix => Some("multi-module-bugfix"),
         ProfileScenarioKind::StatefulReconciliationBugfix => Some("stateful-reconciliation-bugfix"),
         ProfileScenarioKind::TerminalRepair => Some("terminal-repair"),
@@ -493,6 +494,37 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 "id,team,severity,status,minutes\n1,api,P1,open,42\n2,api,P2,closed,30\n3,billing,P1,open,95\n4,billing,P1,closed,120\n5,search,P3,open,15\n6,api,P2,open,60\n7,billing,P2,open,45\n8,search,P1,closed,80\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture tickets.csv: {error}"))?;
+        }
+        ProfileScenarioKind::InventoryRebalancePlan => {
+            std::fs::create_dir_all(dir.join("data"))
+                .map_err(|error| anyhow::anyhow!("failed to create data fixture: {error}"))?;
+            std::fs::write(
+                dir.join("brief.md"),
+                "# Inventory Rebalance Brief\n\nChoose transfer options for two planning cases: the base budget is 325 and the contingency budget is 250. Write `.spark-scenarios/inventory-rebalance-plan/plan.json` with exactly the top-level keys `basePlan`, `contingencyPlan`, and `incrementalNetBenefit`, plus `.spark-scenarios/inventory-rebalance-plan/memo.md` with a concise recommendation and tradeoff explanation. Each plan must contain exactly `budget`, `selectedOptionIds`, `totalUnits`, `totalCost`, `grossAvoidedPenalty`, `netBenefit`, and `remainingBudget`. Keep option ids sorted. Use every rule in `policy.md` and all three CSV files. Do not edit the inputs. Use a short script or command to enumerate all feasible subsets rather than relying on a greedy guess.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
+            std::fs::write(
+                dir.join("policy.md"),
+                "# Rebalance Policy\n\n- Every row in `transfer_options.csv` is an all-or-nothing transfer option.\n- An option is eligible only when `lead_days` is at most 3.\n- For each SKU and origin, selected units cannot exceed `on_hand - forecast_14d - safety_stock` from `warehouses.csv`.\n- For each SKU and destination, selected units cannot exceed `forecast_14d + safety_stock - on_hand`.\n- Total cost is `units * variable_cost_per_unit + fixed_cost` for every selected option and cannot exceed the case budget.\n- Gross avoided penalty is `units * stockout_penalty_per_unit` from `products.csv`.\n- Net benefit is gross avoided penalty minus total cost.\n- Optimize each budget independently for maximum net benefit. Break a tie by lower total cost, then by the lexicographically smaller comma-joined sorted option-id list.\n- `incrementalNetBenefit` is base-plan net benefit minus contingency-plan net benefit.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture policy.md: {error}"))?;
+            std::fs::write(
+                dir.join("data").join("products.csv"),
+                "sku,stockout_penalty_per_unit\nAtlas,42\nBolt,30\nCipher,55\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture products.csv: {error}"))?;
+            std::fs::write(
+                dir.join("data").join("warehouses.csv"),
+                "warehouse,sku,on_hand,forecast_14d,safety_stock\nNORTH,Atlas,110,60,20\nWEST,Atlas,45,60,10\nEAST,Atlas,35,50,10\nSOUTH,Atlas,75,50,10\nNORTH,Bolt,80,50,10\nWEST,Bolt,25,35,10\nEAST,Bolt,20,30,10\nSOUTH,Bolt,70,45,10\nNORTH,Cipher,55,30,10\nWEST,Cipher,10,20,5\nEAST,Cipher,15,25,5\nSOUTH,Cipher,45,25,10\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture warehouses.csv: {error}"))?;
+            std::fs::write(
+                dir.join("data").join("transfer_options.csv"),
+                "option_id,sku,origin,destination,units,variable_cost_per_unit,fixed_cost,lead_days\nT01,Atlas,NORTH,WEST,15,4,20,2\nT02,Atlas,NORTH,EAST,18,3,35,3\nT03,Atlas,SOUTH,WEST,12,2,30,2\nT04,Atlas,SOUTH,EAST,15,5,10,1\nT05,Atlas,NORTH,WEST,20,2,70,1\nT06,Bolt,NORTH,WEST,12,2,12,2\nT07,Bolt,NORTH,EAST,15,3,8,3\nT08,Bolt,SOUTH,WEST,15,1,25,1\nT09,Bolt,SOUTH,EAST,10,4,5,2\nT10,Cipher,NORTH,WEST,10,4,15,3\nT11,Cipher,NORTH,EAST,12,2,40,2\nT12,Cipher,SOUTH,WEST,10,3,10,1\nT13,Cipher,SOUTH,EAST,8,5,5,2\nT14,Atlas,NORTH,EAST,10,1,15,5\n",
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to write fixture transfer_options.csv: {error}")
+            })?;
         }
         ProfileScenarioKind::MultiModuleBugfix => {
             std::fs::create_dir_all(dir.join("src"))

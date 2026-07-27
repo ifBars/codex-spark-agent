@@ -12,7 +12,7 @@ function Get-QuickRealWorldScenario {
         "dependency-upgrade-triage",
         "technical-essay",
         "config-migration",
-        "ops-report",
+        "inventory-rebalance-plan",
         "multi-module-bugfix",
         "terminal-repair",
         "multi-hop-analysis",
@@ -26,7 +26,7 @@ function Get-QuickReasoningScenario {
     return @(
         "technical-essay",
         "config-migration",
-        "ops-report",
+        "inventory-rebalance-plan",
         "multi-module-bugfix",
         "terminal-repair",
         "multi-hop-analysis",

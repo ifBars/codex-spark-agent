@@ -526,6 +526,8 @@ pub(crate) enum ProfileScenarioKind {
     ConfigMigration,
     /// Operational data report task with computed metrics and narrative summary.
     OpsReport,
+    /// Constrained inventory-rebalancing optimization with base and contingency budgets.
+    InventoryRebalancePlan,
     /// SWE-bench-style bugfix spanning multiple TypeScript modules with failing Bun tests.
     MultiModuleBugfix,
     /// Incident-driven state reconciliation bugfix with ambiguous evidence and cross-module invariants.
@@ -653,6 +655,7 @@ impl ProfileScenarioKind {
             Self::TechnicalEssay => "technical-essay",
             Self::ConfigMigration => "config-migration",
             Self::OpsReport => "ops-report",
+            Self::InventoryRebalancePlan => "inventory-rebalance-plan",
             Self::MultiModuleBugfix => "multi-module-bugfix",
             Self::StatefulReconciliationBugfix => "stateful-reconciliation-bugfix",
             Self::TerminalRepair => "terminal-repair",
@@ -725,6 +728,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::TechnicalEssay,
                 ProfileScenarioKind::ConfigMigration,
                 ProfileScenarioKind::OpsReport,
+                ProfileScenarioKind::InventoryRebalancePlan,
                 ProfileScenarioKind::MultiModuleBugfix,
                 ProfileScenarioKind::TerminalRepair,
                 ProfileScenarioKind::MultiHopAnalysis,
@@ -748,6 +752,7 @@ impl ProfileBenchmarkSuiteKind {
             Self::Quantitative => &[
                 ProfileScenarioKind::OpsReport,
                 ProfileScenarioKind::MultiHopAnalysis,
+                ProfileScenarioKind::InventoryRebalancePlan,
             ],
             Self::Analysis => &[
                 ProfileScenarioKind::GithubIssueTriage,
@@ -765,6 +770,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::DependencyUpgradeTriage,
                 ProfileScenarioKind::ConfigMigration,
                 ProfileScenarioKind::OpsReport,
+                ProfileScenarioKind::InventoryRebalancePlan,
                 ProfileScenarioKind::TerminalRepair,
             ],
             Self::Writing => &[
@@ -797,6 +803,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::RustLogAnalyzerScaffold,
                 ProfileScenarioKind::RustNotesTuiScaffold,
                 ProfileScenarioKind::OpsReport,
+                ProfileScenarioKind::InventoryRebalancePlan,
                 ProfileScenarioKind::ToolRecovery,
                 ProfileScenarioKind::MultiModuleBugfix,
                 ProfileScenarioKind::StatefulReconciliationBugfix,

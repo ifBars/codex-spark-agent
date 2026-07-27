@@ -72,6 +72,10 @@ pub(crate) fn expected_scenario_artifacts(
             ".spark-scenarios/ops-report/metrics.json",
             ".spark-scenarios/ops-report/report.md",
         ],
+        ProfileScenarioKind::InventoryRebalancePlan => &[
+            ".spark-scenarios/inventory-rebalance-plan/plan.json",
+            ".spark-scenarios/inventory-rebalance-plan/memo.md",
+        ],
         ProfileScenarioKind::MultiModuleBugfix => &[
             ".spark-scenarios/multi-module-bugfix/src/invoice.ts",
             ".spark-scenarios/multi-module-bugfix/src/total.ts",
@@ -115,6 +119,7 @@ mod tests {
             ProfileScenarioKind::TechnicalEssay,
             ProfileScenarioKind::ConfigMigration,
             ProfileScenarioKind::OpsReport,
+            ProfileScenarioKind::InventoryRebalancePlan,
             ProfileScenarioKind::MultiModuleBugfix,
             ProfileScenarioKind::StatefulReconciliationBugfix,
             ProfileScenarioKind::TerminalRepair,

@@ -4,7 +4,7 @@ param(
     [string]$ReasoningEffort = "medium",
     [int]$Repeat = 1,
     [int]$TimeoutSeconds = 900,
-    [ValidateSet("core", "survey", "scaffolding", "editing", "reasoning", "real-world")]
+    [ValidateSet("core", "survey", "scaffolding", "editing", "reasoning", "coding", "quantitative", "analysis", "operations", "writing", "real-world")]
     [string]$Suite = "real-world",
     [string[]]$Scenario = @(),
     [string]$CodexBin = "codex",
@@ -29,7 +29,7 @@ $CodexDir = Join-Path $RepoRoot ".spark-profile\codex-cli"
 if (-not $Scenario -or $Scenario.Count -eq 0) {
     if ($Suite -eq "reasoning") {
         $Scenario = @(Get-QuickReasoningScenario)
-    } else {
+    } elseif ($Suite -eq "real-world") {
         $Scenario = @(Get-QuickRealWorldScenario)
     }
 }

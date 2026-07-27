@@ -416,6 +416,20 @@ pub(crate) fn profile_scenario_prompts(
               Finish with the computed metrics and risk summary."
                 .to_string(),
         ]),
+        ProfileScenarioKind::InventoryRebalancePlan => Ok(vec![
+            "Profile scenario: inventory-rebalance-plan.\n\
+             Work only under .spark-scenarios/inventory-rebalance-plan.\n\
+             Build an optimal inventory-transfer recommendation for both requested budgets.\n\
+             Required actions:\n\
+             1. Read brief.md and policy.md.\n\
+             2. Read data/products.csv, data/warehouses.csv, and data/transfer_options.csv.\n\
+             3. Use a short Bun or PowerShell script from the benchmark workspace root to enumerate every feasible option subset under each budget; do not use a greedy shortcut or Bash-only heredoc syntax.\n\
+             4. Write .spark-scenarios/inventory-rebalance-plan/plan.json with the exact schema from the brief and sorted option ids.\n\
+             5. Write .spark-scenarios/inventory-rebalance-plan/memo.md explaining the base-versus-contingency tradeoff, why T14 is ineligible, and how the selected plans respect budget, origin-surplus, and destination-deficit limits.\n\
+             6. Re-read both fully qualified output paths and verify every total before finishing.\n\
+             Finish with both selected option sets, their net benefits, and the incremental net benefit."
+                .to_string(),
+        ]),
         ProfileScenarioKind::MultiModuleBugfix => Ok(vec![
             "Profile scenario: multi-module-bugfix.\n\
              Work only under .spark-scenarios/multi-module-bugfix.\n\
@@ -773,6 +787,20 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              4. Write .spark-scenarios/ops-report/report.md with the operational readout and highest-risk team. Rank highest risk by open P1 count, then oldest open P1 age; do not count P2 tickets as P1 tickets.\n\
              5. Verify both outputs before finishing.\n\
               Finish with the computed metrics and risk summary."
+                .to_string()
+        }
+        ProfileScenarioKind::InventoryRebalancePlan => {
+            "Benchmark scenario: inventory-rebalance-plan.\n\
+             Work only under .spark-scenarios/inventory-rebalance-plan.\n\
+             Produce an optimal inventory-transfer recommendation for the base and contingency budgets. This is a scoped fixture task; do not inspect unrelated repository files or edit the input files.\n\
+             Required actions:\n\
+             1. Read .spark-scenarios/inventory-rebalance-plan/brief.md and policy.md.\n\
+             2. Read data/products.csv, data/warehouses.csv, and data/transfer_options.csv.\n\
+             3. Use a short Bun or PowerShell script from the benchmark workspace root to enumerate every feasible all-or-nothing option subset under each budget. Enforce lead-time eligibility, origin surplus, destination deficit, and total cost before applying the policy tie-breakers; do not use a greedy shortcut or Bash-only heredoc syntax.\n\
+             4. Write .spark-scenarios/inventory-rebalance-plan/plan.json with the exact schema from the brief, sorted option ids, and independently optimized base and contingency plans.\n\
+             5. Write .spark-scenarios/inventory-rebalance-plan/memo.md explaining the budget tradeoff, the binding constraints, and why T14 is ineligible.\n\
+             6. Re-read both fully qualified output paths and verify every total once before finishing.\n\
+             Finish with both option sets, total cost, net benefit, and incremental net benefit."
                 .to_string()
         }
         ProfileScenarioKind::MultiModuleBugfix => {

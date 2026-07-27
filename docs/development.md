@@ -104,6 +104,12 @@ spark benchmark-compare --suite real-world --codex-cli-report .spark-profile/cod
 
 Available suites include `core`, `survey`, `scaffolding`, `editing`, `reasoning`, `coding`, `quantitative`, `analysis`, `operations`, `writing`, and `real-world`. The category suites intentionally overlap when a task exercises more than one real-world skill. Reasoning scenarios can report weighted validation checks while the normal exit code still records full completion.
 
+`inventory-rebalance-plan` is the current difficult quantitative planning fixture.
+It requires exhaustive constrained selection under two budgets and produces six
+independently weighted validation signals. Its initial cross-runner development
+evidence, including excluded prompt and provider failures, is documented in
+[`benchmarks/inventory-rebalance-pilot-2026-07-26.md`](benchmarks/inventory-rebalance-pilot-2026-07-26.md).
+
 Run a focused category exactly like any other suite:
 
 ```powershell

@@ -58,6 +58,68 @@ pub(crate) fn profile_scenario_validation_checks(
                 ],
             },
         ],
+        ProfileScenarioKind::InventoryRebalancePlan => &[
+            ProfileScenarioValidationCheck {
+                name: "exact output schema",
+                weight: 10,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $plan = Get-Content -LiteralPath 'plan.json' -Raw | ConvertFrom-Json; $top = @($plan.psobject.Properties.Name | Sort-Object); if (($top -join ',') -ne 'basePlan,contingencyPlan,incrementalNetBenefit') { throw 'top-level schema mismatch' }; $expected = 'budget,grossAvoidedPenalty,netBenefit,remainingBudget,selectedOptionIds,totalCost,totalUnits'; foreach ($name in @('basePlan','contingencyPlan')) { $keys = @($plan.$name.psobject.Properties.Name | Sort-Object); if (($keys -join ',') -ne $expected) { throw \"$name schema mismatch\" }; $ids = @($plan.$name.selectedOptionIds); if (($ids | Sort-Object) -join ',' -ne ($ids -join ',')) { throw \"$name option ids must be sorted\" }; if (@($ids | Select-Object -Unique).Count -ne $ids.Count) { throw \"$name option ids must be unique\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "base plan optimal selection",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $p = (Get-Content -LiteralPath 'plan.json' -Raw | ConvertFrom-Json).basePlan; if ((@($p.selectedOptionIds) -join ',') -ne 'T05,T07,T08,T11,T12') { throw 'base selection is not optimal' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "contingency plan optimal selection",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $p = (Get-Content -LiteralPath 'plan.json' -Raw | ConvertFrom-Json).contingencyPlan; if ((@($p.selectedOptionIds) -join ',') -ne 'T02,T03,T11,T12') { throw 'contingency selection is not optimal' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "base plan computed metrics",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $p = (Get-Content -LiteralPath 'plan.json' -Raw | ConvertFrom-Json).basePlan; foreach ($pair in @(@('budget',325),@('totalUnits',72),@('totalCost',307),@('grossAvoidedPenalty',2950),@('netBenefit',2643),@('remainingBudget',18))) { if ([decimal]$p.($pair[0]) -ne [decimal]$pair[1]) { throw \"base $($pair[0]) mismatch\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "contingency plan computed metrics",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $plan = Get-Content -LiteralPath 'plan.json' -Raw | ConvertFrom-Json; $p = $plan.contingencyPlan; foreach ($pair in @(@('budget',250),@('totalUnits',52),@('totalCost',247),@('grossAvoidedPenalty',2470),@('netBenefit',2223),@('remainingBudget',3))) { if ([decimal]$p.($pair[0]) -ne [decimal]$pair[1]) { throw \"contingency $($pair[0]) mismatch\" } }; if ([decimal]$plan.incrementalNetBenefit -ne 420) { throw 'incrementalNetBenefit mismatch' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "decision memo grounded in constraints",
+                weight: 10,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $memo = Get-Content -LiteralPath 'memo.md' -Raw; foreach ($term in @('base','contingency','T14','lead','420')) { if ($memo -notmatch [regex]::Escape($term)) { throw \"memo missing $term\" } }; if ($memo -notmatch '(?i)(surplus|origin)' -or $memo -notmatch '(?i)(deficit|destination)' -or $memo -notmatch '(?i)budget') { throw 'memo missing binding constraint explanation' }",
+                ],
+            },
+        ],
         _ => &[],
     }
 }
@@ -170,6 +232,15 @@ pub(crate) fn profile_scenario_validation_command(
                 "-NoProfile",
                 "-Command",
                 "$ErrorActionPreference='Stop'; $metrics = Get-Content -LiteralPath 'metrics.json' -Raw | ConvertFrom-Json; if ($metrics.totalTickets -ne 8) { throw 'totalTickets must be 8' }; if ($metrics.openTickets -ne 5) { throw 'openTickets must be 5' }; if ($metrics.p1Open -ne 2) { throw 'p1Open must be 2' }; if ([math]::Abs([double]$metrics.averageOpenMinutes - 51.4) -gt 0.01) { throw 'averageOpenMinutes must be 51.4' }; $report = Get-Content -LiteralPath 'report.md' -Raw; $plain = (($report -replace '[*`#_]', '') -replace '\\s+', ' ').Trim(); if ($plain -notmatch '(?i)(highest-risk team\\s*(?:-|:)?\\s*team\\s*:\\s*billing|highest-risk team\\s*(:|-|is)?\\s*billing|billing\\s+(is\\s+)?(the\\s+)?highest-risk team|billing\\s+team\\s+is\\s+highest\\s+risk)') { throw 'report must identify billing as highest-risk team' }; if ($plain -match '(?i)(highest-risk team\\s*(?:-|:)?\\s*team\\s*:\\s*api|highest-risk team\\s*(:|-|is)?\\s*api|api\\s+(is\\s+)?(the\\s+)?highest-risk team|api\\s+team\\s+is\\s+highest\\s+risk)') { throw 'report incorrectly identifies api as highest-risk team' }; if ($plain -notmatch '95') { throw 'report must explain billing risk with the 95 minute open P1 age' }",
+            ],
+        }),
+        ProfileScenarioKind::InventoryRebalancePlan => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/inventory-rebalance-plan",
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $plan = Get-Content -LiteralPath 'plan.json' -Raw | ConvertFrom-Json; $top = @($plan.psobject.Properties.Name | Sort-Object); if (($top -join ',') -ne 'basePlan,contingencyPlan,incrementalNetBenefit') { throw 'top-level schema mismatch' }; $expected = 'budget,grossAvoidedPenalty,netBenefit,remainingBudget,selectedOptionIds,totalCost,totalUnits'; function Check-Plan($p,$name,$budget,$ids,$units,$cost,$gross,$net,$remaining) { $keys = @($p.psobject.Properties.Name | Sort-Object); if (($keys -join ',') -ne $expected) { throw \"$name schema mismatch\" }; if ((@($p.selectedOptionIds) -join ',') -ne $ids) { throw \"$name selection mismatch\" }; foreach ($pair in @(@('budget',$budget),@('totalUnits',$units),@('totalCost',$cost),@('grossAvoidedPenalty',$gross),@('netBenefit',$net),@('remainingBudget',$remaining))) { if ([decimal]$p.($pair[0]) -ne [decimal]$pair[1]) { throw \"$name $($pair[0]) mismatch\" } } }; Check-Plan $plan.basePlan 'base' 325 'T05,T07,T08,T11,T12' 72 307 2950 2643 18; Check-Plan $plan.contingencyPlan 'contingency' 250 'T02,T03,T11,T12' 52 247 2470 2223 3; if ([decimal]$plan.incrementalNetBenefit -ne 420) { throw 'incrementalNetBenefit mismatch' }; $memo = Get-Content -LiteralPath 'memo.md' -Raw; foreach ($term in @('base','contingency','T14','lead','420')) { if ($memo -notmatch [regex]::Escape($term)) { throw \"memo missing $term\" } }; if ($memo -notmatch '(?i)(surplus|origin)' -or $memo -notmatch '(?i)(deficit|destination)' -or $memo -notmatch '(?i)budget') { throw 'memo missing constraint explanation' }",
             ],
         }),
         ProfileScenarioKind::ShellRecovery => Some(ProfileScenarioValidationCommand {
