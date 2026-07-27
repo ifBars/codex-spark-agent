@@ -109,7 +109,7 @@ export function BenchmarkExplorer() {
             <article>
               <h3>Weighted validation</h3>
               <p>
-                The pilot scores five independent behavioral invariants. Incomplete task work retains partial quality instead of receiving one blanket score.
+                Each fixture uses scenario-specific behavioral checks. Incomplete task work retains partial quality instead of receiving one blanket score.
               </p>
             </article>
             <article>
@@ -121,7 +121,7 @@ export function BenchmarkExplorer() {
             <article>
               <h3>Scope</h3>
               <p>
-                This is bounded benchmark evidence, not a general model-quality claim. Switch datasets to see why the earlier success-only matrix saturated.
+                This is bounded benchmark evidence, not a general model-quality claim. Switch datasets to compare the expanded suite, pilot, and saturated baseline.
               </p>
             </article>
           </div>

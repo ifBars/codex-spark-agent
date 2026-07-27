@@ -1,0 +1,55 @@
+runner,reasoning_effort,scenario,runs,successful_runs,average_quality,average_total_tokens,average_duration_seconds
+Spark harness,low,config-migration,3,3,100.00,77909,10.55
+Spark harness,low,multi-hop-analysis,3,3,100.00,85309,11.25
+Spark harness,low,multi-module-bugfix,3,3,100.00,93425,12.98
+Spark harness,low,ops-report,3,3,100.00,69689,9.81
+Spark harness,low,policy-support-agent,3,3,100.00,104018,13.85
+Spark harness,low,rust-notes-tui-scaffold,3,3,98.50,202608,35.63
+Spark harness,low,stateful-reconciliation-bugfix,3,0,56.70,93067,14.94
+Spark harness,low,technical-essay,3,3,92.70,88454,12.82
+Spark harness,low,terminal-repair,3,3,96.30,69399,7.71
+Spark harness,medium,config-migration,3,3,100.00,78241,11.48
+Spark harness,medium,multi-hop-analysis,3,3,100.00,62131,6.88
+Spark harness,medium,multi-module-bugfix,3,3,100.00,88650,11.99
+Spark harness,medium,ops-report,3,3,100.00,58347,7.24
+Spark harness,medium,policy-support-agent,3,3,100.00,100604,11.62
+Spark harness,medium,rust-notes-tui-scaffold,3,3,89.80,275922,32.82
+Spark harness,medium,stateful-reconciliation-bugfix,3,0,74.00,109310,16.54
+Spark harness,medium,technical-essay,3,3,100.00,76898,10.87
+Spark harness,medium,terminal-repair,3,3,96.30,95499,15.77
+Spark harness,high,config-migration,3,3,100.00,84592,13.51
+Spark harness,high,multi-hop-analysis,3,3,100.00,62778,8.60
+Spark harness,high,multi-module-bugfix,3,3,100.00,126668,16.34
+Spark harness,high,ops-report,3,2,76.70,55671,9.07
+Spark harness,high,policy-support-agent,3,3,100.00,113380,14.86
+Spark harness,high,rust-notes-tui-scaffold,3,3,97.60,453841,62.25
+Spark harness,high,stateful-reconciliation-bugfix,3,1,90.00,153415,20.44
+Spark harness,high,technical-essay,3,3,96.30,98177,15.92
+Spark harness,high,terminal-repair,3,3,83.30,86582,9.80
+Codex CLI 0.145.0,low,config-migration,3,3,100.00,149559,22.38
+Codex CLI 0.145.0,low,multi-hop-analysis,3,3,98.70,72628,28.79
+Codex CLI 0.145.0,low,multi-module-bugfix,3,3,100.00,115584,17.52
+Codex CLI 0.145.0,low,ops-report,3,3,95.00,148199,23.89
+Codex CLI 0.145.0,low,policy-support-agent,3,0,59.00,66772,17.74
+Codex CLI 0.145.0,low,rust-notes-tui-scaffold,3,1,56.50,360310,39.72
+Codex CLI 0.145.0,low,stateful-reconciliation-bugfix,3,2,81.70,174435,23.35
+Codex CLI 0.145.0,low,technical-essay,3,3,92.00,179428,26.43
+Codex CLI 0.145.0,low,terminal-repair,3,3,85.00,138968,16.92
+Codex CLI 0.145.0,medium,config-migration,3,3,95.00,168817,24.62
+Codex CLI 0.145.0,medium,multi-hop-analysis,3,3,100.00,66196,16.51
+Codex CLI 0.145.0,medium,multi-module-bugfix,3,3,100.00,118150,26.40
+Codex CLI 0.145.0,medium,ops-report,3,2,81.70,164556,22.61
+Codex CLI 0.145.0,medium,policy-support-agent,3,0,60.00,65701,18.02
+Codex CLI 0.145.0,medium,rust-notes-tui-scaffold,3,0,47.80,319471,33.31
+Codex CLI 0.145.0,medium,stateful-reconciliation-bugfix,3,1,72.50,190119,25.94
+Codex CLI 0.145.0,medium,technical-essay,3,3,95.00,134606,26.13
+Codex CLI 0.145.0,medium,terminal-repair,3,3,85.00,159434,20.91
+Codex CLI 0.145.0,high,config-migration,3,3,99.50,168992,24.27
+Codex CLI 0.145.0,high,multi-hop-analysis,3,3,99.00,89279,17.11
+Codex CLI 0.145.0,high,multi-module-bugfix,3,3,99.50,143680,25.00
+Codex CLI 0.145.0,high,ops-report,3,3,94.50,156139,22.62
+Codex CLI 0.145.0,high,policy-support-agent,3,0,60.00,66197,14.99
+Codex CLI 0.145.0,high,rust-notes-tui-scaffold,3,0,42.10,384919,45.52
+Codex CLI 0.145.0,high,stateful-reconciliation-bugfix,3,1,75.00,125932,22.29
+Codex CLI 0.145.0,high,technical-essay,3,2,82.70,159383,26.93
+Codex CLI 0.145.0,high,terminal-repair,3,3,85.00,197686,34.75

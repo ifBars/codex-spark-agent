@@ -16,6 +16,56 @@ function point(runner, reasoning, values) {
 
 export const datasets = [
   {
+    id: "expanded-reasoning-suite",
+    label: "Expanded reasoning suite",
+    shortLabel: "Expanded",
+    date: "July 26, 2026",
+    sample: "9 difficult tasks × 3 runs per level",
+    rangeKind: "95% CI across scenario means",
+    source:
+      "https://github.com/ifBars/codex-spark-agent/blob/main/docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.csv",
+    description:
+      "A 162-run matrix with scenario-balanced averages, behavioral quality scoring, and zero provider/API failures.",
+    rows: [
+      point("spark", "low", {
+        quality: 93.8, qualityMin: 83, qualityMax: 100,
+        tokens: 98209, tokensMin: 66868, tokensMax: 129549,
+        duration: 14.39, durationMin: 8.04, durationMax: 20.74,
+        successRate: 88.89, runs: 27,
+      }),
+      point("spark", "medium", {
+        quality: 95.57, qualityMin: 88.82, qualityMax: 100,
+        tokens: 105067, tokensMin: 54130, tokensMax: 156004,
+        duration: 13.91, durationMin: 7.92, durationMax: 19.9,
+        successRate: 88.89, runs: 27,
+      }),
+      point("spark", "high", {
+        quality: 93.77, qualityMin: 87.16, qualityMax: 100,
+        tokens: 137234, tokensMin: 42997, tokensMax: 231470,
+        duration: 18.98, durationMin: 6.15, durationMax: 31.81,
+        successRate: 88.89, runs: 27,
+      }),
+      point("codex", "low", {
+        quality: 85.32, qualityMin: 72.33, qualityMax: 98.31,
+        tokens: 156209, tokensMin: 89880, tokensMax: 222538,
+        duration: 24.08, durationMin: 18.58, durationMax: 29.58,
+        successRate: 77.78, runs: 27,
+      }),
+      point("codex", "medium", {
+        quality: 81.89, qualityMin: 67.67, qualityMax: 96.11,
+        tokens: 154117, tokensMin: 95695, tokensMax: 212539,
+        duration: 23.83, durationMin: 19.95, durationMax: 27.71,
+        successRate: 66.67, runs: 27,
+      }),
+      point("codex", "high", {
+        quality: 81.92, qualityMin: 66.57, qualityMax: 97.27,
+        tokens: 165801, tokensMin: 95441, tokensMax: 236161,
+        duration: 25.94, durationMin: 18.81, durationMax: 33.07,
+        successRate: 66.67, runs: 27,
+      }),
+    ],
+  },
+  {
     id: "granular-pilot",
     label: "Granular pilot",
     shortLabel: "Pilot",

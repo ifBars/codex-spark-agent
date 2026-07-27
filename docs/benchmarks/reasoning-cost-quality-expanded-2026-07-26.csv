@@ -1,0 +1,7 @@
+runner,reasoning_effort,runs,scenarios,provider_api_failures,successful_runs,success_rate,average_quality,quality_ci95,average_total_tokens,tokens_ci95,average_duration_seconds,duration_ci95
+Spark harness,low,27,9,0,24,88.89,93.80,10.86,98209,31341,14.39,6.35
+Spark harness,medium,27,9,0,24,88.89,95.57,6.75,105067,50937,13.91,5.99
+Spark harness,high,27,9,0,24,88.89,93.77,6.61,137234,94237,18.98,12.83
+Codex CLI 0.145.0,low,27,9,0,21,77.78,85.32,12.99,156209,66329,24.08,5.50
+Codex CLI 0.145.0,medium,27,9,0,18,66.67,81.89,14.22,154117,58422,23.83,3.88
+Codex CLI 0.145.0,high,27,9,0,18,66.67,81.92,15.35,165801,70360,25.94,7.13

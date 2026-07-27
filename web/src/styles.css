@@ -511,7 +511,11 @@ a {
   font-family: "Geist", sans-serif;
   font-size: 11px;
   font-weight: 600;
+  paint-order: stroke;
   pointer-events: none;
+  stroke: var(--paper);
+  stroke-linejoin: round;
+  stroke-width: 4px;
 }
 
 .point-inspector {

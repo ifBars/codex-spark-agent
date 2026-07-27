@@ -44,17 +44,15 @@ spark chat "Inspect this repo and explain how commands are dispatched."
 
 Spark is intentionally smaller than the official Codex CLI. I am not trying to replace Codex. This is a place to inspect and improve the parts that usually get hand-waved away: tool arguments, patch quality, command output, context pressure, recovery, and measurable task quality.
 
-## Reasoning cost-quality pilot
+## Reasoning cost-quality benchmark
 
 [**Explore the interactive benchmark charts →**](https://ifbars.github.io/codex-spark-agent/)
 
-Toggle runners and reasoning levels, switch between token cost and duration, inspect uncertainty ranges, and compare the granular pilot with the earlier eight-task baseline.
+Toggle runners and reasoning levels, switch between token cost and duration, inspect uncertainty ranges, and compare the expanded suite with the granular pilot and earlier eight-task baseline.
 
-[![Weighted task quality plotted against total API tokens for Spark and native Codex at low, medium, and high reasoning.](docs/assets/reasoning-cost-quality-pilot.svg)](https://ifbars.github.io/codex-spark-agent/)
+The current dataset covers nine difficult scenarios with three repeats at every runner/reasoning combination: 162 task-runs total. Error bars are 95% intervals across scenario means, ordinary task failures remain scored, and no provider/API failures occurred. The measured ordering is not forced to be monotonic; the intervals make the remaining uncertainty visible.
 
-This pilot ran one difficult stateful bugfix three times per runner and reasoning level, for 18 task-runs total. The points are three-run means and the whiskers show the observed quality range. Weighted behavioral checks expose partial progress that pass/fail scoring hides: Spark moves from 30 to 65 to 83.3 quality across low, medium, and high reasoning, while native Codex moves from 63.3 to 68.3 to 93.3. Task failures remain scored; only provider/API failures are excluded. It is useful as a scoring sanity check, not a broad performance claim.
-
-The raw values are in [`docs/benchmarks/reasoning-cost-quality-pilot-2026-07-26.csv`](docs/benchmarks/reasoning-cost-quality-pilot-2026-07-26.csv). The earlier 144-run success-only chart remains in [`docs/assets/reasoning-cost-quality.svg`](docs/assets/reasoning-cost-quality.svg).
+The aggregate values are in [`docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.csv`](docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.csv), with [scenario-level rows](docs/benchmarks/reasoning-cost-quality-expanded-scenarios-2026-07-26.csv) and [methodology](docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.md). The original granular pilot and 144-run success-only chart remain archived under `docs/`.
 
 ## Use Spark
 

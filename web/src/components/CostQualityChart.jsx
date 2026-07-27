@@ -8,6 +8,18 @@ const FRAME = { left: 78, right: 34, top: 34, bottom: 70 };
 const reasoningOrder = { low: 0, medium: 1, high: 2 };
 const plotWidth = WIDTH - FRAME.left - FRAME.right;
 const plotHeight = HEIGHT - FRAME.top - FRAME.bottom;
+const labelOffsets = {
+  spark: {
+    low: { dx: -12, dy: -10, anchor: "end" },
+    medium: { dx: 12, dy: -28, anchor: "start" },
+    high: { dx: 12, dy: -10, anchor: "start" },
+  },
+  codex: {
+    low: { dx: 12, dy: -18, anchor: "start" },
+    medium: { dx: -12, dy: 18, anchor: "end" },
+    high: { dx: 12, dy: -6, anchor: "start" },
+  },
+};
 
 function ticks(min, max, count = 5) {
   return Array.from({ length: count + 1 }, (_, index) => min + ((max - min) * index) / count);
@@ -140,6 +152,9 @@ export function CostQualityChart({
             const cx = x(row[xMetrics[xMetric].key]);
             const cy = y(row[yMetrics[yMetric].key]);
             const labelToLeft = cx > WIDTH - 190;
+            const preferredLabel = labelOffsets[row.runner][row.reasoning];
+            const labelX = labelToLeft ? cx - 14 : cx + preferredLabel.dx;
+            const labelAnchor = labelToLeft ? "end" : preferredLabel.anchor;
 
             return (
               <g className="chart-point" key={`${row.runner}-${row.reasoning}`}>
@@ -174,9 +189,9 @@ export function CostQualityChart({
                 />
                 <text
                   className="point-label"
-                  x={labelToLeft ? cx - 14 : cx + 14}
-                  y={cy - 13}
-                  textAnchor={labelToLeft ? "end" : "start"}
+                  x={labelX}
+                  y={cy + preferredLabel.dy}
+                  textAnchor={labelAnchor}
                 >
                   {sentenceCase(row.reasoning)}
                 </text>
