@@ -470,6 +470,32 @@ pub(crate) fn profile_scenario_prompts(
              Finish with the inferred root causes, changed production files, and validation result."
                 .to_string(),
         ]),
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix => Ok(vec![
+            "Profile scenario: feature-rollout-consistency-bugfix.\n\
+             Work only under .spark-scenarios/feature-rollout-consistency-bugfix.\n\
+             Treat issue.md as a production incident. Use bun for validation.\n\
+             Do not change src/types.ts, src/hash.ts, src/service.ts, tests, docs, or evidence.\n\
+             Required actions:\n\
+             1. Read issue.md, docs/invariants.md, and logs/incident.log.\n\
+             2. Inspect src/store.ts, src/cache.ts, src/evaluate.ts, src/service.ts, src/types.ts, and tests/rollout.test.ts.\n\
+             3. Repair only src/store.ts, src/cache.ts, and src/evaluate.ts so all documented invariants hold together.\n\
+             4. Run bun test tests/rollout.test.ts after the final edit.\n\
+             Finish with the root causes, changed production files, and validation result."
+                .to_string(),
+        ]),
+        ProfileScenarioKind::FrontierRuleTransfer => Ok(vec![
+            "Profile scenario: frontier-rule-transfer.\n\
+             Work only under .spark-scenarios/frontier-rule-transfer.\n\
+             This is a novel-rule transfer exam. The demonstrations are the complete specification.\n\
+             Do not inspect or modify tests/.harness, examples.json, src/types.ts, or tests.\n\
+             Required actions:\n\
+             1. Read task.md, examples.json, src/types.ts, src/solver.ts, and tests/public.test.ts.\n\
+             2. Infer one coherent transformation that explains every demonstration, including path choice, termination, selection, and checksum behavior.\n\
+             3. Implement the general transformation only in src/solver.ts without mutating inputs or hardcoding example ids.\n\
+             4. Run bun test tests/public.test.ts after the final edit.\n\
+             Finish with a concise statement of the inferred rule and the validation result."
+                .to_string(),
+        ]),
         ProfileScenarioKind::TerminalRepair => Ok(vec![
             "Profile scenario: terminal-repair.\n\
              Work only under .spark-scenarios/terminal-repair.\n\
@@ -857,6 +883,27 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              3. Patch the production implementation so the documented invariants hold as a coherent state machine, not only for the visible examples.\n\
              4. Run bun test after the final edit.\n\
              Finish with the inferred root causes, changed production files, and validation result."
+                .to_string()
+        }
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix => {
+            "Benchmark scenario: feature-rollout-consistency-bugfix.\n\
+             Work only under .spark-scenarios/feature-rollout-consistency-bugfix.\n\
+             Investigate and repair the cross-tenant rollout incident. This is a scoped fixture task; do not inspect unrelated repository files.\n\
+             Keep public types, stable hashing, service orchestration, tests, docs, and evidence unchanged.\n\
+             Relevant paths are issue.md, docs/invariants.md, logs/incident.log, src/store.ts, src/cache.ts, src/evaluate.ts, src/service.ts, src/types.ts, src/hash.ts, and tests/rollout.test.ts.\n\
+             Patch only src/store.ts, src/cache.ts, and src/evaluate.ts so the documented invariants hold coherently.\n\
+             Run bun test tests/rollout.test.ts after the final edit.\n\
+             Finish with the root causes, changed production files, and validation result."
+                .to_string()
+        }
+        ProfileScenarioKind::FrontierRuleTransfer => {
+            "Benchmark scenario: frontier-rule-transfer.\n\
+             Work only under .spark-scenarios/frontier-rule-transfer.\n\
+             Infer the latent graph transformation from demonstrations and implement a general solver. This is a scoped fixture task; do not inspect unrelated repository files.\n\
+             Read task.md, examples.json, src/types.ts, src/solver.ts, and tests/public.test.ts. Do not inspect or modify tests/.harness.\n\
+             Implement only src/solver.ts. The same rule must explain path choice, early termination, selected nodes, and checksum behavior without hardcoding ids.\n\
+             Run bun test tests/public.test.ts after the final edit.\n\
+             Finish with the inferred rule and validation result."
                 .to_string()
         }
         ProfileScenarioKind::TerminalRepair => {

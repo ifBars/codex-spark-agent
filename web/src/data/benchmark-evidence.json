@@ -7,7 +7,7 @@
       "status": "Reviewed snapshot",
       "date": "July 26, 2026",
       "scenarioCount": 9,
-      "pendingScenarioCount": 2,
+      "pendingScenarioCount": 4,
       "taskRuns": 162,
       "providerExclusions": 0,
       "taskFailuresRetained": true,
@@ -32,6 +32,25 @@
             "terminal-operations"
           ],
           "evidencePath": "docs/benchmarks/experiment-rollout-audit-fixture-2026-07-26.md"
+        },
+        {
+          "id": "feature-rollout-consistency-bugfix",
+          "label": "Feature rollout consistency",
+          "validationSignals": 6,
+          "categories": [
+            "coding",
+            "frontier"
+          ],
+          "evidencePath": "docs/benchmarks/feature-rollout-consistency-fixture-2026-07-26.md"
+        },
+        {
+          "id": "frontier-rule-transfer",
+          "label": "Frontier rule transfer",
+          "validationSignals": 6,
+          "categories": [
+            "frontier"
+          ],
+          "evidencePath": "docs/benchmarks/frontier-rule-transfer-fixture-2026-07-26.md"
         }
       ],
       "sources": [
@@ -52,7 +71,7 @@
           "path": "docs/benchmarks/reasoning-cost-quality-expanded-2026-07-26.md"
         }
       ],
-      "note": "Inventory planning and experiment rollout audit are validated fixtures. They remain outside this snapshot until balanced reruns are available."
+      "note": "Four validated fixtures, including the experimental frontier suite, remain outside this snapshot until balanced reruns and difficulty calibration are available."
     },
     {
       "id": "granular-pilot",

@@ -58,6 +58,130 @@ pub(crate) fn profile_scenario_validation_checks(
                 ],
             },
         ],
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix => &[
+            ProfileScenarioValidationCheck {
+                name: "tenant-isolated config storage",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='tenant-store'; bun test ./tests/.harness/rollout.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "monotonic config revisions",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='monotonic-revision'; bun test ./tests/.harness/rollout.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "decision precedence",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='decision-precedence'; bun test ./tests/.harness/rollout.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "stable bounded rollout",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='stable-rollout'; bun test ./tests/.harness/rollout.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "tenant and revision cache isolation",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='cache-isolation'; bun test ./tests/.harness/rollout.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "end-to-end revision behavior",
+                weight: 10,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='service-revision'; bun test ./tests/.harness/rollout.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+        ],
+        ProfileScenarioKind::FrontierRuleTransfer => &[
+            ProfileScenarioValidationCheck {
+                name: "amber distractor transfer",
+                weight: 17,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='amber-distractors'; bun test ./tests/.harness/frontier.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "cyan tie-break transfer",
+                weight: 17,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='cyan-tie-break'; bun test ./tests/.harness/frontier.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "cycle avoidance",
+                weight: 17,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='cycle-avoidance'; bun test ./tests/.harness/frontier.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "early termination",
+                weight: 17,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='early-stop'; bun test ./tests/.harness/frontier.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "edge-weighted choice",
+                weight: 16,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='weighted-choice'; bun test ./tests/.harness/frontier.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "invalid target resilience",
+                weight: 16,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$env:SPARK_VALIDATION_CHECK='unknown-target'; bun test ./tests/.harness/frontier.validation.ts; exit $LASTEXITCODE",
+                ],
+            },
+        ],
         ProfileScenarioKind::InventoryRebalancePlan => &[
             ProfileScenarioValidationCheck {
                 name: "exact output schema",
@@ -357,6 +481,26 @@ pub(crate) fn profile_scenario_validation_command(
                 ],
             })
         }
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix => {
+            Some(ProfileScenarioValidationCommand {
+                workdir: ".spark-scenarios/feature-rollout-consistency-bugfix",
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; bun test tests/rollout.test.ts; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; bun test ./tests/.harness/rollout.validation.ts; exit $LASTEXITCODE",
+                ],
+            })
+        }
+        ProfileScenarioKind::FrontierRuleTransfer => Some(ProfileScenarioValidationCommand {
+            workdir: ".spark-scenarios/frontier-rule-transfer",
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                "$ErrorActionPreference='Stop'; bun test tests/public.test.ts; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; bun test ./tests/.harness/frontier.validation.ts; exit $LASTEXITCODE",
+            ],
+        }),
         ProfileScenarioKind::TerminalRepair => Some(ProfileScenarioValidationCommand {
             workdir: ".spark-scenarios/terminal-repair",
             program: "powershell",

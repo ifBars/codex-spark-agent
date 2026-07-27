@@ -534,6 +534,10 @@ pub(crate) enum ProfileScenarioKind {
     MultiModuleBugfix,
     /// Incident-driven state reconciliation bugfix with ambiguous evidence and cross-module invariants.
     StatefulReconciliationBugfix,
+    /// Multi-tenant feature rollout bugfix spanning storage, evaluation, and revision-aware caching.
+    FeatureRolloutConsistencyBugfix,
+    /// Demonstration-only symbolic rule transfer with executable hidden-case validation.
+    FrontierRuleTransfer,
     /// Terminal-Bench-style repair task that fixes a broken service through the terminal.
     TerminalRepair,
     /// GAIA-style multi-hop analysis that joins policy, orders, and refunds into an exact answer.
@@ -564,6 +568,8 @@ pub(crate) enum ProfileBenchmarkSuiteKind {
     Operations,
     /// Grounded long-form, review, support, and configuration-writing tasks.
     Writing,
+    /// Experimental unsaturated tasks targeting difficult novel-rule and long-horizon transfer.
+    Frontier,
     /// Mixed real-world suite for broad Spark profiling.
     RealWorld,
 }
@@ -661,6 +667,8 @@ impl ProfileScenarioKind {
             Self::ExperimentRolloutAudit => "experiment-rollout-audit",
             Self::MultiModuleBugfix => "multi-module-bugfix",
             Self::StatefulReconciliationBugfix => "stateful-reconciliation-bugfix",
+            Self::FeatureRolloutConsistencyBugfix => "feature-rollout-consistency-bugfix",
+            Self::FrontierRuleTransfer => "frontier-rule-transfer",
             Self::TerminalRepair => "terminal-repair",
             Self::MultiHopAnalysis => "multi-hop-analysis",
             Self::PolicySupportAgent => "policy-support-agent",
@@ -681,6 +689,7 @@ impl ProfileBenchmarkSuiteKind {
             Self::Analysis => "analysis",
             Self::Operations => "operations",
             Self::Writing => "writing",
+            Self::Frontier => "frontier",
             Self::RealWorld => "real-world",
         }
     }
@@ -726,6 +735,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::ConfigMigration,
                 ProfileScenarioKind::MultiModuleBugfix,
                 ProfileScenarioKind::StatefulReconciliationBugfix,
+                ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
             ],
             Self::Reasoning => &[
                 ProfileScenarioKind::TechnicalEssay,
@@ -739,6 +749,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::PolicySupportAgent,
                 ProfileScenarioKind::RustNotesTuiScaffold,
                 ProfileScenarioKind::StatefulReconciliationBugfix,
+                ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
             ],
             Self::Coding => &[
                 ProfileScenarioKind::MultiFilePatch,
@@ -752,6 +763,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::RustNotesTuiScaffold,
                 ProfileScenarioKind::MultiModuleBugfix,
                 ProfileScenarioKind::StatefulReconciliationBugfix,
+                ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
             ],
             Self::Quantitative => &[
                 ProfileScenarioKind::OpsReport,
@@ -789,6 +801,10 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::ConfigMigration,
                 ProfileScenarioKind::PolicySupportAgent,
             ],
+            Self::Frontier => &[
+                ProfileScenarioKind::FrontierRuleTransfer,
+                ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
+            ],
             Self::RealWorld => &[
                 ProfileScenarioKind::RepoSurvey,
                 ProfileScenarioKind::RepoArchitectureSurvey,
@@ -815,6 +831,8 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::ToolRecovery,
                 ProfileScenarioKind::MultiModuleBugfix,
                 ProfileScenarioKind::StatefulReconciliationBugfix,
+                ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
+                ProfileScenarioKind::FrontierRuleTransfer,
                 ProfileScenarioKind::TerminalRepair,
                 ProfileScenarioKind::MultiHopAnalysis,
                 ProfileScenarioKind::PolicySupportAgent,
@@ -837,6 +855,7 @@ mod benchmark_suite_tests {
             ProfileBenchmarkSuiteKind::Analysis,
             ProfileBenchmarkSuiteKind::Operations,
             ProfileBenchmarkSuiteKind::Writing,
+            ProfileBenchmarkSuiteKind::Frontier,
         ] {
             assert!(
                 !suite.scenarios().is_empty(),
@@ -984,7 +1003,12 @@ mod benchmark_suite_tests {
                 .iter()
                 .map(|scenario| scenario["id"].as_str().expect("pending scenario id"))
                 .collect::<Vec<_>>(),
-            vec!["inventory-rebalance-plan", "experiment-rollout-audit"]
+            vec![
+                "inventory-rebalance-plan",
+                "experiment-rollout-audit",
+                "feature-rollout-consistency-bugfix",
+                "frontier-rule-transfer",
+            ]
         );
         for scenario in pending {
             let id = scenario["id"].as_str().expect("pending scenario id");

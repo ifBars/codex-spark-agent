@@ -1232,7 +1232,8 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::MergeConflictResolution,
             ProfileScenarioKind::ConfigMigration,
             ProfileScenarioKind::MultiModuleBugfix,
-            ProfileScenarioKind::StatefulReconciliationBugfix
+            ProfileScenarioKind::StatefulReconciliationBugfix,
+            ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
         ]
     );
     assert_eq!(
@@ -1249,6 +1250,7 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::PolicySupportAgent,
             ProfileScenarioKind::RustNotesTuiScaffold,
             ProfileScenarioKind::StatefulReconciliationBugfix,
+            ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
         ]
     );
     assert!(
@@ -1355,6 +1357,18 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
         ProfileBenchmarkSuiteKind::RealWorld
             .scenarios()
             .contains(&ProfileScenarioKind::StatefulReconciliationBugfix)
+    );
+    assert_eq!(
+        ProfileBenchmarkSuiteKind::Frontier.scenarios(),
+        &[
+            ProfileScenarioKind::FrontierRuleTransfer,
+            ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
+        ]
+    );
+    assert!(
+        ProfileBenchmarkSuiteKind::RealWorld
+            .scenarios()
+            .contains(&ProfileScenarioKind::FrontierRuleTransfer)
     );
     assert!(
         ProfileBenchmarkSuiteKind::RealWorld
@@ -2927,6 +2941,194 @@ export function projectReservations(events: ReservationEvent[]): ReservationStat
 
     let artifacts = expected_scenario_artifacts(ProfileScenarioKind::StatefulReconciliationBugfix);
     assert_eq!(artifacts.len(), 2);
+}
+
+#[test]
+fn feature_rollout_fixture_requires_all_cross_module_invariants() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(
+        dir.path(),
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
+    )
+    .expect("prepare rollout fixture");
+    let root = dir
+        .path()
+        .join(".spark-scenarios/feature-rollout-consistency-bugfix");
+    let validation =
+        profile_scenario_validation_command(ProfileScenarioKind::FeatureRolloutConsistencyBugfix)
+            .expect("validation");
+
+    assert!(
+        !std::process::Command::new(validation.program)
+            .args(validation.args)
+            .current_dir(&root)
+            .status()
+            .expect("run broken validation")
+            .success(),
+        "broken rollout fixture should fail"
+    );
+
+    std::fs::write(
+        root.join("src/store.ts"),
+        r#"import type { FlagConfig } from "./types";
+
+const keyFor = (tenantId: string, flagKey: string) => JSON.stringify([tenantId, flagKey]);
+
+export class FlagConfigStore {
+  private readonly configs = new Map<string, FlagConfig>();
+
+  upsert(config: FlagConfig): boolean {
+    const key = keyFor(config.tenantId, config.flagKey);
+    const current = this.configs.get(key);
+    if (current && config.revision <= current.revision) return false;
+    this.configs.set(key, config);
+    return true;
+  }
+
+  get(tenantId: string, flagKey: string): FlagConfig | undefined {
+    return this.configs.get(keyFor(tenantId, flagKey));
+  }
+}
+"#,
+    )
+    .expect("write store oracle");
+    std::fs::write(
+        root.join("src/cache.ts"),
+        r#"import type { Decision, FlagConfig, Subject } from "./types";
+
+const keyFor = (config: FlagConfig, subject: Subject) =>
+  JSON.stringify([config.tenantId, config.flagKey, config.revision, subject.subjectId]);
+
+export class DecisionCache {
+  private readonly decisions = new Map<string, Decision>();
+
+  get(config: FlagConfig, subject: Subject): Decision | undefined {
+    return this.decisions.get(keyFor(config, subject));
+  }
+
+  set(config: FlagConfig, subject: Subject, decision: Decision): void {
+    this.decisions.set(keyFor(config, subject), decision);
+  }
+}
+"#,
+    )
+    .expect("write cache oracle");
+    std::fs::write(
+        root.join("src/evaluate.ts"),
+        r#"import { stableBucket } from "./hash";
+import type { Decision, FlagConfig, Subject } from "./types";
+
+export function evaluate(config: FlagConfig, subject: Subject): Decision {
+  if (!config.enabled) return { allowed: false, reason: "disabled", bucket: null };
+  if (config.tenantId !== subject.tenantId) {
+    return { allowed: false, reason: "tenant_mismatch", bucket: null };
+  }
+  if (config.denySubjects.includes(subject.subjectId)) {
+    return { allowed: false, reason: "denied", bucket: null };
+  }
+  if (config.allowSubjects.includes(subject.subjectId)) {
+    return { allowed: true, reason: "allowed", bucket: null };
+  }
+  const bucket = stableBucket(`${config.tenantId}:${config.flagKey}:${subject.subjectId}`);
+  const percent = Math.max(0, Math.min(100, config.rolloutPercent));
+  return bucket < percent
+    ? { allowed: true, reason: "rollout", bucket }
+    : { allowed: false, reason: "outside_rollout", bucket };
+}
+"#,
+    )
+    .expect("write evaluation oracle");
+
+    assert!(
+        std::process::Command::new(validation.program)
+            .args(validation.args)
+            .current_dir(&root)
+            .status()
+            .expect("run repaired validation")
+            .success(),
+        "complete rollout oracle should pass"
+    );
+    let checks =
+        profile_scenario_validation_checks(ProfileScenarioKind::FeatureRolloutConsistencyBugfix);
+    assert_eq!(checks.len(), 6);
+    assert_eq!(checks.iter().map(|check| check.weight).sum::<u32>(), 100);
+}
+
+#[test]
+fn frontier_rule_transfer_fixture_is_hidden_case_scored() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::FrontierRuleTransfer)
+        .expect("prepare frontier fixture");
+    let root = dir.path().join(".spark-scenarios/frontier-rule-transfer");
+    let validation = profile_scenario_validation_command(ProfileScenarioKind::FrontierRuleTransfer)
+        .expect("validation");
+
+    assert!(
+        !std::process::Command::new(validation.program)
+            .args(validation.args)
+            .current_dir(&root)
+            .status()
+            .expect("run broken validation")
+            .success(),
+        "stub frontier solver should fail"
+    );
+
+    std::fs::write(
+        root.join("src/solver.ts"),
+        r#"import type { FrontierAnswer, FrontierCase, FrontierEdge } from "./types";
+
+export function solveFrontierCase(input: FrontierCase): FrontierAnswer {
+  const nodes = new Map(input.nodes.map(node => [node.id, node]));
+  const seed = input.nodes.find(node => node.role === "seed");
+  if (!seed?.tone) throw new Error("missing seed");
+  const labels = seed.tone === "amber"
+    ? ["alpha", "beta", "alpha", "beta"] as const
+    : ["beta", "alpha", "beta", "alpha"] as const;
+  const visited = new Set([seed.id]);
+  const path: string[] = [];
+  let current = seed.id;
+  for (const label of labels) {
+    const candidates = input.edges
+      .filter(edge => edge.from === current && edge.label === label && !visited.has(edge.to))
+      .filter(edge => nodes.has(edge.to))
+      .sort((left, right) => {
+        const score = (edge: FrontierEdge) => nodes.get(edge.to)!.value + edge.bias;
+        return score(right) - score(left) || left.to.localeCompare(right.to);
+      });
+    if (candidates.length === 0) break;
+    current = candidates[0].to;
+    visited.add(current);
+    path.push(current);
+  }
+  return {
+    path,
+    selected: path.filter((id, index) => (nodes.get(id)!.value + index + 1) % 3 === 0),
+    checksum: path.reduce(
+      (total, id, index) => total + (index + 1) * nodes.get(id)!.value,
+      0,
+    ) % 97,
+  };
+}
+"#,
+    )
+    .expect("write frontier oracle");
+
+    assert!(
+        std::process::Command::new(validation.program)
+            .args(validation.args)
+            .current_dir(&root)
+            .status()
+            .expect("run frontier oracle")
+            .success(),
+        "general frontier oracle should pass all public and hidden cases"
+    );
+    let checks = profile_scenario_validation_checks(ProfileScenarioKind::FrontierRuleTransfer);
+    assert_eq!(checks.len(), 6);
+    assert_eq!(checks.iter().map(|check| check.weight).sum::<u32>(), 100);
+    assert!(
+        benchmark_task_prompt(ProfileScenarioKind::FrontierRuleTransfer)
+            .contains("Do not inspect or modify tests/.harness")
+    );
 }
 
 #[test]

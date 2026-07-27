@@ -88,6 +88,14 @@ pub(crate) fn expected_scenario_artifacts(
             ".spark-scenarios/stateful-reconciliation-bugfix/src/normalize.ts",
             ".spark-scenarios/stateful-reconciliation-bugfix/src/project.ts",
         ],
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix => &[
+            ".spark-scenarios/feature-rollout-consistency-bugfix/src/store.ts",
+            ".spark-scenarios/feature-rollout-consistency-bugfix/src/cache.ts",
+            ".spark-scenarios/feature-rollout-consistency-bugfix/src/evaluate.ts",
+        ],
+        ProfileScenarioKind::FrontierRuleTransfer => {
+            &[".spark-scenarios/frontier-rule-transfer/src/solver.ts"]
+        }
         ProfileScenarioKind::TerminalRepair => {
             &[".spark-scenarios/terminal-repair/config/settings.json"]
         }
@@ -127,6 +135,8 @@ mod tests {
             ProfileScenarioKind::ExperimentRolloutAudit,
             ProfileScenarioKind::MultiModuleBugfix,
             ProfileScenarioKind::StatefulReconciliationBugfix,
+            ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
+            ProfileScenarioKind::FrontierRuleTransfer,
             ProfileScenarioKind::TerminalRepair,
             ProfileScenarioKind::MultiHopAnalysis,
             ProfileScenarioKind::PolicySupportAgent,

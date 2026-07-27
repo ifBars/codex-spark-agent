@@ -30,6 +30,10 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
         ProfileScenarioKind::ExperimentRolloutAudit => Some("experiment-rollout-audit"),
         ProfileScenarioKind::MultiModuleBugfix => Some("multi-module-bugfix"),
         ProfileScenarioKind::StatefulReconciliationBugfix => Some("stateful-reconciliation-bugfix"),
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix => {
+            Some("feature-rollout-consistency-bugfix")
+        }
+        ProfileScenarioKind::FrontierRuleTransfer => Some("frontier-rule-transfer"),
         ProfileScenarioKind::TerminalRepair => Some("terminal-repair"),
         ProfileScenarioKind::MultiHopAnalysis => Some("multi-hop-analysis"),
         ProfileScenarioKind::PolicySupportAgent => Some("policy-support-agent"),
@@ -788,6 +792,594 @@ describe("harness reconciliation invariants", () => {
       event({ eventId: "e-2", orderId: "o-2", quantity: 0 }),
     ])).toEqual([]);
   });
+});
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write harness validation: {error}"))?;
+        }
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix => {
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests").join(".harness")).map_err(|error| {
+                anyhow::anyhow!("failed to create harness tests fixture: {error}")
+            })?;
+            std::fs::create_dir_all(dir.join("docs"))
+                .map_err(|error| anyhow::anyhow!("failed to create docs fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("logs"))
+                .map_err(|error| anyhow::anyhow!("failed to create logs fixture: {error}"))?;
+
+            std::fs::write(
+                dir.join("package.json"),
+                "{\n  \"name\": \"feature-rollout-consistency-fixture\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": { \"test\": \"bun test tests/rollout.test.ts\" }\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture package.json: {error}"))?;
+            std::fs::write(
+                dir.join("issue.md"),
+                "# Cross-tenant feature rollout incident\n\nA control-plane retry and a cache collision exposed the `checkout-v2` flag to the wrong tenant. During the same incident, an older config revision replaced a newer emergency deny list, and changing a user's email moved them into a different rollout cohort.\n\nRepair the production implementation using the supplied invariants and incident evidence. The visible tests cover only the first symptom. Preserve the public types and service API, and do not change tests, documentation, or evidence.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture issue.md: {error}"))?;
+            std::fs::write(
+                dir.join("docs").join("invariants.md"),
+                "# Rollout invariants\n\n1. Flag configs are isolated by the pair `(tenantId, flagKey)`.\n2. Only a strictly higher revision may replace the current config. Equal or stale revisions are ignored.\n3. A missing config, disabled flag, or tenant mismatch always denies access.\n4. The deny list takes precedence over the allow list. An explicitly allowed subject bypasses percentage rollout only when not denied.\n5. Percentage rollout is clamped to 0 through 100 and uses the stable tuple `(tenantId, flagKey, subjectId)`. Mutable profile fields such as email must not affect cohort assignment.\n6. Cached decisions are isolated by tenant, flag key, config revision, and subject id. A new revision must never reuse a prior revision's decision.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture invariants.md: {error}"))?;
+            std::fs::write(
+                dir.join("logs").join("incident.log"),
+                "14:02:11 tenant=acme flag=checkout-v2 revision=42 decision=allow subject=u-17\n14:02:12 tenant=globex flag=checkout-v2 revision=7 cache_hit=true subject=u-17 unexpected=true\n14:03:05 tenant=acme flag=checkout-v2 incoming_revision=41 current_revision=42 replaced=true\n14:03:08 tenant=acme flag=checkout-v2 subject=u-19 allow_list=true deny_list=true decision=allow\n14:04:31 tenant=acme flag=checkout-v2 subject=u-23 email_changed=true cohort_changed=true\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture incident.log: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("types.ts"),
+                r#"export type FlagConfig = {
+  tenantId: string;
+  flagKey: string;
+  revision: number;
+  enabled: boolean;
+  rolloutPercent: number;
+  allowSubjects: string[];
+  denySubjects: string[];
+};
+
+export type Subject = {
+  tenantId: string;
+  subjectId: string;
+  email: string;
+};
+
+export type DecisionReason =
+  | "missing"
+  | "disabled"
+  | "tenant_mismatch"
+  | "denied"
+  | "allowed"
+  | "rollout"
+  | "outside_rollout";
+
+export type Decision = {
+  allowed: boolean;
+  reason: DecisionReason;
+  bucket: number | null;
+};
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture types.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("hash.ts"),
+                r#"export function stableBucket(input: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) % 100;
+}
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture hash.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("store.ts"),
+                r#"import type { FlagConfig } from "./types";
+
+export class FlagConfigStore {
+  private readonly configs = new Map<string, FlagConfig>();
+
+  upsert(config: FlagConfig): boolean {
+    this.configs.set(config.flagKey, config);
+    return true;
+  }
+
+  get(_tenantId: string, flagKey: string): FlagConfig | undefined {
+    return this.configs.get(flagKey);
+  }
+}
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture store.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("cache.ts"),
+                r#"import type { Decision, FlagConfig, Subject } from "./types";
+
+export class DecisionCache {
+  private readonly decisions = new Map<string, Decision>();
+
+  get(config: FlagConfig, subject: Subject): Decision | undefined {
+    return this.decisions.get(`${config.flagKey}:${subject.subjectId}`);
+  }
+
+  set(config: FlagConfig, subject: Subject, decision: Decision): void {
+    this.decisions.set(`${config.flagKey}:${subject.subjectId}`, decision);
+  }
+}
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture cache.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("evaluate.ts"),
+                r#"import { stableBucket } from "./hash";
+import type { Decision, FlagConfig, Subject } from "./types";
+
+export function evaluate(config: FlagConfig, subject: Subject): Decision {
+  if (!config.enabled) return { allowed: false, reason: "disabled", bucket: null };
+  if (config.allowSubjects.includes(subject.subjectId)) {
+    return { allowed: true, reason: "allowed", bucket: null };
+  }
+  if (config.denySubjects.includes(subject.subjectId)) {
+    return { allowed: false, reason: "denied", bucket: null };
+  }
+
+  const bucket = stableBucket(`${config.flagKey}:${subject.email}`);
+  return bucket < config.rolloutPercent
+    ? { allowed: true, reason: "rollout", bucket }
+    : { allowed: false, reason: "outside_rollout", bucket };
+}
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture evaluate.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("service.ts"),
+                r#"import { DecisionCache } from "./cache";
+import { evaluate } from "./evaluate";
+import { FlagConfigStore } from "./store";
+import type { Decision, FlagConfig, Subject } from "./types";
+
+export class RolloutService {
+  constructor(
+    private readonly store = new FlagConfigStore(),
+    private readonly cache = new DecisionCache(),
+  ) {}
+
+  upsert(config: FlagConfig): boolean {
+    return this.store.upsert(config);
+  }
+
+  decide(subject: Subject, flagKey: string): Decision {
+    const config = this.store.get(subject.tenantId, flagKey);
+    if (!config) return { allowed: false, reason: "missing", bucket: null };
+
+    const cached = this.cache.get(config, subject);
+    if (cached) return cached;
+
+    const decision = evaluate(config, subject);
+    this.cache.set(config, subject, decision);
+    return decision;
+  }
+}
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture service.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("rollout.test.ts"),
+                r#"import { describe, expect, test } from "bun:test";
+import { evaluate } from "../src/evaluate";
+import { FlagConfigStore } from "../src/store";
+import type { FlagConfig, Subject } from "../src/types";
+
+const config = (overrides: Partial<FlagConfig> = {}): FlagConfig => ({
+  tenantId: "acme",
+  flagKey: "checkout-v2",
+  revision: 1,
+  enabled: true,
+  rolloutPercent: 0,
+  allowSubjects: [],
+  denySubjects: [],
+  ...overrides,
+});
+
+const subject = (overrides: Partial<Subject> = {}): Subject => ({
+  tenantId: "acme",
+  subjectId: "u-1",
+  email: "before@example.test",
+  ...overrides,
+});
+
+describe("feature rollout", () => {
+  test("stores equal flag keys independently for each tenant", () => {
+    const store = new FlagConfigStore();
+    store.upsert(config({ tenantId: "acme", revision: 4 }));
+    store.upsert(config({ tenantId: "globex", revision: 9 }));
+    expect(store.get("acme", "checkout-v2")?.revision).toBe(4);
+    expect(store.get("globex", "checkout-v2")?.revision).toBe(9);
+  });
+
+  test("disabled flags deny access and explicit allows can opt in", () => {
+    expect(evaluate(config({ enabled: false }), subject()).allowed).toBe(false);
+    expect(evaluate(config({ allowSubjects: ["u-1"] }), subject())).toMatchObject({
+      allowed: true,
+      reason: "allowed",
+    });
+  });
+});
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture rollout.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests")
+                    .join(".harness")
+                    .join("rollout.validation.ts"),
+                r#"import { describe, expect, test } from "bun:test";
+import { DecisionCache } from "../../src/cache";
+import { evaluate } from "../../src/evaluate";
+import { RolloutService } from "../../src/service";
+import { FlagConfigStore } from "../../src/store";
+import type { Decision, FlagConfig, Subject } from "../../src/types";
+
+const selectedCheck = process.env.SPARK_VALIDATION_CHECK;
+const check = (name: string, title: string, body: () => void) => {
+  if (!selectedCheck || selectedCheck === name) test(title, body);
+};
+
+const config = (overrides: Partial<FlagConfig> = {}): FlagConfig => ({
+  tenantId: "acme",
+  flagKey: "checkout-v2",
+  revision: 1,
+  enabled: true,
+  rolloutPercent: 0,
+  allowSubjects: [],
+  denySubjects: [],
+  ...overrides,
+});
+
+const subject = (overrides: Partial<Subject> = {}): Subject => ({
+  tenantId: "acme",
+  subjectId: "u-1",
+  email: "before@example.test",
+  ...overrides,
+});
+
+describe("harness rollout invariants", () => {
+  check("tenant-store", "isolates equal flag keys across tenants", () => {
+    const store = new FlagConfigStore();
+    const acme = config({ tenantId: "acme", revision: 4 });
+    const globex = config({ tenantId: "globex", revision: 9 });
+    store.upsert(acme);
+    store.upsert(globex);
+    expect(store.get("acme", "checkout-v2")).toEqual(acme);
+    expect(store.get("globex", "checkout-v2")).toEqual(globex);
+  });
+
+  check("monotonic-revision", "ignores stale and equal config revisions", () => {
+    const store = new FlagConfigStore();
+    const current = config({ revision: 8, rolloutPercent: 65 });
+    expect(store.upsert(current)).toBe(true);
+    expect(store.upsert(config({ revision: 7, rolloutPercent: 0 }))).toBe(false);
+    expect(store.upsert(config({ revision: 8, rolloutPercent: 100 }))).toBe(false);
+    expect(store.get("acme", "checkout-v2")).toEqual(current);
+  });
+
+  check("decision-precedence", "enforces tenant, disabled, deny, then allow precedence", () => {
+    const both = config({ allowSubjects: ["u-1"], denySubjects: ["u-1"] });
+    expect(evaluate(both, subject())).toMatchObject({ allowed: false, reason: "denied" });
+    expect(evaluate(config({ enabled: false, allowSubjects: ["u-1"] }), subject()))
+      .toMatchObject({ allowed: false, reason: "disabled" });
+    expect(evaluate(config({ allowSubjects: ["u-1"] }), subject({ tenantId: "globex" })))
+      .toMatchObject({ allowed: false, reason: "tenant_mismatch" });
+  });
+
+  check("stable-rollout", "uses stable identity and clamps percentage bounds", () => {
+    const partial = config({ rolloutPercent: 37 });
+    const before = evaluate(partial, subject({ email: "before@example.test" }));
+    const after = evaluate(partial, subject({ email: "after@example.test" }));
+    expect(after).toEqual(before);
+    expect(evaluate(config({ rolloutPercent: 150 }), subject()).allowed).toBe(true);
+    expect(evaluate(config({ rolloutPercent: -20 }), subject()).allowed).toBe(false);
+  });
+
+  check("cache-isolation", "isolates cached decisions by tenant and revision", () => {
+    const cache = new DecisionCache();
+    const actor = subject();
+    const allow: Decision = { allowed: true, reason: "allowed", bucket: null };
+    const deny: Decision = { allowed: false, reason: "denied", bucket: null };
+    const outside: Decision = { allowed: false, reason: "outside_rollout", bucket: 91 };
+    const acmeV1 = config({ tenantId: "acme", revision: 1 });
+    const globexV1 = config({ tenantId: "globex", revision: 1 });
+    const acmeV2 = config({ tenantId: "acme", revision: 2 });
+    cache.set(acmeV1, actor, allow);
+    cache.set(globexV1, subject({ tenantId: "globex" }), deny);
+    cache.set(acmeV2, actor, outside);
+    expect(cache.get(acmeV1, actor)).toEqual(allow);
+    expect(cache.get(globexV1, subject({ tenantId: "globex" }))).toEqual(deny);
+    expect(cache.get(acmeV2, actor)).toEqual(outside);
+  });
+
+  check("service-revision", "changes decisions for newer revisions but ignores stale retries", () => {
+    const service = new RolloutService();
+    const actor = subject();
+    service.upsert(config({ revision: 1, rolloutPercent: 0 }));
+    expect(service.decide(actor, "checkout-v2").allowed).toBe(false);
+    service.upsert(config({ revision: 2, allowSubjects: ["u-1"] }));
+    expect(service.decide(actor, "checkout-v2")).toMatchObject({ allowed: true, reason: "allowed" });
+    service.upsert(config({ revision: 1, denySubjects: ["u-1"] }));
+    expect(service.decide(actor, "checkout-v2")).toMatchObject({ allowed: true, reason: "allowed" });
+  });
+});
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write harness validation: {error}"))?;
+        }
+        ProfileScenarioKind::FrontierRuleTransfer => {
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests").join(".harness")).map_err(|error| {
+                anyhow::anyhow!("failed to create harness tests fixture: {error}")
+            })?;
+            std::fs::write(
+                dir.join("package.json"),
+                "{\n  \"name\": \"frontier-rule-transfer-fixture\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": { \"test\": \"bun test tests/public.test.ts\" }\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture package.json: {error}"))?;
+            std::fs::write(
+                dir.join("task.md"),
+                "# Frontier rule-transfer exam\n\nInfer the latent graph transformation from `examples.json`, then implement it in `src/solver.ts`.\n\nThe examples are the complete task specification: no prose description of the transformation is provided. Your solver must generalize to unseen node ids, graph sizes, seed tones, distractor edges, score ties, cycles, and paths that terminate early. Return the exact `FrontierAnswer` shape from `src/types.ts` without mutating the input.\n\nDo not inspect or modify `tests/.harness`. It contains private evaluation cases and is outside the task evidence. Do not change `examples.json`, `src/types.ts`, or tests.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture task.md: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("types.ts"),
+                r#"export type FrontierNode = {
+  id: string;
+  value: number;
+  tone?: "amber" | "cyan";
+  role?: "seed";
+};
+
+export type FrontierEdge = {
+  from: string;
+  to: string;
+  label: "alpha" | "beta";
+  bias: number;
+};
+
+export type FrontierCase = {
+  nodes: FrontierNode[];
+  edges: FrontierEdge[];
+};
+
+export type FrontierAnswer = {
+  path: string[];
+  selected: string[];
+  checksum: number;
+};
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture types.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("solver.ts"),
+                r#"import type { FrontierAnswer, FrontierCase } from "./types";
+
+export function solveFrontierCase(_input: FrontierCase): FrontierAnswer {
+  return { path: [], selected: [], checksum: 0 };
+}
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture solver.ts: {error}"))?;
+            std::fs::write(
+                dir.join("examples.json"),
+                r#"[
+  {
+    "input": {
+      "nodes": [
+        {"id":"s","value":1,"tone":"amber","role":"seed"},
+        {"id":"a","value":4},{"id":"b","value":3},{"id":"c","value":5},
+        {"id":"d","value":7},{"id":"e","value":2},{"id":"f","value":2},{"id":"g","value":6}
+      ],
+      "edges": [
+        {"from":"s","to":"a","label":"alpha","bias":0},
+        {"from":"s","to":"b","label":"alpha","bias":2},
+        {"from":"b","to":"c","label":"beta","bias":0},
+        {"from":"b","to":"d","label":"beta","bias":-1},
+        {"from":"d","to":"f","label":"alpha","bias":0},
+        {"from":"d","to":"e","label":"alpha","bias":0},
+        {"from":"e","to":"g","label":"beta","bias":0}
+      ]
+    },
+    "answer": {"path":["b","d","e","g"],"selected":["d"],"checksum":47}
+  },
+  {
+    "input": {
+      "nodes": [
+        {"id":"root","value":2,"tone":"cyan","role":"seed"},
+        {"id":"a","value":8},{"id":"b","value":6},{"id":"c","value":4},
+        {"id":"d","value":5},{"id":"e","value":1},{"id":"f","value":6},{"id":"g","value":9}
+      ],
+      "edges": [
+        {"from":"root","to":"a","label":"beta","bias":0},
+        {"from":"root","to":"b","label":"beta","bias":3},
+        {"from":"b","to":"c","label":"alpha","bias":0},
+        {"from":"b","to":"d","label":"alpha","bias":0},
+        {"from":"d","to":"f","label":"beta","bias":0},
+        {"from":"d","to":"e","label":"beta","bias":5},
+        {"from":"e","to":"g","label":"alpha","bias":0}
+      ]
+    },
+    "answer": {"path":["b","d","e","g"],"selected":[],"checksum":55}
+  },
+  {
+    "input": {
+      "nodes": [
+        {"id":"origin","value":0,"tone":"amber","role":"seed"},
+        {"id":"p","value":2},{"id":"q","value":4},{"id":"r","value":6},{"id":"t","value":8}
+      ],
+      "edges": [
+        {"from":"origin","to":"p","label":"alpha","bias":0},
+        {"from":"p","to":"q","label":"beta","bias":0},
+        {"from":"q","to":"r","label":"alpha","bias":0},
+        {"from":"r","to":"t","label":"beta","bias":0}
+      ]
+    },
+    "answer": {"path":["p","q","r","t"],"selected":["p","q","r","t"],"checksum":60}
+  },
+  {
+    "input": {
+      "nodes": [
+        {"id":"z","value":4,"tone":"cyan","role":"seed"},
+        {"id":"m","value":5},{"id":"n","value":7},{"id":"unused","value":99}
+      ],
+      "edges": [
+        {"from":"z","to":"m","label":"beta","bias":0},
+        {"from":"m","to":"n","label":"alpha","bias":0},
+        {"from":"n","to":"z","label":"beta","bias":100},
+        {"from":"z","to":"unused","label":"alpha","bias":100}
+      ]
+    },
+    "answer": {"path":["m","n"],"selected":["m","n"],"checksum":19}
+  }
+]
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture examples.json: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("public.test.ts"),
+                r#"import { expect, test } from "bun:test";
+import { solveFrontierCase } from "../src/solver";
+import type { FrontierCase } from "../src/types";
+
+test("transfers the demonstrated rule to a held-out graph", () => {
+  const input: FrontierCase = {
+    nodes: [
+      { id: "seed", value: 5, tone: "amber", role: "seed" },
+      { id: "u", value: 9 }, { id: "v", value: 8 }, { id: "w", value: 1 },
+      { id: "x", value: 3 }, { id: "y", value: 5 },
+    ],
+    edges: [
+      { from: "seed", to: "u", label: "alpha", bias: 0 },
+      { from: "seed", to: "v", label: "alpha", bias: 2 },
+      { from: "v", to: "w", label: "beta", bias: 0 },
+      { from: "w", to: "x", label: "alpha", bias: 0 },
+      { from: "x", to: "y", label: "beta", bias: 0 },
+    ],
+  };
+  expect(solveFrontierCase(input)).toEqual({
+    path: ["v", "w", "x", "y"],
+    selected: ["v", "w", "x", "y"],
+    checksum: 39,
+  });
+});
+"#,
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write public test: {error}"))?;
+            std::fs::write(
+                dir.join("tests")
+                    .join(".harness")
+                    .join("frontier.validation.ts"),
+                r#"import { describe, expect, test } from "bun:test";
+import { solveFrontierCase } from "../../src/solver";
+import type { FrontierAnswer, FrontierCase, FrontierEdge, FrontierNode } from "../../src/types";
+
+const selectedCheck = process.env.SPARK_VALIDATION_CHECK;
+const check = (name: string, title: string, body: () => void) => {
+  if (!selectedCheck || selectedCheck === name) test(title, body);
+};
+
+function reference(input: FrontierCase): FrontierAnswer {
+  const nodes = new Map(input.nodes.map(node => [node.id, node]));
+  const seed = input.nodes.find(node => node.role === "seed");
+  if (!seed?.tone) throw new Error("missing seed");
+  const labels = seed.tone === "amber"
+    ? ["alpha", "beta", "alpha", "beta"] as const
+    : ["beta", "alpha", "beta", "alpha"] as const;
+  const visited = new Set([seed.id]);
+  const path: string[] = [];
+  let current = seed.id;
+  for (const label of labels) {
+    const candidates = input.edges
+      .filter(edge => edge.from === current && edge.label === label && !visited.has(edge.to))
+      .filter(edge => nodes.has(edge.to))
+      .sort((left, right) => {
+        const score = (edge: FrontierEdge) => nodes.get(edge.to)!.value + edge.bias;
+        return score(right) - score(left) || left.to.localeCompare(right.to);
+      });
+    if (candidates.length === 0) break;
+    current = candidates[0].to;
+    visited.add(current);
+    path.push(current);
+  }
+  const selected = path.filter((id, index) => (nodes.get(id)!.value + index + 1) % 3 === 0);
+  const checksum = path.reduce(
+    (total, id, index) => total + (index + 1) * nodes.get(id)!.value,
+    0,
+  ) % 97;
+  return { path, selected, checksum };
+}
+
+const graph = (
+  tone: "amber" | "cyan",
+  nodes: FrontierNode[],
+  edges: FrontierEdge[],
+): FrontierCase => ({
+  nodes: [{ id: "seed", value: 0, tone, role: "seed" }, ...nodes],
+  edges,
+});
+
+const cases: Record<string, FrontierCase> = {
+  "amber-distractors": graph("amber",
+    [{id:"a",value:7},{id:"b",value:4},{id:"c",value:8},{id:"d",value:3},{id:"e",value:11}],
+    [
+      {from:"seed",to:"a",label:"alpha",bias:-4},{from:"seed",to:"b",label:"alpha",bias:1},
+      {from:"b",to:"c",label:"beta",bias:0},{from:"b",to:"d",label:"beta",bias:6},
+      {from:"d",to:"e",label:"alpha",bias:0},
+    ]),
+  "cyan-tie-break": graph("cyan",
+    [{id:"zeta",value:5},{id:"alpha",value:5},{id:"m",value:4},{id:"n",value:2}],
+    [
+      {from:"seed",to:"zeta",label:"beta",bias:0},{from:"seed",to:"alpha",label:"beta",bias:0},
+      {from:"alpha",to:"m",label:"alpha",bias:0},{from:"m",to:"n",label:"beta",bias:0},
+    ]),
+  "cycle-avoidance": graph("amber",
+    [{id:"a",value:4},{id:"b",value:7},{id:"c",value:6},{id:"d",value:9}],
+    [
+      {from:"seed",to:"a",label:"alpha",bias:0},{from:"a",to:"b",label:"beta",bias:0},
+      {from:"b",to:"a",label:"alpha",bias:50},{from:"b",to:"c",label:"alpha",bias:0},
+      {from:"c",to:"d",label:"beta",bias:0},
+    ]),
+  "early-stop": graph("cyan",
+    [{id:"a",value:10},{id:"b",value:1},{id:"c",value:20}],
+    [
+      {from:"seed",to:"a",label:"beta",bias:0},{from:"a",to:"b",label:"beta",bias:100},
+      {from:"a",to:"c",label:"alpha",bias:0},
+    ]),
+  "weighted-choice": graph("amber",
+    [{id:"a",value:12},{id:"b",value:5},{id:"c",value:4},{id:"d",value:8},{id:"e",value:2}],
+    [
+      {from:"seed",to:"a",label:"alpha",bias:-10},{from:"seed",to:"b",label:"alpha",bias:0},
+      {from:"b",to:"c",label:"beta",bias:7},{from:"b",to:"d",label:"beta",bias:0},
+      {from:"c",to:"e",label:"alpha",bias:0},
+    ]),
+  "unknown-target": graph("cyan",
+    [{id:"a",value:3},{id:"b",value:6},{id:"c",value:9},{id:"d",value:12}],
+    [
+      {from:"seed",to:"ghost",label:"beta",bias:999},{from:"seed",to:"a",label:"beta",bias:0},
+      {from:"a",to:"b",label:"alpha",bias:0},{from:"b",to:"c",label:"beta",bias:0},
+      {from:"c",to:"d",label:"alpha",bias:0},
+    ]),
+};
+
+describe("private frontier transfer cases", () => {
+  for (const [name, input] of Object.entries(cases)) {
+    check(name, `solves ${name}`, () => {
+      const snapshot = structuredClone(input);
+      expect(solveFrontierCase(input)).toEqual(reference(input));
+      expect(input).toEqual(snapshot);
+    });
+  }
 });
 "#,
             )

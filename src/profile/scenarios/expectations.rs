@@ -134,6 +134,14 @@ pub(crate) fn profile_scenario_expected_tool_groups(
                 vec!["cmd.exec"],
             ]
         }
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix
+        | ProfileScenarioKind::FrontierRuleTransfer => {
+            vec![
+                vec!["fs.read"],
+                vec!["fs.edit", "fs.replace", "fs.write"],
+                vec!["cmd.exec"],
+            ]
+        }
         ProfileScenarioKind::TerminalRepair => {
             vec![
                 vec!["cmd.exec"],
@@ -910,6 +918,62 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             json!({
                 "tool": "cmd.exec",
                 "command": "bun test",
+            }),
+        ],
+        ProfileScenarioKind::FeatureRolloutConsistencyBugfix => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/issue.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/docs/invariants.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/logs/incident.log",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/src/store.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/src/cache.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/src/evaluate.ts",
+            }),
+            json!({
+                "tool": "cmd.exec",
+                "command": "bun test tests/rollout.test.ts",
+            }),
+        ],
+        ProfileScenarioKind::FrontierRuleTransfer => vec![
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/frontier-rule-transfer/task.md",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/frontier-rule-transfer/examples.json",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/frontier-rule-transfer/src/types.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": ".spark-scenarios/frontier-rule-transfer/src/solver.ts",
+            }),
+            json!({
+                "tools": ["fs.edit", "fs.replace", "fs.write"],
+                "path": ".spark-scenarios/frontier-rule-transfer/src/solver.ts",
+            }),
+            json!({
+                "tool": "cmd.exec",
+                "command": "bun test tests/public.test.ts",
             }),
         ],
         ProfileScenarioKind::TerminalRepair => vec![

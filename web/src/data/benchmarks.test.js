@@ -109,6 +109,8 @@ describe("expanded reasoning dataset", () => {
     expect(expanded.evidence.pendingScenarios.map((scenario) => scenario.id)).toEqual([
       "inventory-rebalance-plan",
       "experiment-rollout-audit",
+      "feature-rollout-consistency-bugfix",
+      "frontier-rule-transfer",
     ]);
     expect(
       expanded.evidence.pendingScenarios.every(
