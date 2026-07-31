@@ -485,7 +485,16 @@ fn visit_source_files(dir: &Path, visit: &mut impl FnMut(&Path)) -> Result<()> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if path.is_dir() {
-            if matches!(name.as_ref(), "node_modules" | "target" | ".git" | ".vite") {
+            if matches!(
+                name.as_ref(),
+                "node_modules"
+                    | "target"
+                    | ".git"
+                    | ".vite"
+                    | ".spark-runs"
+                    | ".spark-profile"
+                    | ".spark-scenarios"
+            ) {
                 continue;
             }
             visit_source_files(&path, visit)?;
@@ -528,6 +537,7 @@ fn command_parts(program: &str, args: &[&str]) -> Vec<String> {
 mod tests {
     use super::{
         ScenarioValidationCheckResult, ScenarioValidationResult, browser_validation_script,
+        source_footprint,
     };
 
     #[test]
@@ -569,5 +579,31 @@ mod tests {
         };
 
         assert_eq!(result.granular_score(), Some(70.0));
+    }
+
+    #[test]
+    fn source_footprint_excludes_harness_owned_artifacts() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir_all(workspace.path().join("src")).expect("create source directory");
+        std::fs::write(
+            workspace.path().join("src/app.ts"),
+            "export const ready = true;\n",
+        )
+        .expect("write source");
+
+        for directory in [".spark-runs", ".spark-profile", ".spark-scenarios"] {
+            let artifact_dir = workspace.path().join(directory);
+            std::fs::create_dir_all(&artifact_dir).expect("create artifact directory");
+            std::fs::write(
+                artifact_dir.join("large-response.json"),
+                "x".repeat(100_000),
+            )
+            .expect("write artifact");
+        }
+
+        let footprint = source_footprint(workspace.path()).expect("measure source footprint");
+
+        assert_eq!(footprint.files, 1);
+        assert_eq!(footprint.bytes, 27);
     }
 }
