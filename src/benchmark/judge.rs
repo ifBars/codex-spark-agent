@@ -705,7 +705,7 @@ mod tests {
         assert_eq!(DEFAULT_JUDGE_MODEL, "gpt-5.6-terra");
         assert!(uses_codex_cli_judge("gpt-5.6-terra"));
         assert!(uses_codex_cli_judge("GPT-5.6-TERRA"));
-        assert!(!uses_codex_cli_judge("gpt-5.5"));
+        assert!(!uses_codex_cli_judge("gpt-5.6-luna"));
     }
 
     #[test]

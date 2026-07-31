@@ -11,7 +11,7 @@ fn builtin_tools_do_not_include_synthetic_completion_tool() {
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
 
-    assert_eq!(names.len(), 12);
+    assert_eq!(names.len(), 18);
     assert!(!names.iter().any(|name| name == "agent.complete"));
     assert!(names.iter().any(|name| name == "fs.stat"));
     assert!(names.iter().any(|name| name == "fs.rename"));
@@ -19,6 +19,12 @@ fn builtin_tools_do_not_include_synthetic_completion_tool() {
     assert!(names.iter().any(|name| name == "browser.run"));
     assert!(names.iter().any(|name| name == "web.search"));
     assert!(names.iter().any(|name| name == "subagent.run"));
+    assert!(names.iter().any(|name| name == "subagent.spawn"));
+    assert!(names.iter().any(|name| name == "subagent.wait"));
+    assert!(names.iter().any(|name| name == "subagent.followup"));
+    assert!(names.iter().any(|name| name == "subagent.steer"));
+    assert!(names.iter().any(|name| name == "subagent.cancel"));
+    assert!(names.iter().any(|name| name == "subagent.list"));
 }
 
 #[test]
@@ -36,7 +42,13 @@ fn ask_mode_advertises_only_readonly_tools() {
             "fs.stat",
             "fs.search",
             "web.search",
-            "subagent.run"
+            "subagent.run",
+            "subagent.spawn",
+            "subagent.wait",
+            "subagent.followup",
+            "subagent.steer",
+            "subagent.cancel",
+            "subagent.list"
         ]
     );
 }

@@ -482,7 +482,7 @@ impl AgentRunner {
     fn tools_for_current_loop(&self) -> Vec<ToolDescriptor> {
         let mut tools = tools_for_mode(builtin_tools(), self.mode)
             .into_iter()
-            .filter(|tool| self.subagent_depth == 0 || tool.name != "subagent.run")
+            .filter(|tool| self.subagent_depth == 0 || !tool.name.starts_with("subagent."))
             .collect::<Vec<_>>();
         if self.mode == crate::tools::AgentMode::Work
             && let Some(registry) = &self.mcp_registry

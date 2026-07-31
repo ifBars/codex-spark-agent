@@ -20,6 +20,7 @@ pub(in crate::agent) mod compaction;
 mod goal;
 mod run_loop;
 mod subagent;
+mod team;
 pub(in crate::agent) mod trace;
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ use cache::CachedToolObservation;
 use compaction::context_pressure_json;
 use goal::GoalState;
 pub(crate) use subagent::{SubagentKind, SubagentReport, SubagentRunOptions, report_prompt};
+use team::SubagentTeam;
 use trace::{TraceMetadata, TraceWriter};
 
 const AGENT_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
@@ -121,6 +123,11 @@ pub struct AgentRunner {
     pub(in crate::agent) goal: Option<GoalState>,
     pub(in crate::agent) memory_enabled: bool,
     pub(in crate::agent) subagent_depth: usize,
+    pub(in crate::agent) subagent_team: SubagentTeam,
+    /// Present only for explicitly delegated write workers. This is a harness
+    /// guard, not an OS sandbox: it limits native file mutations and disables
+    /// shell/browser/MCP execution for that worker.
+    pub(in crate::agent) delegated_write_ownership: Option<Vec<String>>,
     pub(in crate::agent) mcp_registry: Option<McpRegistry>,
 }
 
@@ -242,6 +249,8 @@ impl AgentRunner {
             goal: None,
             memory_enabled: false,
             subagent_depth: 0,
+            subagent_team: SubagentTeam::from_environment(),
+            delegated_write_ownership: None,
             mcp_registry: None,
         })
     }

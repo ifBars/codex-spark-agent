@@ -1164,13 +1164,15 @@ fn slash_command_helpers_match_menu_and_unknown_warning() {
 #[test]
 fn subagent_command_parser_accepts_model_and_reasoning_flags() {
     let (kind, task, options) =
-        parse_subagent_command("research --model parent --reasoning high Find current docs")
+        parse_subagent_command("research --model parent --reasoning high --mode work --ownership src/agent,README.md Find current docs")
             .expect("parse subagent command");
 
     assert_eq!(kind, crate::agent::SubagentKind::Research);
     assert_eq!(task, "Find current docs");
     assert_eq!(options.model.as_deref(), Some("parent"));
     assert_eq!(options.reasoning_effort.as_deref(), Some("high"));
+    assert_eq!(options.mode, Some(crate::tools::AgentMode::Work));
+    assert_eq!(options.ownership, ["src/agent", "README.md"]);
 }
 
 #[test]

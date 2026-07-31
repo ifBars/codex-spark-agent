@@ -135,9 +135,19 @@ The commands I use most are:
 - `/session ...` to manage saved sessions
 - `/skills` and `/skill load <name>` to manage skills
 - `/commands` to list reusable prompts
+- `/subagent ...` to run one scoped worker and save its compact brief
+- `/agents` to inspect or cancel managed workers
 - `/new`, `/save`, `/clear`, and `/exit` for session control
 
 Up and Down move through submitted-command history while preserving the draft you were typing. PageUp, PageDown, and the mouse wheel scroll the transcript. Hover a message to copy it. Completed responses show elapsed time, token usage, average output speed, and time to first token when the API reports them.
+
+### Multi-agent work
+
+Spark keeps its interactive model as the default. For focused helper work, `explore` inherits that Spark model, while `research`, `review`, and `plan` default to `gpt-5.6-luna`. Set `SPARK_ADVANCED_SUBAGENT_MODEL` or pass `--model`/`model` to override the advanced choice.
+
+Use `/subagent review src/agent` for one helper. During an agent run, the model can use `subagent.spawn` for independent helpers, `subagent.wait` to merge a compact brief, `subagent.followup` after a completed brief, `subagent.steer` to replace a running worker or continue a completed one, `subagent.cancel`, and `subagent.list`. The default concurrency limit is three; set `SPARK_SUBAGENT_MAX_CONCURRENCY` to a value from 1 through 8 when a workspace or entitlement warrants a different bound.
+
+Workers are read-only by default. A delegated patch must explicitly request `mode=work` and list non-overlapping relative `ownership` paths; it also requires the parent chat to be in work mode. These workers are restricted to native filesystem writes inside those paths, with shell, browser, MCP, and nested-worker execution disabled. This is a harness guard, not a replacement for OS sandboxing. Worker reports are capped to a compact brief and parent traces record spawn, wait, follow-up, steering, cancellation, and report events with the worker profile.
 
 ## Use Spark as a Codex explorer
 

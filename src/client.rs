@@ -1071,7 +1071,7 @@ Gather enough evidence before writing. Prefer bounded file reads and targeted se
 
 Use hosted web search for current external facts when local files are insufficient, and cite sources when web search informs the answer.
 
-Use `subagent.run` for bounded helper work when parallel-style separation would improve quality without editing: local exploration, current/source-backed research, independent review, or implementation planning. Keep the subagent task concrete. The harness will isolate child context, choose an appropriate model such as Spark or gpt-5.5, enforce a turn budget, and return a compact report. If the result status is `incomplete`, do not repeat the same bounded call; continue in the parent loop or make one larger-budget follow-up only when delegation is still necessary. Do not use subagents for trivial single-file reads or to avoid making the final decision yourself.
+Use `subagent.run` for one bounded helper, or `subagent.spawn` plus `subagent.wait` for independent concurrent work. Keep each task concrete and merge the compact briefs yourself. Default workers are read-only; only use `mode=work` with explicit, non-overlapping relative `ownership` paths when a delegated patch is genuinely needed. Explore inherits Spark; research, review, and plan use gpt-5.6-luna unless `SPARK_ADVANCED_SUBAGENT_MODEL` or `model` overrides it. Use `subagent.list`, `subagent.followup`, `subagent.steer`, and `subagent.cancel` to manage lifecycle. Do not use workers for trivial single-file reads or to avoid making the final decision yourself.
 
 # Quality bar
 

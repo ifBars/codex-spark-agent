@@ -219,7 +219,7 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
         },
         ToolDescriptor {
             name: "subagent.run".to_string(),
-            description: "Run an isolated read-only helper agent for scoped exploration, research, review, or planning. Use kind=explore for quick local repo inspection, research for source-backed current web/local research, review for independent code-risk review, and plan for phased implementation planning. The harness chooses Spark or gpt-5.5 by task kind unless model is explicitly set. The child runs until it completes or is cancelled; there is no turn-count cutoff.".to_string(),
+            description: "Run one isolated helper to completion. For concurrent work prefer subagent.spawn then subagent.wait. Helpers default to read-only; a work helper requires explicit ownership and inherits the parent model, mode, memory, and context limits unless overridden. Explore uses the parent Spark model; research, review, and plan use gpt-5.6-luna by default, overridable with SPARK_ADVANCED_SUBAGENT_MODEL.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -230,16 +230,80 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
                     "task": {"type": "string"},
                     "model": {
                         "type": "string",
-                        "description": "Optional model override. Use parent to inherit the main thread model, or pass a concrete model such as gpt-5.5."
+                        "description": "Optional model override. Use parent to inherit the main thread model, or pass a concrete model such as gpt-5.6-luna."
                     },
                     "reasoning_effort": {
                         "type": "string",
                         "enum": ["low", "medium", "high", "xhigh"]
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["ask", "work"],
+                        "description": "Defaults to ask. work requires a work-mode parent plus ownership and permits only bounded native fs writes inside those paths."
+                    },
+                    "ownership": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Relative workspace paths exclusively owned by a work helper. Required for mode=work."
                     }
                 },
                 "required": ["kind", "task"],
                 "additionalProperties": false
             }),
+            hosted_type: None,
+            hosted_config: None,
+        },
+        ToolDescriptor {
+            name: "subagent.spawn".to_string(),
+            description: "Start an isolated helper without blocking the parent. Use only for independent, concrete work; default workers are read-only. The harness caps concurrent workers at SPARK_SUBAGENT_MAX_CONCURRENCY (default 3, maximum 8). Follow with subagent.wait to receive a compact brief.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["explore", "research", "review", "plan"]},
+                    "task": {"type": "string"},
+                    "model": {"type": "string"},
+                    "reasoning_effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh"]},
+                    "mode": {"type": "string", "enum": ["ask", "work"]},
+                    "ownership": {"type": "array", "items": {"type": "string"}}
+                },
+                "required": ["kind", "task"],
+                "additionalProperties": false
+            }),
+            hosted_type: None,
+            hosted_config: None,
+        },
+        ToolDescriptor {
+            name: "subagent.wait".to_string(),
+            description: "Wait for one spawned helper and return its compact report with worker profile data. This records a parent trace lifecycle event and attaches only the compact brief to the parent context.".to_string(),
+            input_schema: json!({"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"], "additionalProperties": false}),
+            hosted_type: None,
+            hosted_config: None,
+        },
+        ToolDescriptor {
+            name: "subagent.followup".to_string(),
+            description: "Start a follow-up worker from a completed helper's compact brief. Follow-ups require the prior worker to be completed; use a focused new task and wait on the returned worker id.".to_string(),
+            input_schema: json!({"type": "object", "properties": {"id": {"type": "string"}, "task": {"type": "string"}}, "required": ["id", "task"], "additionalProperties": false}),
+            hosted_type: None,
+            hosted_config: None,
+        },
+        ToolDescriptor {
+            name: "subagent.steer".to_string(),
+            description: "Change a worker's direction. For a completed worker this starts a follow-up from its compact brief. For a running worker the harness cancels it and starts a replacement with the same role, model, reasoning, mode, and ownership plus the new direction.".to_string(),
+            input_schema: json!({"type": "object", "properties": {"id": {"type": "string"}, "task": {"type": "string"}}, "required": ["id", "task"], "additionalProperties": false}),
+            hosted_type: None,
+            hosted_config: None,
+        },
+        ToolDescriptor {
+            name: "subagent.cancel".to_string(),
+            description: "Cancel one running helper by id, or omit id to cancel every running helper. Cancellation is cooperative at loop boundaries and the harness also aborts the local worker task.".to_string(),
+            input_schema: json!({"type": "object", "properties": {"id": {"type": "string"}}, "additionalProperties": false}),
+            hosted_type: None,
+            hosted_config: None,
+        },
+        ToolDescriptor {
+            name: "subagent.list".to_string(),
+            description: "List worker ids, states, role/model/reasoning settings, ownership, and the active concurrency limit. Use this before waiting, following up, or cancelling.".to_string(),
+            input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
             hosted_type: None,
             hosted_config: None,
         },

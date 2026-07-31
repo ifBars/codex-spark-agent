@@ -1933,7 +1933,7 @@ fn comparison_baseline_runner(rows: &[ComparisonRow], preferred_runner: &str) ->
     candidates
         .iter()
         .copied()
-        .find(|runner| runner.contains("gpt-5.5"))
+        .find(|runner| runner.contains("gpt-5.6-luna"))
         .or_else(|| candidates.iter().copied().min())
         .unwrap_or(preferred_runner)
         .to_string()

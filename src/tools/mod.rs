@@ -80,8 +80,8 @@ async fn invoke_inner(
         "web.search" => anyhow::bail!(
             "tool `web.search` is a hosted Responses tool and is executed by the model provider, not the local harness"
         ),
-        "subagent.run" => anyhow::bail!(
-            "tool `subagent.run` is executed by the agent harness so it can isolate child context and model policy"
+        tool_name if tool_name.starts_with("subagent.") => anyhow::bail!(
+            "tool `{tool_name}` is executed by the agent harness so it can manage child context, lifecycle, and model policy"
         ),
         _ => anyhow::bail!("unknown tool: {tool_name}"),
     }

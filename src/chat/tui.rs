@@ -620,6 +620,13 @@ impl ChatTui {
             }
             return Ok(true);
         }
+        if let Some(command) = chat::command_args(input, "/agents") {
+            match chat::handle_agents_command(runner, command.trim()) {
+                Ok(message) => self.push_system(message),
+                Err(error) => self.push_error(format!("{error:#}")),
+            }
+            return Ok(true);
+        }
         if let Some(command) = chat::command_args(input, "/memory") {
             match chat::handle_memory_command(runner, command.trim()) {
                 Ok(message) => {
@@ -680,9 +687,9 @@ impl ChatTui {
             }
             "/help" => {
                 self.push_system(
-                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /memory, /mcp, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
+                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /agents, /memory, /mcp, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit\n\
 Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear\n\
-Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] explore|research|review|plan <task>\n\
+Workers: /subagent [--model parent|gpt-5.6-luna] [--reasoning low|medium|high|xhigh] [--mode ask|work --ownership path1,path2] explore|research|review|plan <task>; model tools support spawn/wait/followup/cancel/list (default concurrency: 3). /agents lists or cancels active workers.\n\
 Memory commands: /memory, /memory on, /memory off, /memory add <durable note>, /memory show\n\
 MCP commands: /mcp, /mcp enable <name>, /mcp disable <name>, /mcp reset <name>, /mcp refresh\n\
 Session commands: /session, /session list, /session open <name>, /session new <name>, /session use <name>, /session rename [old] <new>, /session delete <name>\n\

@@ -43,7 +43,12 @@ pub(crate) const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
         name: "/subagent",
         usage: "/subagent [flags] [explore|research|review|plan] <task>",
-        description: "Run an isolated read-only helper and save its brief",
+        description: "Run one isolated worker and save its compact brief",
+    },
+    SlashCommand {
+        name: "/agents",
+        usage: "/agents [list|cancel [worker-id]]",
+        description: "List or cancel managed parallel workers",
     },
     SlashCommand {
         name: "/memory",
@@ -221,6 +226,14 @@ pub(crate) async fn run_line_interactive_chat(
             continue;
         }
 
+        if let Some(command) = command_args(input, "/agents") {
+            match handle_agents_command(runner, command.trim()) {
+                Ok(message) => println!("{message}"),
+                Err(error) => eprintln!("error: {error:#}"),
+            }
+            continue;
+        }
+
         if let Some(command) = command_args(input, "/memory") {
             match handle_memory_command(runner, command.trim()) {
                 Ok(message) => {
@@ -246,13 +259,13 @@ pub(crate) async fn run_line_interactive_chat(
             "/exit" | "/quit" => return Ok(()),
             "/help" => {
                 println!(
-                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /memory, /mcp, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit"
+                    "Commands: /help, /status, /mode, /reasoning, /goal, /subagent, /agents, /memory, /mcp, /ask, /work, /profile, /compact, /session, /new, /skill, /skills, /commands, /save, /clear, /exit"
                 );
                 println!(
                     "Goal commands: /goal, /goal <objective>, /goal run [checkpoints], /goal pause, /goal resume, /goal clear"
                 );
                 println!(
-                    "Subagents: /subagent [--model parent|gpt-5.5] [--reasoning low|medium|high|xhigh] explore|research|review|plan <task>"
+                    "Workers: /subagent [--model parent|gpt-5.6-luna] [--reasoning low|medium|high|xhigh] [--mode ask|work --ownership path1,path2] explore|research|review|plan <task>; model tools support spawn/wait/followup/cancel/list (default concurrency: 3). /agents lists or cancels active workers."
                 );
                 println!(
                     "Memory commands: /memory, /memory on, /memory off, /memory add <durable note>, /memory show"
@@ -599,6 +612,23 @@ pub(crate) async fn handle_subagent_command(
     runner.run_subagent_with_options(kind, task, options).await
 }
 
+pub(crate) fn handle_agents_command(
+    runner: &mut agent::AgentRunner,
+    command: &str,
+) -> Result<String> {
+    let command = command.trim();
+    if command.is_empty() || command == "list" {
+        return Ok(serde_json::to_string_pretty(&runner.subagent_status())?);
+    }
+    if let Some(id) = command_args(command, "cancel") {
+        let id = id.trim();
+        return Ok(serde_json::to_string_pretty(
+            &runner.cancel_subagents((!id.is_empty()).then_some(id))?,
+        )?);
+    }
+    anyhow::bail!("usage: /agents [list|cancel [worker-id]]")
+}
+
 pub(crate) fn handle_memory_command(
     runner: &mut agent::AgentRunner,
     command: &str,
@@ -666,6 +696,27 @@ pub(crate) fn parse_subagent_command(
             search_start += token.len() + consumed;
             continue;
         }
+        if token == "--mode" {
+            let (value, consumed) = parse_flag_value(after_token, "--mode")?;
+            options.mode = Some(match value {
+                "ask" => crate::tools::AgentMode::Ask,
+                "work" => crate::tools::AgentMode::Work,
+                _ => anyhow::bail!("--mode must be ask or work"),
+            });
+            search_start += token.len() + consumed;
+            continue;
+        }
+        if token == "--ownership" {
+            let (value, consumed) = parse_flag_value(after_token, "--ownership")?;
+            options.ownership = value
+                .split(',')
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(str::to_string)
+                .collect();
+            search_start += token.len() + consumed;
+            continue;
+        }
         if kind.is_none() {
             kind = agent::SubagentKind::parse(token);
             if kind.is_none() {
@@ -689,6 +740,8 @@ pub(crate) fn parse_subagent_command(
     let validation_args = serde_json::json!({
         "model": options.model,
         "reasoning_effort": options.reasoning_effort,
+        "mode": options.mode.map(|mode| mode.name()),
+        "ownership": options.ownership,
     });
     options = agent::SubagentRunOptions::from_tool_args(&validation_args)?;
     Ok((kind, task, options))

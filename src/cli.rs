@@ -393,7 +393,7 @@ pub(crate) enum Command {
         /// Split runner labels by recorded reasoning effort, e.g. spark-harness/high.
         #[arg(long)]
         group_by_reasoning: bool,
-        /// Split runner labels by recorded model, e.g. codex-cli/gpt-5.5.
+        /// Split runner labels by recorded model, e.g. codex-cli/gpt-5.6-luna.
         #[arg(long)]
         group_by_model: bool,
         /// Exclude task attempts that did not pass benchmark validation before averaging.

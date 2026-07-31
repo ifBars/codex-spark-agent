@@ -14,8 +14,15 @@ pub(super) struct CachedToolObservation {
 
 impl AgentRunner {
     pub(super) async fn invoke_with_cache(&mut self, tool_name: &str, args: Value) -> ToolResult {
-        if tool_name == "subagent.run" {
-            return Box::pin(self.invoke_subagent_tool(args)).await;
+        if tool_name.starts_with("subagent.") {
+            return Box::pin(self.invoke_subagent_tool(tool_name, args)).await;
+        }
+        if let Some(message) = self.delegated_tool_scope_error(tool_name, &args) {
+            return ToolResult {
+                ok: false,
+                data: json!({"error_kind": "delegated_write_scope", "tool": tool_name, "args": args, "message": message}),
+                error: Some(message),
+            };
         }
         if McpRegistry::is_mcp_tool(tool_name) {
             self.ensure_mcp_registry().await;
