@@ -1059,6 +1059,45 @@ fn quick_harness_script_reports_exact_run_manifest() {
 }
 
 #[test]
+fn s1api_pr_replay_catalog_keeps_oracle_and_scope_contracts() {
+    let script = std::fs::read_to_string("scripts/s1api_pr_replay.ps1")
+        .expect("read S1API PR replay script");
+    let docs = std::fs::read_to_string("docs/s1api-pr-replay.md")
+        .expect("read S1API PR replay documentation");
+
+    for pr in [
+        158, 156, 147, 146, 145, 144, 143, 140, 138, 137, 136, 133, 132, 130, 129,
+    ] {
+        assert!(
+            script.contains(&format!("Number = {pr};")),
+            "replay catalog should retain PR #{pr}"
+        );
+    }
+    assert!(script.contains("merged-focused-tests"));
+    assert!(script.contains("oracle-scope-only"));
+    assert!(script.contains("oracle_changed_paths"));
+    assert!(script.contains("scope_score"));
+    assert!(script.contains("oracle_patch_overlap_f1"));
+    assert!(script.contains("Get-NormalizedAddedLines"));
+    assert!(script.contains("[switch]$Compare"));
+    assert!(script.contains("spark-ahead-on-oracle-patch-diagnostic"));
+    assert!(script.contains("When a deferred custom packaging icon enters the cache"));
+    assert!(script.contains("Add pre-spawn native region configuration"));
+    assert!(script.contains("Refresh already-bound inventory and shop UI"));
+    assert!(script.contains("local.build.props"));
+    assert!(script.contains("schedule-one-modding"));
+    assert!(script.contains(".spark-s1api-replay.md"));
+    assert!(script.contains("Do not substitute a bare `dotnet test` command"));
+    assert!(script.contains("Match public names and types exactly"));
+    assert!(docs.contains("--skill schedule-one-modding"));
+    assert!(docs.contains("oracle-derived working scope"));
+    assert!(docs.contains("bare `dotnet test`"));
+    assert!(docs.contains("oracle-patch overlap"));
+    assert!(docs.contains("-Compare -Pr 156"));
+    assert!(docs.contains("PR #146 has no committed focused test change"));
+}
+
+#[test]
 fn slash_commands_match_exactly_or_with_whitespace() {
     assert_eq!(command_args("/skill", "/skill"), Some(""));
     assert_eq!(

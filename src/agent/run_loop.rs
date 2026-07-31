@@ -426,9 +426,7 @@ impl AgentRunner {
             "role": "user",
             "content": [{
                 "type": "input_text",
-                "text": format!(
-                    "[spark harness notice]\nYou have made {tool_only_streak} consecutive tool-only turns. If you have enough evidence to answer the user's question, stop calling tools now and provide the final assistant response. Avoid repeating exact read-only calls; cached observations mean the same data was already returned. Use another tool only for a concrete missing fact."
-                )
+                "text": tool_only_recovery_notice(tool_only_streak)
             }]
         }));
         true
@@ -549,11 +547,17 @@ fn tool_only_notice_interval(compact_after_tool_only_turns: usize) -> usize {
     }
 }
 
+fn tool_only_recovery_notice(tool_only_streak: usize) -> String {
+    format!(
+        "[spark harness recovery]\nYou have made {tool_only_streak} consecutive tool-only turns. Stop broad investigation now. On your next turn, either make the smallest implementation/edit supported by the evidence already gathered, or provide the final answer if no edit is needed. Do not repeat read-only calls or enumerate new areas. Use another tool only to resolve a specific compiler, test, or command error after attempting the work."
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         average_tokens_per_second, response_output_tokens, should_retry_response_stream_error,
-        stream_retry_base_delay, tool_only_notice_interval,
+        stream_retry_base_delay, tool_only_notice_interval, tool_only_recovery_notice,
     };
     use serde_json::json;
 
@@ -563,6 +567,16 @@ mod tests {
         assert_eq!(tool_only_notice_interval(8), 4);
         assert_eq!(tool_only_notice_interval(3), 3);
         assert_eq!(tool_only_notice_interval(0), 0);
+    }
+
+    #[test]
+    fn tool_only_recovery_requires_progress_or_completion() {
+        let notice = tool_only_recovery_notice(6);
+
+        assert!(notice.contains("Stop broad investigation now"));
+        assert!(notice.contains("make the smallest implementation/edit"));
+        assert!(notice.contains("provide the final answer"));
+        assert!(notice.contains("compiler, test, or command error"));
     }
 
     #[test]

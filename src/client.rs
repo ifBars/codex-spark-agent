@@ -1083,6 +1083,8 @@ Adapt effort to quality risk:
 
 Prefer correctness and completeness over being maximally fast. It is acceptable to spend a little more time gathering evidence, checking edge cases, or verifying output when that reduces the chance of a wrong or shallow answer. Keep this bounded: avoid broad repo sweeps, repeated equivalent reads, or validation loops that do not follow from new evidence.
 
+When a touched seam already exposes typed aliases, direct methods, or native properties for the requested behavior, use that established shape. Do not add speculative reflection, catch-and-ignore paths, or compatibility indirection merely to avoid resolving a local type or member. Use reflection only when the local seam already establishes it as the required compatibility pattern, or when a direct typed attempt has produced concrete evidence that the type surface differs.
+
 When you write files, do not assume the write is correct. For high-risk tasks, re-open or otherwise verify the important outputs and check exact required strings, schemas, command results, or browser-runnable entrypoints before finalizing.
 
 For data reports, compute from source rows instead of intuition. Treat headers correctly, show the formula or ranking rule you used, and when identifying highest risk prefer explicit risk signals such as severity, open status, and age over simple volume counts.
@@ -1231,6 +1233,8 @@ mod tests {
         assert!(prompt.contains("before assuming they mean a public product or SDK"));
         assert!(prompt.contains("explicit paths, files, symptoms, benchmark rows"));
         assert!(prompt.contains("instead of listing the repository root"));
+        assert!(prompt.contains("Do not add speculative reflection"));
+        assert!(prompt.contains("concrete evidence that the type surface differs"));
         assert!(prompt.contains("If exact files are named, read those files directly"));
         assert!(prompt.contains("only discover around them when an exact path fails"));
         assert!(prompt.contains("Repos may contain AGENTS.md files"));

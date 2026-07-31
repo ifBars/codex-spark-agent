@@ -15,10 +15,10 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
@@ -48,6 +48,7 @@ const USER_MESSAGE_BG: Color = Color::Rgb(5, 24, 15);
 const USER_MESSAGE_HOVER_BG: Color = Color::Rgb(10, 42, 25);
 const ASSISTANT_MESSAGE_BG: Color = Color::Rgb(5, 17, 27);
 const ASSISTANT_MESSAGE_HOVER_BG: Color = Color::Rgb(9, 33, 47);
+const CHROME: Color = Color::Rgb(55, 65, 72);
 
 pub(crate) async fn run(
     runner: &mut AgentRunner,
@@ -155,6 +156,16 @@ struct TranscriptView {
     content_width: usize,
     viewport_height: usize,
     scroll: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChatLayout {
+    header: Option<Rect>,
+    activity: Option<Rect>,
+    transcript: Rect,
+    command_menu: Option<Rect>,
+    composer: Rect,
+    footer: Option<Rect>,
 }
 
 #[derive(Clone, Copy)]
@@ -901,45 +912,22 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
     }
 
     fn draw(&self, frame: &mut ratatui::Frame<'_>) {
-        let command_menu_lines = self.command_menu_lines();
-        let command_menu_visible = command_menu_lines.is_some();
-        let activity_line = self.activity_line(command_menu_visible);
-        let activity_visible = activity_line.is_some();
-        let command_menu_height = command_menu_lines
-            .as_ref()
-            .map(|lines| (lines.len() as u16 + 2).min(8))
-            .unwrap_or(0);
-        let constraints =
-            layout_constraints(command_menu_visible, activity_visible, command_menu_height);
-        let chunks = Layout::vertical(constraints).split(frame.area());
-        let mut chunk_index = 0;
-        let header = chunks[chunk_index];
-        chunk_index += 1;
-        let activity = if activity_visible {
-            let area = chunks[chunk_index];
-            chunk_index += 1;
-            Some(area)
-        } else {
-            None
-        };
-        let transcript = chunks[chunk_index];
-        chunk_index += 1;
-        let command_menu = if command_menu_visible {
-            let area = chunks[chunk_index];
-            chunk_index += 1;
-            Some(area)
-        } else {
-            None
-        };
-        let composer = chunks[chunk_index];
-        let footer = chunks[chunk_index + 1];
+        let frame_area = frame.area();
+        let command_menu_visible = self.command_menu_lines().is_some();
+        let activity_visible = self.activity_line(command_menu_visible).is_some();
+        let layout = self.responsive_layout(frame_area, command_menu_visible, activity_visible);
 
-        frame.render_widget(self.header_line(), header);
-        if let (Some(area), Some(line)) = (activity, activity_line) {
+        if let Some(header) = layout.header {
+            frame.render_widget(self.header_line_for_width(header.width), header);
+        }
+        if let Some(area) = layout.activity
+            && let Some(line) = self.activity_line_for_width(command_menu_visible, area.width)
+        {
             frame.render_widget(line, area);
         }
 
-        let transcript_view = self.transcript_view(frame.area());
+        let transcript = layout.transcript;
+        let transcript_view = self.transcript_view_in_area(transcript);
         for rows in self.message_rows(transcript_view.content_width) {
             let Some(message) = self.messages.get(rows.index) else {
                 continue;
@@ -979,16 +967,23 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             )
             .wrap(Wrap { trim: false })
             .scroll((transcript_view.scroll.min(u16::MAX as usize) as u16, 0));
-        frame.render_widget(transcript_widget, transcript);
+        if transcript.width > 0 && transcript.height > 0 {
+            frame.render_widget(transcript_widget, transcript);
+        }
 
-        if let (Some(area), Some(lines)) = (command_menu, command_menu_lines) {
+        if let Some(area) = layout.command_menu {
+            let visible_rows = area.height.saturating_sub(2).max(1) as usize;
+            let lines = self
+                .command_menu_lines_for_width(area.width, visible_rows)
+                .unwrap_or_default();
             let menu_widget = Paragraph::new(Text::from(lines))
                 .block(
                     Block::new()
-                        .borders(Borders::LEFT)
-                        .border_style(Style::new().fg(ACCENT))
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::new().fg(CHROME))
                         .title(Span::styled(
-                            " command palette ",
+                            " COMMANDS ",
                             Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
                         )),
                 )
@@ -996,31 +991,81 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             frame.render_widget(menu_widget, area);
         }
 
-        let composer_text = if self.input.is_empty() {
-            Text::from(Line::from(Span::styled(
-                "Ask Spark, or type / for commands",
-                Style::new().fg(MUTED),
-            )))
+        let composer_mode = if self.running {
+            (" WORKING ", MUTED)
+        } else if command_menu_visible {
+            (" COMMAND ", ACCENT)
         } else {
-            Text::from(input_line(&self.input))
+            (" MESSAGE ", ACCENT)
         };
-        let composer_widget = Paragraph::new(composer_text)
-            .block(
-                Block::new()
-                    .borders(Borders::LEFT)
-                    .border_style(Style::new().fg(if self.running { MUTED } else { ACCENT }))
-                    .title(Span::styled(
-                        " message ",
-                        Style::new().fg(MUTED).add_modifier(Modifier::BOLD),
-                    )),
-            )
-            .wrap(Wrap { trim: false });
-        frame.render_widget(composer_widget, composer);
+        let composer = layout.composer;
+        let composer_inner = if composer.height >= 3 && composer.width >= 4 {
+            let composer_block = Block::new()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::new().fg(if self.running {
+                    CHROME
+                } else {
+                    composer_mode.1
+                }))
+                .title(Span::styled(
+                    composer_mode.0,
+                    Style::new()
+                        .fg(composer_mode.1)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            let inner = composer_block.inner(composer);
+            frame.render_widget(composer_block, composer);
+            inner
+        } else {
+            composer
+        };
 
-        frame.render_widget(self.footer_line(command_menu_visible), footer);
+        if composer_inner.width > 2 && composer_inner.height > 0 {
+            let available_input_width = composer_inner.width.saturating_sub(2) as usize;
+            let (visible_input, cursor_width) =
+                composer_input_view(&self.input, available_input_width);
+            let composer_line = if self.input.is_empty() {
+                Line::from(vec![
+                    Span::styled("› ", Style::new().fg(composer_mode.1)),
+                    Span::styled(
+                        if self.running {
+                            "Spark is working…"
+                        } else if composer_inner.width < 44 {
+                            "Ask Spark or type /"
+                        } else {
+                            "Ask Spark anything  ·  type / for commands"
+                        },
+                        Style::new().fg(MUTED),
+                    ),
+                ])
+            } else {
+                let mut spans = vec![Span::styled("› ", Style::new().fg(composer_mode.1))];
+                spans.extend(input_line(&visible_input).spans);
+                Line::from(spans)
+            };
+            frame.render_widget(Paragraph::new(composer_line), composer_inner);
+
+            if !self.running {
+                frame.set_cursor_position((
+                    composer_inner
+                        .x
+                        .saturating_add(2)
+                        .saturating_add(cursor_width.min(u16::MAX as usize) as u16),
+                    composer_inner.y,
+                ));
+            }
+        }
+
+        if let Some(footer) = layout.footer {
+            frame.render_widget(
+                self.footer_line_for_width(command_menu_visible, footer.width),
+                footer,
+            );
+        }
     }
 
-    fn header_line(&self) -> Line<'static> {
+    fn header_line_for_width(&self, width: u16) -> Line<'static> {
         let session = self
             .session_name
             .as_deref()
@@ -1035,64 +1080,158 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         let state = if self.running { "running" } else { "ready" };
         let state_color = if self.running { ACCENT } else { USER_COLOR };
 
-        Line::from(vec![
-            Span::styled("▌", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        let mut spans = vec![
+            Span::styled("◆", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
             Span::raw(" "),
             Span::styled(
                 "Spark",
                 Style::new().fg(Color::White).add_modifier(Modifier::BOLD),
             ),
-            muted_span(" "),
+            muted_span("  "),
+            Span::styled("● ", Style::new().fg(state_color)),
             status_span(state, state_color),
-            muted_span("  /  "),
+            muted_span("  ·  "),
             Span::styled(self.activity.phase_label(), self.activity.header_style()),
-            muted_span("  ·  session "),
-            Span::styled(session, Style::new().fg(SOFT_TEXT)),
-            muted_span("  |  reasoning "),
-            Span::styled(self.reasoning_effort.clone(), Style::new().fg(SOFT_TEXT)),
-            muted_span("  ·  cwd "),
-            Span::styled(cwd, Style::new().fg(SOFT_TEXT)),
-        ])
+        ];
+        if width >= 40 {
+            spans.push(muted_span("  │  cwd "));
+            spans.push(Span::styled(cwd, Style::new().fg(SOFT_TEXT)));
+        }
+        if width >= 68 {
+            spans.push(muted_span("  ·  session "));
+            spans.push(Span::styled(session, Style::new().fg(SOFT_TEXT)));
+        }
+        if width >= 96 {
+            spans.push(muted_span("  │  reasoning "));
+            spans.push(Span::styled(
+                self.reasoning_effort.clone(),
+                Style::new().fg(SOFT_TEXT),
+            ));
+        }
+        Line::from(spans)
     }
 
     fn activity_line(&self, command_menu_visible: bool) -> Option<Line<'static>> {
+        self.activity_line_for_width(command_menu_visible, u16::MAX)
+    }
+
+    fn activity_line_for_width(
+        &self,
+        command_menu_visible: bool,
+        width: u16,
+    ) -> Option<Line<'static>> {
         if command_menu_visible {
-            return Some(Line::from(vec![
-                muted_span("  mode "),
+            let mut spans = vec![
+                Span::styled("  / ", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled("command palette", Style::new().fg(ACCENT)),
-                muted_span(" · "),
-                Span::styled(
+            ];
+            if width >= 50 {
+                spans.push(muted_span("  ·  "));
+                spans.push(Span::styled(
                     "type to filter, Enter to run, Esc to clear",
                     Style::new().fg(SOFT_TEXT),
-                ),
-            ]));
+                ));
+            }
+            return Some(Line::from(spans));
         }
 
         if matches!(self.activity.phase, ActivityPhase::Idle) {
             return None;
         }
 
-        Some(Line::from(vec![
-            muted_span("  activity "),
+        let mut spans = vec![
+            Span::styled(
+                format!("  {} ", self.activity.spinner()),
+                self.activity.live_style(),
+            ),
             Span::styled(
                 self.activity.live_label(),
                 self.activity.live_style().add_modifier(Modifier::BOLD),
             ),
-            muted_span(" · "),
-            Span::styled(self.activity.detail.clone(), Style::new().fg(SOFT_TEXT)),
-            self.activity.meter_span(),
-            self.activity
-                .turn
-                .map(|turn| muted_owned(format!(" · turn {turn}")))
-                .unwrap_or_else(|| muted_span("")),
-            self.activity
-                .input_chars
-                .map(|chars| muted_owned(format!(" · {}", format_chars(chars))))
-                .unwrap_or_else(|| muted_span("")),
-        ]))
+        ];
+        if width >= 42 {
+            let detail_width = width.saturating_sub(26) as usize;
+            spans.push(muted_span("  ·  "));
+            spans.push(Span::styled(
+                compact_inline(&self.activity.detail, detail_width.max(12)),
+                Style::new().fg(SOFT_TEXT),
+            ));
+        }
+        if width >= 72 {
+            spans.push(self.activity.meter_span());
+            spans.push(
+                self.activity
+                    .turn
+                    .map(|turn| muted_owned(format!(" · turn {turn}")))
+                    .unwrap_or_else(|| muted_span("")),
+            );
+            spans.push(
+                self.activity
+                    .input_chars
+                    .map(|chars| muted_owned(format!(" · {}", format_chars(chars))))
+                    .unwrap_or_else(|| muted_span("")),
+            );
+        }
+        Some(Line::from(spans))
     }
 
-    fn footer_line(&self, command_menu_visible: bool) -> Line<'static> {
+    fn footer_line_for_width(&self, command_menu_visible: bool, width: u16) -> Line<'static> {
+        if width < 36 {
+            if self.running {
+                return Line::from(vec![key_span("Esc Esc"), Span::raw(" stop")]);
+            }
+            if command_menu_visible {
+                return Line::from(vec![
+                    key_span("Enter"),
+                    Span::raw(" run"),
+                    muted_span("  ·  "),
+                    key_span("Esc"),
+                    Span::raw(" close"),
+                ]);
+            }
+            return Line::from(vec![
+                key_span("Enter"),
+                Span::raw(" send"),
+                muted_span("  ·  "),
+                key_span("/"),
+                Span::raw(" commands"),
+            ]);
+        }
+
+        if width < 64 {
+            if self.running {
+                return Line::from(vec![
+                    key_span("Esc Esc"),
+                    Span::raw(" stop"),
+                    muted_span("  ·  "),
+                    key_span("PgUp/PgDn"),
+                    Span::raw(" scroll"),
+                ]);
+            }
+            if command_menu_visible {
+                return Line::from(vec![
+                    key_span("Enter"),
+                    Span::raw(" run"),
+                    muted_span("  ·  "),
+                    key_span("Tab"),
+                    Span::raw(" complete"),
+                    muted_span("  ·  "),
+                    key_span("Esc"),
+                    Span::raw(" close"),
+                ]);
+            }
+            return Line::from(vec![
+                key_span("Enter"),
+                Span::raw(" send"),
+                muted_span("  ·  "),
+                key_span("/"),
+                Span::raw(" commands"),
+                muted_span("  ·  "),
+                key_span("Ctrl+C"),
+                Span::raw(" exit"),
+            ]);
+        }
+
         if self.running {
             return Line::from(vec![
                 key_span("Esc Esc"),
@@ -1107,7 +1246,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                 muted_span("  ·  "),
                 key_span("Ctrl+R"),
                 Span::raw(" reasoning"),
-                muted_span("  |  "),
+                muted_span("  │  "),
                 key_span("PgUp/PgDn"),
                 Span::raw(" transcript"),
                 muted_span("  ·  "),
@@ -1123,10 +1262,10 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
                 muted_span("  ·  "),
                 key_span("Tab"),
                 Span::raw(" complete"),
-                muted_span("  Â·  "),
+                muted_span("  ·  "),
                 key_span("Esc"),
                 Span::raw(" clear palette"),
-                muted_span("  |  "),
+                muted_span("  │  "),
                 key_span("Up/Down"),
                 Span::raw(" history"),
                 muted_span("  ·  "),
@@ -1138,7 +1277,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         Line::from(vec![
             key_span("Enter"),
             Span::raw(" send"),
-            muted_span("  |  "),
+            muted_span("  ·  "),
             key_span("Up/Down"),
             Span::raw(" history"),
             muted_span("  ·  "),
@@ -1154,7 +1293,7 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             muted_span("  ·  "),
             key_span("Ctrl+R"),
             Span::raw(" reasoning"),
-            muted_span("  |  "),
+            muted_span("  │  "),
             key_span("PgUp/PgDn"),
             Span::raw(" transcript"),
             muted_span("  ·  "),
@@ -1164,6 +1303,14 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
     }
 
     fn command_menu_lines(&self) -> Option<Vec<Line<'static>>> {
+        self.command_menu_lines_for_width(u16::MAX, 7)
+    }
+
+    fn command_menu_lines_for_width(
+        &self,
+        width: u16,
+        max_rows: usize,
+    ) -> Option<Vec<Line<'static>>> {
         if self.running || !self.input.trim_start().starts_with('/') {
             return None;
         }
@@ -1186,25 +1333,43 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
         }
 
         const MAX_COMMAND_MENU_ROWS: usize = 6;
+        let available_rows = max_rows.max(1);
+        let overflow = matches.len() > available_rows;
+        let visible_commands = if overflow && available_rows > 1 {
+            available_rows - 1
+        } else {
+            available_rows
+        }
+        .min(MAX_COMMAND_MENU_ROWS);
         let mut lines = matches
             .iter()
-            .take(MAX_COMMAND_MENU_ROWS)
+            .take(visible_commands)
             .map(|command| {
-                Line::from(vec![
+                let mut spans = vec![
                     Span::styled("▸ ", Style::new().fg(MUTED)),
                     Span::styled(
-                        format!("{:<24}", command.usage),
+                        if width < 48 {
+                            command.usage.to_string()
+                        } else {
+                            format!("{:<24}", command.usage)
+                        },
                         Style::new().fg(ACCENT).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(command.description.to_string(), Style::new().fg(SOFT_TEXT)),
-                ])
+                ];
+                if width >= 62 {
+                    spans.push(Span::styled(
+                        command.description.to_string(),
+                        Style::new().fg(SOFT_TEXT),
+                    ));
+                }
+                Line::from(spans)
             })
             .collect::<Vec<_>>();
-        if matches.len() > MAX_COMMAND_MENU_ROWS {
+        if matches.len() > visible_commands && lines.len() < available_rows {
             lines.push(Line::from(Span::styled(
                 format!(
                     "{} more commands. Type more to narrow.",
-                    matches.len() - MAX_COMMAND_MENU_ROWS
+                    matches.len() - visible_commands
                 ),
                 Style::new().fg(MUTED),
             )));
@@ -1308,24 +1473,36 @@ Navigation: PageUp/PageDown or Up/Down scrolls, Ctrl+T toggles tool details, Esc
             .collect()
     }
 
-    fn transcript_view(&self, frame_area: Rect) -> TranscriptView {
-        let command_menu_lines = self.command_menu_lines();
-        let command_menu_visible = command_menu_lines.is_some();
-        let activity_visible = self.activity_line(command_menu_visible).is_some();
-        let command_menu_height = command_menu_lines
-            .as_ref()
+    fn responsive_layout(
+        &self,
+        frame_area: Rect,
+        command_menu_visible: bool,
+        activity_visible: bool,
+    ) -> ChatLayout {
+        let desired_command_height = self
+            .command_menu_lines()
             .map(|lines| (lines.len() as u16 + 2).min(8))
             .unwrap_or(0);
-        let chunks = Layout::vertical(layout_constraints(
+        responsive_chat_layout(
+            frame_area,
             command_menu_visible,
             activity_visible,
-            command_menu_height,
-        ))
-        .split(frame_area);
-        let transcript_index = 1 + usize::from(activity_visible);
-        let area = chunks[transcript_index];
+            desired_command_height,
+        )
+    }
+
+    fn transcript_view(&self, frame_area: Rect) -> TranscriptView {
+        let command_menu_visible = self.command_menu_lines().is_some();
+        let activity_visible = self.activity_line(command_menu_visible).is_some();
+        let area = self
+            .responsive_layout(frame_area, command_menu_visible, activity_visible)
+            .transcript;
+        self.transcript_view_in_area(area)
+    }
+
+    fn transcript_view_in_area(&self, area: Rect) -> TranscriptView {
         let content_width = area.width.saturating_sub(1).max(1) as usize;
-        let viewport_height = area.height.saturating_sub(1) as usize;
+        let viewport_height = area.height as usize;
         let tail_scroll = wrapped_line_count(&self.render_transcript_lines(), content_width)
             .saturating_sub(viewport_height);
         TranscriptView {
@@ -1777,16 +1954,15 @@ impl ActivityState {
     fn live_label(&self) -> String {
         match self.phase {
             ActivityPhase::Idle => "idle".to_string(),
-            ActivityPhase::Thinking => format!("{} thinking", self.spinner()),
-            ActivityPhase::Receiving => format!("{} receiving", self.spinner()),
-            ActivityPhase::Compacting => format!("{} compacting", self.spinner()),
+            ActivityPhase::Thinking => "thinking".to_string(),
+            ActivityPhase::Receiving => "receiving".to_string(),
+            ActivityPhase::Compacting => "compacting".to_string(),
             ActivityPhase::Tools => {
                 if self.total_tools == 0 {
-                    format!("{} tools", self.spinner())
+                    "tools".to_string()
                 } else {
                     format!(
-                        "{} tools {}/{}",
-                        self.spinner(),
+                        "tools {}/{}",
                         self.finished_tools.min(self.total_tools),
                         self.total_tools
                     )
@@ -1851,22 +2027,92 @@ fn compact_error_details(error: &str) -> String {
     compact_inline(error.trim(), 320)
 }
 
-fn layout_constraints(
+fn responsive_chat_layout(
+    area: Rect,
     command_menu_visible: bool,
     activity_visible: bool,
-    command_menu_height: u16,
-) -> Vec<Constraint> {
-    let mut constraints = vec![Constraint::Length(1)];
-    if activity_visible {
-        constraints.push(Constraint::Length(1));
+    desired_command_height: u16,
+) -> ChatLayout {
+    let zero = Rect::new(area.x, area.y, area.width, 0);
+    if area.height == 0 {
+        return ChatLayout {
+            header: None,
+            activity: None,
+            transcript: zero,
+            command_menu: None,
+            composer: zero,
+            footer: None,
+        };
     }
-    constraints.push(Constraint::Min(5));
-    if command_menu_visible {
-        constraints.push(Constraint::Length(command_menu_height));
+
+    let composer_height: u16 = if area.height >= 5 { 3 } else { 1 };
+    let header_height = u16::from(area.height >= 6);
+    let footer_height = u16::from(area.height >= 8);
+    let base_reserved = composer_height
+        .saturating_add(header_height)
+        .saturating_add(footer_height);
+    let activity_height =
+        u16::from(activity_visible && area.height >= 11 && base_reserved < area.height);
+    let reserved = base_reserved.saturating_add(activity_height);
+    let flexible_height = area.height.saturating_sub(reserved);
+    let command_height = if command_menu_visible && flexible_height >= 4 {
+        desired_command_height
+            .max(3)
+            .min(flexible_height.saturating_sub(1))
+    } else {
+        0
+    };
+    let transcript_height = flexible_height.saturating_sub(command_height);
+
+    let mut y = area.y;
+    let header = (header_height > 0).then(|| {
+        let rect = Rect::new(area.x, y, area.width, header_height);
+        y = y.saturating_add(header_height);
+        rect
+    });
+    let activity = (activity_height > 0).then(|| {
+        let rect = Rect::new(area.x, y, area.width, activity_height);
+        y = y.saturating_add(activity_height);
+        rect
+    });
+    let transcript = Rect::new(area.x, y, area.width, transcript_height);
+    y = y.saturating_add(transcript_height);
+    let command_menu = (command_height > 0).then(|| {
+        let rect = Rect::new(area.x, y, area.width, command_height);
+        y = y.saturating_add(command_height);
+        rect
+    });
+    let composer = Rect::new(area.x, y, area.width, composer_height);
+    y = y.saturating_add(composer_height);
+    let footer = (footer_height > 0).then(|| Rect::new(area.x, y, area.width, footer_height));
+
+    ChatLayout {
+        header,
+        activity,
+        transcript,
+        command_menu,
+        composer,
+        footer,
     }
-    constraints.push(Constraint::Length(3));
-    constraints.push(Constraint::Length(1));
-    constraints
+}
+
+fn composer_input_view(input: &str, max_width: usize) -> (String, usize) {
+    if max_width == 0 {
+        return (String::new(), 0);
+    }
+
+    let mut visible = String::new();
+    for character in input.chars().rev() {
+        let mut candidate = String::with_capacity(character.len_utf8() + visible.len());
+        candidate.push(character);
+        candidate.push_str(&visible);
+        if Line::from(candidate.clone()).width() > max_width {
+            break;
+        }
+        visible = candidate;
+    }
+    let cursor_width = Line::from(visible.clone()).width();
+    (visible, cursor_width)
 }
 
 fn input_line(input: &str) -> Line<'static> {
@@ -2596,8 +2842,9 @@ mod tests {
 
     use super::{
         ActivityPhase, ChatTui, MessageRole, activity_row_spinner, compact_inline,
-        complete_slash_command_input, format_tool_args, input_line, is_cycle_reasoning_effort_key,
-        next_reasoning_effort, register_escape_tap, should_handle_key_event, spark_spinner_frame,
+        complete_slash_command_input, composer_input_view, format_tool_args, input_line,
+        is_cycle_reasoning_effort_key, next_reasoning_effort, register_escape_tap,
+        responsive_chat_layout, should_handle_key_event, spark_spinner_frame,
         spinner_frame_for_activity, spinner_frame_for_phase, wrapped_line_count,
     };
 
@@ -3018,7 +3265,7 @@ mod tests {
             std::path::PathBuf::from("C:/workspace/spark"),
         );
 
-        let ready = flatten_lines(&[tui.header_line()]);
+        let ready = flatten_lines(&[tui.header_line_for_width(u16::MAX)]);
         assert!(ready.contains("Spark"));
         assert!(ready.contains("ready"));
         assert!(ready.contains("session design-pass"));
@@ -3029,7 +3276,7 @@ mod tests {
         tui.input = "/sta".to_string();
         let palette = flatten_lines(&[
             tui.activity_line(true).expect("palette line"),
-            tui.footer_line(true),
+            tui.footer_line_for_width(true, u16::MAX),
         ]);
         assert!(palette.contains("command palette"));
         assert!(palette.contains("Enter run command"));
@@ -3039,14 +3286,14 @@ mod tests {
         tui.activity.start_tool("fs.read");
         let running = flatten_lines(&[
             tui.activity_line(false).expect("running line"),
-            tui.footer_line(false),
+            tui.footer_line_for_width(false, u16::MAX),
         ]);
         assert!(running.contains("tools 0/3"));
         assert!(running.contains("running fs.read"));
         assert!(running.contains("Esc Esc interrupt"));
 
         tui.running = false;
-        let footer = flatten_lines(&[tui.footer_line(false)]);
+        let footer = flatten_lines(&[tui.footer_line_for_width(false, u16::MAX)]);
         assert!(footer.contains("Ctrl+R reasoning"));
     }
 
@@ -3088,6 +3335,122 @@ mod tests {
         assert!(rendered.contains("1 batch, 1 call, 1 ok"));
         assert!(rendered.contains("Enter send"));
         assert!(rendered.contains("/ commands"));
+    }
+
+    #[test]
+    fn draw_uses_bordered_composer_compact_footer_and_live_cursor() {
+        let mut tui = ChatTui::new(
+            Some("visual-test".to_string()),
+            std::path::PathBuf::from("C:/workspace/spark"),
+        );
+        tui.input = "hello".to_string();
+
+        let backend = TestBackend::new(52, 14);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| tui.draw(frame)).expect("draw");
+
+        let rendered = buffer_to_string(terminal.backend().buffer());
+        assert!(rendered.contains("╭ MESSAGE "));
+        assert!(rendered.contains("› hello"));
+        assert!(rendered.contains("Enter send"));
+        assert!(rendered.contains("/ commands"));
+        assert!(!rendered.contains("Up/Down history"));
+        assert_eq!(
+            terminal.get_cursor_position().expect("cursor position"),
+            (8, 11).into()
+        );
+    }
+
+    #[test]
+    fn command_palette_uses_a_focused_overlay_and_mode_label() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        tui.input = "/rea".to_string();
+
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| tui.draw(frame)).expect("draw");
+
+        let rendered = buffer_to_string(terminal.backend().buffer());
+        assert!(rendered.contains("╭ COMMANDS "));
+        assert!(rendered.contains("/reasoning"));
+        assert!(rendered.contains("╭ COMMAND "));
+        assert!(rendered.contains("Enter run command"));
+    }
+
+    #[test]
+    fn responsive_layout_hides_low_priority_sections_before_content() {
+        let short = responsive_chat_layout(Rect::new(0, 0, 32, 7), true, true, 8);
+        assert!(short.header.is_some());
+        assert!(short.activity.is_none());
+        assert!(short.command_menu.is_none());
+        assert!(short.footer.is_none());
+        assert_eq!(short.transcript, Rect::new(0, 1, 32, 3));
+        assert_eq!(short.composer, Rect::new(0, 4, 32, 3));
+
+        let tiny = responsive_chat_layout(Rect::new(0, 0, 28, 4), true, true, 8);
+        assert!(tiny.header.is_none());
+        assert!(tiny.activity.is_none());
+        assert!(tiny.command_menu.is_none());
+        assert!(tiny.footer.is_none());
+        assert_eq!(tiny.transcript, Rect::new(0, 0, 28, 3));
+        assert_eq!(tiny.composer, Rect::new(0, 3, 28, 1));
+
+        let palette = responsive_chat_layout(Rect::new(0, 0, 80, 10), true, true, 8);
+        assert!(palette.activity.is_none());
+        assert_eq!(palette.transcript.height, 1);
+        assert_eq!(palette.command_menu.expect("palette").height, 4);
+        assert!(palette.footer.is_some());
+    }
+
+    #[test]
+    fn short_terminal_keeps_input_and_hides_palette_header_details_and_footer() {
+        let mut tui = ChatTui::new(
+            Some("hidden-session".to_string()),
+            std::path::PathBuf::from("C:/workspace/spark"),
+        );
+        tui.input = "/rea".to_string();
+
+        let backend = TestBackend::new(32, 7);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        terminal.draw(|frame| tui.draw(frame)).expect("draw");
+
+        let rendered = buffer_to_string(terminal.backend().buffer());
+        assert!(rendered.contains("◆ Spark"));
+        assert!(rendered.contains("╭ COMMAND "));
+        assert!(rendered.contains("› /rea"));
+        assert!(!rendered.contains("COMMANDS"));
+        assert!(!rendered.contains("hidden-session"));
+        assert!(!rendered.contains("reasoning medium"));
+        assert!(!rendered.contains("Enter run"));
+        assert_eq!(
+            terminal.get_cursor_position().expect("cursor position"),
+            (7, 5).into()
+        );
+    }
+
+    #[test]
+    fn command_palette_drops_descriptions_at_narrow_widths() {
+        let mut tui = ChatTui::new(None, std::path::PathBuf::from("."));
+        tui.input = "/rea".to_string();
+
+        let narrow = flatten_lines(
+            &tui.command_menu_lines_for_width(48, 6)
+                .expect("narrow menu"),
+        );
+        assert!(narrow.contains("/reasoning"));
+        assert!(!narrow.contains("Show or change reasoning effort"));
+
+        let wide = flatten_lines(&tui.command_menu_lines_for_width(80, 6).expect("wide menu"));
+        assert!(wide.contains("Show or change reasoning effort"));
+    }
+
+    #[test]
+    fn composer_keeps_the_visible_tail_with_display_width() {
+        assert_eq!(
+            composer_input_view("ask Spark to fix this", 8),
+            ("fix this".to_string(), 8)
+        );
+        assert_eq!(composer_input_view("wide 界", 6), ("ide 界".to_string(), 6));
     }
 
     #[test]
