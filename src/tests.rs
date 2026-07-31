@@ -797,7 +797,7 @@ fn quick_comparison_preflight_only_skips_isolated_codex_home() {
     assert_eq!(status["skip_codex_preflight"], false);
     assert_eq!(status["preflight_only"], true);
     assert_eq!(status["fail_on_directional_comparison"], false);
-    assert_eq!(status["scenario_count"], 19);
+    assert_eq!(status["scenario_count"], 21);
     assert_eq!(status["scenarios"][0], "precise-patch");
     let rerun_command = status["rerun_command"]
         .as_str()
@@ -890,7 +890,7 @@ fn quick_script_default_scenarios_match_and_stay_in_real_world_suite() {
     assert!(comparison.contains("if ($ListScenarios)"));
     assert!(harness.contains("if ($ListScenarios)"));
     assert!(!scenarios.is_empty());
-    assert_eq!(scenarios.len(), 19, "quick real-world slice drifted");
+    assert_eq!(scenarios.len(), 21, "quick real-world slice drifted");
     assert_eq!(
         reasoning_scenarios.len(),
         9,

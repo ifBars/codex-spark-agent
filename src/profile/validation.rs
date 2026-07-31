@@ -233,7 +233,7 @@ async fn run_browser_validation(
             artifact_subdir.display()
         )
     })?;
-    let workdir = cwd.join(".spark-scenarios/react-calculator");
+    let workdir = cwd.to_path_buf();
     let screenshot = artifact_subdir.join("react-calculator-browser.png");
     let script = artifact_subdir.join("react-calculator-browser-smoke.mjs");
     std::fs::write(&script, browser_validation_script(&screenshot, &workdir)).map_err(|error| {
@@ -533,11 +533,11 @@ mod tests {
     #[test]
     fn browser_validation_script_runs_vite_from_app_directory() {
         let screenshot = std::path::Path::new("artifacts/react-calculator-browser.png");
-        let app_dir = std::path::Path::new(".spark-scenarios/react-calculator");
+        let app_dir = std::path::Path::new(".");
 
         let script = browser_validation_script(screenshot, app_dir);
 
-        assert!(script.contains("const appDir = \".spark-scenarios/react-calculator\";"));
+        assert!(script.contains("const appDir = \".\";"));
         assert!(script.contains("cwd: appDir"));
         assert!(script.contains("from \"playwright\""));
     }

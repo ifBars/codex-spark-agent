@@ -2,7 +2,7 @@ use crate::benchmark::expected_scenario_artifacts;
 use crate::cli::{ProfileBenchmarkSuiteKind, ProfileScenarioKind};
 use crate::profile::scenarios::{
     benchmark_profile_prompts, benchmark_task_prompt, codex_cli_benchmark_prompt,
-    prepare_profile_scenario, profile_scenario_expected_skills,
+    prepare_benchmark_scenario, prepare_profile_scenario, profile_scenario_expected_skills,
     profile_scenario_expected_tool_calls, profile_scenario_expected_tool_groups,
     profile_scenario_optional_tool_calls, profile_scenario_prompts,
     profile_scenario_validation_checks, profile_scenario_validation_command,
@@ -52,7 +52,7 @@ fn file_edit_scenario_is_scoped_to_scratch_files() {
     let prompt = prompts.first().expect("prompt");
 
     assert!(prompt.contains("Profile scenario: file-edit"));
-    assert!(prompt.contains("Work only under .spark-scenarios/file-edit"));
+    assert!(!prompt.contains("Work only under"));
     assert!(prompt.contains("Use fs.edit or fs.replace"));
     assert!(prompt.contains("Use fs.write"));
 }
@@ -88,7 +88,7 @@ fn file_ops_scenario_exercises_native_rename_flow() {
     let prompt = prompts.first().expect("prompt");
 
     assert!(prompt.contains("Profile scenario: file-ops"));
-    assert!(prompt.contains("Work only under .spark-scenarios/file-ops"));
+    assert!(!prompt.contains("Work only under"));
     assert!(prompt.contains("Use fs.write"));
     assert!(prompt.contains("Use fs.rename"));
     assert!(prompt.contains("Use fs.stat"));
@@ -131,28 +131,16 @@ fn file_ops_scenario_declares_expected_exact_tool_calls() {
 
     assert_eq!(calls.len(), 5);
     assert_eq!(calls[0]["tool"], "fs.write");
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/file-ops/drafts/report-draft.md"
-    );
+    assert_eq!(calls[0]["path"], "drafts/report-draft.md");
     assert_eq!(calls[1]["tool"], "fs.rename");
-    assert_eq!(
-        calls[1]["from"],
-        ".spark-scenarios/file-ops/drafts/report-draft.md"
-    );
-    assert_eq!(calls[1]["to"], ".spark-scenarios/file-ops/final/report.md");
+    assert_eq!(calls[1]["from"], "drafts/report-draft.md");
+    assert_eq!(calls[1]["to"], "final/report.md");
     assert_eq!(calls[2]["tool"], "fs.stat");
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/file-ops/final/report.md"
-    );
+    assert_eq!(calls[2]["path"], "final/report.md");
     assert_eq!(calls[3]["tool"], "fs.read");
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/file-ops/final/report.md"
-    );
+    assert_eq!(calls[3]["path"], "final/report.md");
     assert_eq!(calls[4]["tool"], "fs.search");
-    assert_eq!(calls[4]["path"], ".spark-scenarios/file-ops");
+    assert_eq!(calls[4]["path"], ".");
 }
 
 #[test]
@@ -196,16 +184,10 @@ fn tool_recovery_scenario_declares_expected_exact_tool_calls() {
 
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0]["tool"], "fs.read");
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/tool-recovery/source/missing-note.md"
-    );
+    assert_eq!(calls[0]["path"], "source/missing-note.md");
     assert_eq!(calls[0]["ok"], false);
     assert_eq!(calls[1]["tool"], "fs.read");
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/tool-recovery/source/note.md"
-    );
+    assert_eq!(calls[1]["path"], "source/note.md");
 }
 
 #[test]
@@ -231,10 +213,7 @@ fn shell_recovery_scenario_exercises_terminal_error_recovery() {
     assert_eq!(calls[0]["tool"], "cmd.exec");
     assert_eq!(calls[0]["ok"], false);
     assert_eq!(calls[1]["tool"], "cmd.exec");
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/shell-recovery/summary.txt"
-    );
+    assert_eq!(calls[2]["path"], "summary.txt");
     assert!(profile_scenario_validation_command(ProfileScenarioKind::ShellRecovery).is_some());
 }
 
@@ -281,20 +260,11 @@ fn precise_patch_scenario_exercises_minimal_code_edit() {
         ]
     );
     assert_eq!(calls.len(), 5);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/precise-patch/tests/status_map.spec.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/precise-patch/src/status_map.ts"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/precise-patch/src/status_map.ts"
-    );
+    assert_eq!(calls[0]["path"], "tests/status_map.spec.md");
+    assert_eq!(calls[1]["path"], "src/status_map.ts");
+    assert_eq!(calls[2]["path"], "src/status_map.ts");
     assert_eq!(calls[2]["tools"], json!(["fs.edit", "fs.replace"]));
-    assert_eq!(calls[3]["path"], ".spark-scenarios/precise-patch/src");
+    assert_eq!(calls[3]["path"], "src");
     assert!(profile_scenario_validation_command(ProfileScenarioKind::PrecisePatch).is_some());
 }
 
@@ -336,36 +306,18 @@ fn multi_file_patch_scenario_exercises_coordinated_updates() {
         ]
     );
     assert_eq!(calls.len(), 8);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/multi-file-patch/src/routes.ts"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/multi-file-patch/src/navigation.ts"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/multi-file-patch/docs/routes.md"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/multi-file-patch/src/routes.ts"
-    );
+    assert_eq!(calls[0]["path"], "src/routes.ts");
+    assert_eq!(calls[1]["path"], "src/navigation.ts");
+    assert_eq!(calls[2]["path"], "docs/routes.md");
+    assert_eq!(calls[3]["path"], "src/routes.ts");
     assert_eq!(
         calls[3]["tools"],
         json!(["fs.edit", "fs.replace", "fs.write"])
     );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/multi-file-patch/src/navigation.ts"
-    );
-    assert_eq!(
-        calls[5]["path"],
-        ".spark-scenarios/multi-file-patch/docs/routes.md"
-    );
-    assert_eq!(calls[6]["path"], ".spark-scenarios/multi-file-patch");
-    assert_eq!(calls[7]["path"], ".spark-scenarios/multi-file-patch");
+    assert_eq!(calls[4]["path"], "src/navigation.ts");
+    assert_eq!(calls[5]["path"], "docs/routes.md");
+    assert_eq!(calls[6]["path"], ".");
+    assert_eq!(calls[7]["path"], ".");
     assert!(profile_scenario_validation_command(ProfileScenarioKind::MultiFilePatch).is_some());
 }
 
@@ -374,18 +326,9 @@ fn multi_file_patch_allows_optional_final_artifact_verification() {
     let calls = profile_scenario_optional_tool_calls(ProfileScenarioKind::MultiFilePatch);
 
     assert_eq!(calls.len(), 3);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/multi-file-patch/src/routes.ts"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/multi-file-patch/src/navigation.ts"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/multi-file-patch/docs/routes.md"
-    );
+    assert_eq!(calls[0]["path"], "src/routes.ts");
+    assert_eq!(calls[1]["path"], "src/navigation.ts");
+    assert_eq!(calls[2]["path"], "docs/routes.md");
 }
 
 #[test]
@@ -405,6 +348,58 @@ fn multi_file_patch_scenario_prepares_code_and_docs_fixture() {
     assert!(docs.contains("/settings"));
     assert!(!routes.contains("reports"));
     assert!(!nav.contains("Reports"));
+}
+
+#[test]
+fn write_and_scoped_patch_scenarios_have_executable_contracts() {
+    let write_prompt = profile_scenario_prompts(ProfileScenarioKind::ManifestContractWrite, 45_000)
+        .expect("write scenario");
+    assert!(write_prompt[0].contains("two exact, mutually consistent release artifacts"));
+    assert!(write_prompt[0].contains("do not call cmd.exec"));
+    assert_eq!(
+        profile_scenario_expected_tool_calls(ProfileScenarioKind::ManifestContractWrite).len(),
+        6
+    );
+
+    let patch_prompt = profile_scenario_prompts(ProfileScenarioKind::ScopedPolicyPatch, 45_000)
+        .expect("patch scenario");
+    assert!(patch_prompt[0].contains("lookalike safety branch"));
+    assert!(patch_prompt[0].contains("do not call cmd.exec"));
+    assert!(profile_scenario_validation_command(ProfileScenarioKind::ScopedPolicyPatch).is_some());
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::ManifestContractWrite)
+        .expect("prepare write fixture");
+    prepare_profile_scenario(dir.path(), ProfileScenarioKind::ScopedPolicyPatch)
+        .expect("prepare patch fixture");
+    assert!(
+        dir.path()
+            .join(".spark-scenarios/manifest-contract-write/data/releases.json")
+            .is_file()
+    );
+    let source = std::fs::read_to_string(
+        dir.path()
+            .join(".spark-scenarios/scoped-policy-patch/src/rate_limit.ts"),
+    )
+    .expect("read patch fixture");
+    assert!(source.contains("isRetryLimitExceeded"));
+}
+
+#[test]
+fn benchmark_scenarios_use_the_passed_cwd_as_the_fixture_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    prepare_benchmark_scenario(dir.path(), ProfileScenarioKind::PrecisePatch)
+        .expect("prepare benchmark fixture");
+
+    assert!(dir.path().join("src/status_map.ts").is_file());
+    assert!(dir.path().join("tests/status_map.spec.md").is_file());
+    assert!(!dir.path().join(".spark-scenarios").exists());
+
+    let prompt = profile_scenario_prompts(ProfileScenarioKind::PrecisePatch, 45_000)
+        .expect("scenario prompt");
+    assert!(prompt[0].contains("Read src/status_map.ts"));
+    assert!(!prompt[0].contains("Work only under"));
+    assert!(!prompt[0].contains(".spark-scenarios"));
 }
 
 #[test]
@@ -572,34 +567,13 @@ fn react_calculator_scaffold_declares_project_file_expectations() {
         vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
     );
     assert_eq!(calls.len(), 8);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/react-calculator/brief.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/react-calculator/package.json"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/react-calculator/index.html"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/react-calculator/src/main.tsx"
-    );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/react-calculator/src/App.tsx"
-    );
-    assert_eq!(
-        calls[5]["path"],
-        ".spark-scenarios/react-calculator/src/App.test.tsx"
-    );
-    assert_eq!(
-        calls[6]["path"],
-        ".spark-scenarios/react-calculator/src/styles.css"
-    );
+    assert_eq!(calls[0]["path"], "brief.md");
+    assert_eq!(calls[1]["path"], "package.json");
+    assert_eq!(calls[2]["path"], "index.html");
+    assert_eq!(calls[3]["path"], "src/main.tsx");
+    assert_eq!(calls[4]["path"], "src/App.tsx");
+    assert_eq!(calls[5]["path"], "src/App.test.tsx");
+    assert_eq!(calls[6]["path"], "src/styles.css");
     assert_eq!(calls[7]["tool"], "cmd.exec");
     assert_eq!(calls[7]["command"], "bun test");
 }
@@ -610,8 +584,8 @@ fn codex_cli_prompt_uses_cli_neutral_actions_for_scaffolding() {
 
     assert!(prompt.contains("Benchmark scenario: react-calculator-scaffold"));
     assert!(prompt.contains("Use bun for JavaScript package management"));
-    assert!(prompt.contains("Create .spark-scenarios/react-calculator/index.html"));
-    assert!(prompt.contains("Create .spark-scenarios/react-calculator/src/App.tsx"));
+    assert!(prompt.contains("Create index.html"));
+    assert!(prompt.contains("Create src/App.tsx"));
     assert!(prompt.contains("Do not install Playwright"));
     assert!(prompt.contains("the harness owns that browser smoke check"));
     assert!(!prompt.contains("fs.write"));
@@ -670,7 +644,7 @@ fn rust_log_analyzer_scaffold_declares_project_file_expectations() {
     assert!(benchmark_prompt.contains("harness will run the CLI sample-log smoke check"));
     assert!(benchmark_prompt.contains("Do not run cargo run manually"));
     assert!(prompt.contains("cargo test"));
-    assert_eq!(validation.workdir, ".spark-scenarios/rust-log-analyzer");
+    assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, "powershell");
     assert!(validation.args.join(" ").contains("cargo test"));
     assert!(validation.args.join(" ").contains("cargo run"));
@@ -681,26 +655,11 @@ fn rust_log_analyzer_scaffold_declares_project_file_expectations() {
         vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
     );
     assert_eq!(calls.len(), 6);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/rust-log-analyzer/brief.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/rust-log-analyzer/sample.log"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/rust-log-analyzer/Cargo.toml"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/rust-log-analyzer/src/lib.rs"
-    );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/rust-log-analyzer/src/main.rs"
-    );
+    assert_eq!(calls[0]["path"], "brief.md");
+    assert_eq!(calls[1]["path"], "sample.log");
+    assert_eq!(calls[2]["path"], "Cargo.toml");
+    assert_eq!(calls[3]["path"], "src/lib.rs");
+    assert_eq!(calls[4]["path"], "src/main.rs");
     assert_eq!(calls[5]["tool"], "cmd.exec");
     assert_eq!(calls[5]["command"], "cargo test");
 }
@@ -710,18 +669,18 @@ fn benchmark_bugfix_prompts_use_exact_files_without_listing() {
     let cases = [
         (
             ProfileScenarioKind::GithubIssueBugfix,
-            ".spark-scenarios/github-issue-bugfix/src/quote.ts",
-            ".spark-scenarios/github-issue-bugfix/tests/quote.test.ts",
+            "src/quote.ts",
+            "tests/quote.test.ts",
         ),
         (
             ProfileScenarioKind::RustFailingTestBugfix,
-            ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
-            ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs",
+            "src/lib.rs",
+            "tests/retry_scheduler.rs",
         ),
         (
             ProfileScenarioKind::TypeScriptReducerBugfix,
-            ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
-            ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts",
+            "src/cart.ts",
+            "tests/cart.test.ts",
         ),
     ];
 
@@ -788,7 +747,7 @@ fn rust_notes_tui_scaffold_declares_project_file_expectations() {
             .contains("Do not manually run the full add/list/search/export/help-keys smoke path")
     );
     assert!(benchmark_prompt.contains("Do not set CARGO_TARGET_DIR"));
-    assert_eq!(validation.workdir, ".spark-scenarios/rust-notes-tui");
+    assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, "powershell");
     assert_eq!(
         validation.args,
@@ -799,19 +758,10 @@ fn rust_notes_tui_scaffold_declares_project_file_expectations() {
         vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
     );
     assert_eq!(calls.len(), 5);
-    assert_eq!(calls[0]["path"], ".spark-scenarios/rust-notes-tui/brief.md");
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/rust-notes-tui/Cargo.toml"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/rust-notes-tui/src/lib.rs"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/rust-notes-tui/src/main.rs"
-    );
+    assert_eq!(calls[0]["path"], "brief.md");
+    assert_eq!(calls[1]["path"], "Cargo.toml");
+    assert_eq!(calls[2]["path"], "src/lib.rs");
+    assert_eq!(calls[3]["path"], "src/main.rs");
     assert_eq!(calls[4]["tool"], "cmd.exec");
     assert_eq!(calls[4]["command"], "cargo test");
 }
@@ -825,14 +775,8 @@ fn github_issue_bugfix_declares_validation_expectations() {
 
     assert!(prompt.contains("only finalize after the post-patch run passes"));
     assert_eq!(calls.len(), 5);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/github-issue-bugfix/issue.md"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/github-issue-bugfix/src/quote.ts"
-    );
+    assert_eq!(calls[0]["path"], "issue.md");
+    assert_eq!(calls[3]["path"], "src/quote.ts");
     assert_eq!(
         calls[3]["tools"],
         json!(["fs.edit", "fs.replace", "fs.write"])
@@ -844,18 +788,9 @@ fn github_issue_bugfix_declares_validation_expectations() {
 #[test]
 fn bugfix_scenarios_allow_optional_final_source_verification() {
     let cases = [
-        (
-            ProfileScenarioKind::GithubIssueBugfix,
-            ".spark-scenarios/github-issue-bugfix/src/quote.ts",
-        ),
-        (
-            ProfileScenarioKind::RustFailingTestBugfix,
-            ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
-        ),
-        (
-            ProfileScenarioKind::TypeScriptReducerBugfix,
-            ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
-        ),
+        (ProfileScenarioKind::GithubIssueBugfix, "src/quote.ts"),
+        (ProfileScenarioKind::RustFailingTestBugfix, "src/lib.rs"),
+        (ProfileScenarioKind::TypeScriptReducerBugfix, "src/cart.ts"),
     ];
 
     for (scenario, path) in cases {
@@ -873,22 +808,13 @@ fn config_migration_allows_optional_final_artifact_verification() {
 
     assert_eq!(calls.len(), 5);
     assert_eq!(calls[0]["tool"], "fs.search");
-    assert_eq!(calls[0]["path"], ".spark-scenarios/config-migration");
+    assert_eq!(calls[0]["path"], ".");
     assert_eq!(calls[1]["tool"], "fs.search");
-    assert_eq!(calls[1]["path"], ".spark-scenarios/config-migration");
+    assert_eq!(calls[1]["path"], ".");
     assert_eq!(calls[2]["tool"], "fs.read");
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/config-migration/config/app.json"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/config-migration/src/config.ts"
-    );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/config-migration/docs/config.md"
-    );
+    assert_eq!(calls[2]["path"], "config/app.json");
+    assert_eq!(calls[3]["path"], "src/config.ts");
+    assert_eq!(calls[4]["path"], "docs/config.md");
 }
 
 #[test]
@@ -906,10 +832,7 @@ fn rust_failing_test_bugfix_declares_cargo_validation_expectations() {
     assert!(prompt.contains("Profile scenario: rust-failing-test-bugfix"));
     assert!(benchmark_prompt.contains("Do not set CARGO_TARGET_DIR"));
     assert!(prompt.contains("only finalize after the post-patch run passes"));
-    assert_eq!(
-        validation.workdir,
-        ".spark-scenarios/rust-failing-test-bugfix"
-    );
+    assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, "cargo");
     assert_eq!(validation.args, &["test"]);
     assert_eq!(
@@ -921,22 +844,10 @@ fn rust_failing_test_bugfix_declares_cargo_validation_expectations() {
         ]
     );
     assert_eq!(calls.len(), 5);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/rust-failing-test-bugfix/issue.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs"
-    );
+    assert_eq!(calls[0]["path"], "issue.md");
+    assert_eq!(calls[1]["path"], "src/lib.rs");
+    assert_eq!(calls[2]["path"], "tests/retry_scheduler.rs");
+    assert_eq!(calls[3]["path"], "src/lib.rs");
     assert_eq!(
         calls[3]["tools"],
         json!(["fs.edit", "fs.replace", "fs.write"])
@@ -961,10 +872,7 @@ fn typescript_reducer_bugfix_declares_bun_validation_expectations() {
     assert!(prompt.contains("Profile scenario: typescript-reducer-bugfix"));
     assert!(benchmark_prompt.contains("Use bun for JavaScript package management"));
     assert!(prompt.contains("only finalize after the post-patch run passes"));
-    assert_eq!(
-        validation.workdir,
-        ".spark-scenarios/typescript-reducer-bugfix"
-    );
+    assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, "bun");
     assert_eq!(validation.args, &["test"]);
     assert_eq!(
@@ -976,22 +884,10 @@ fn typescript_reducer_bugfix_declares_bun_validation_expectations() {
         ]
     );
     assert_eq!(calls.len(), 5);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/typescript-reducer-bugfix/issue.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts"
-    );
+    assert_eq!(calls[0]["path"], "issue.md");
+    assert_eq!(calls[1]["path"], "src/cart.ts");
+    assert_eq!(calls[2]["path"], "tests/cart.test.ts");
+    assert_eq!(calls[3]["path"], "src/cart.ts");
     assert_eq!(
         calls[3]["tools"],
         json!(["fs.edit", "fs.replace", "fs.write"])
@@ -1019,10 +915,7 @@ fn merge_conflict_resolution_declares_conflict_and_validation_expectations() {
     assert!(prompt.contains("dashboard-v2 and data-residency"));
     assert!(benchmark_prompt.contains("Preserve dashboard-v2"));
     assert!(benchmark_prompt.contains("Run bun test"));
-    assert_eq!(
-        validation.workdir,
-        ".spark-scenarios/merge-conflict-resolution"
-    );
+    assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, "powershell");
     assert!(command.contains("unresolved conflict marker"));
     assert!(command.contains("dashboard-v2"));
@@ -1038,32 +931,17 @@ fn merge_conflict_resolution_declares_conflict_and_validation_expectations() {
         ]
     );
     assert_eq!(calls.len(), 6);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/merge-conflict-resolution/issue.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/merge-conflict-resolution/tests/featureFlags.test.ts"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"
-    );
+    assert_eq!(calls[0]["path"], "issue.md");
+    assert_eq!(calls[1]["path"], "src/featureFlags.ts");
+    assert_eq!(calls[2]["path"], "tests/featureFlags.test.ts");
+    assert_eq!(calls[3]["path"], "src/featureFlags.ts");
     assert_eq!(
         calls[3]["tools"],
         json!(["fs.edit", "fs.replace", "fs.write"])
     );
     assert_eq!(calls[4]["tool"], "cmd.exec");
     assert_eq!(calls[4]["command"], "bun test");
-    assert_eq!(
-        calls[5]["path"],
-        ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"
-    );
+    assert_eq!(calls[5]["path"], "src/featureFlags.ts");
 }
 
 #[test]
@@ -1160,26 +1038,14 @@ fn config_migration_declares_ordered_mutation_and_validation_expectations() {
         ]
     );
     assert_eq!(calls.len(), 8);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/config-migration/migration.md"
-    );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/config-migration/config/app.json"
-    );
+    assert_eq!(calls[0]["path"], "migration.md");
+    assert_eq!(calls[4]["path"], "config/app.json");
     assert_eq!(
         calls[4]["tools"],
         json!(["fs.edit", "fs.replace", "fs.write"])
     );
-    assert_eq!(
-        calls[5]["path"],
-        ".spark-scenarios/config-migration/src/config.ts"
-    );
-    assert_eq!(
-        calls[6]["path"],
-        ".spark-scenarios/config-migration/docs/config.md"
-    );
+    assert_eq!(calls[5]["path"], "src/config.ts");
+    assert_eq!(calls[6]["path"], "docs/config.md");
     assert_eq!(calls[7]["tools"], json!(["cmd.exec", "fs.search"]));
 }
 
@@ -1196,18 +1062,9 @@ fn technical_essay_uses_read_metadata_for_final_word_count_check() {
     assert!(prompt.contains("do not use cmd.exec just to count words"));
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
     assert_eq!(calls.len(), 3);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/technical-essay/brief.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/technical-essay/essay.md"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/technical-essay/essay.md"
-    );
+    assert_eq!(calls[0]["path"], "brief.md");
+    assert_eq!(calls[1]["path"], "essay.md");
+    assert_eq!(calls[2]["path"], "essay.md");
     assert_eq!(calls[2]["tool"], "fs.read");
 }
 
@@ -1226,6 +1083,8 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
         &[
             ProfileScenarioKind::PrecisePatch,
             ProfileScenarioKind::MultiFilePatch,
+            ProfileScenarioKind::ManifestContractWrite,
+            ProfileScenarioKind::ScopedPolicyPatch,
             ProfileScenarioKind::GithubIssueBugfix,
             ProfileScenarioKind::RustFailingTestBugfix,
             ProfileScenarioKind::TypeScriptReducerBugfix,
@@ -1402,94 +1261,94 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
     let scenarios = [
         (
             ProfileScenarioKind::GithubIssueBugfix,
-            ".spark-scenarios/github-issue-bugfix/issue.md",
+            "issue.md",
             "annual quotes are undercharged",
         ),
         (
             ProfileScenarioKind::RustFailingTestBugfix,
-            ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs",
+            "tests/retry_scheduler.rs",
             "returns_highest_priority_jobs_first",
         ),
         (
             ProfileScenarioKind::TypeScriptReducerBugfix,
-            ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts",
+            "tests/cart.test.ts",
             "subtotal ignores inactive restored lines",
         ),
         (
             ProfileScenarioKind::MergeConflictResolution,
-            ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts",
+            "src/featureFlags.ts",
             "<<<<<<< HEAD",
         ),
         (
             ProfileScenarioKind::GithubIssueTriage,
-            ".spark-scenarios/github-issue-triage/src/cachePolicy.ts",
+            "src/cachePolicy.ts",
             "stale-while-revalidate=30",
         ),
         (
             ProfileScenarioKind::CiFailureTriage,
-            ".spark-scenarios/ci-failure-triage/logs/frontend-tests.log",
+            "logs/frontend-tests.log",
             "Expected: 80",
         ),
         (
             ProfileScenarioKind::PullRequestReview,
-            ".spark-scenarios/pull-request-review/src/checkout.ts",
+            "src/checkout.ts",
             "includes('admin')",
         ),
         (
             ProfileScenarioKind::DependencyUpgradeTriage,
-            ".spark-scenarios/dependency-upgrade-triage/docs/time-utils-2.0.md",
+            "docs/time-utils-2.0.md",
             "parseBusinessDate(input, { zone: 'utc' })",
         ),
         (
             ProfileScenarioKind::TechnicalEssay,
-            ".spark-scenarios/technical-essay/brief.md",
+            "brief.md",
             "Operational Visibility Is a Product Feature",
         ),
         (
             ProfileScenarioKind::ConfigMigration,
-            ".spark-scenarios/config-migration/migration.md",
+            "migration.md",
             "schema version 2",
         ),
         (
             ProfileScenarioKind::OpsReport,
-            ".spark-scenarios/ops-report/data/tickets.csv",
+            "data/tickets.csv",
             "billing,P1,open,95",
         ),
         (
             ProfileScenarioKind::InventoryRebalancePlan,
-            ".spark-scenarios/inventory-rebalance-plan/data/transfer_options.csv",
+            "data/transfer_options.csv",
             "T14,Atlas,NORTH,EAST,10,1,15,5",
         ),
         (
             ProfileScenarioKind::ExperimentRolloutAudit,
-            ".spark-scenarios/experiment-rollout-audit/data/events.csv",
+            "data/events.csv",
             "ET06,T06,checkout,2026-07-04T00:00:00Z",
         ),
         (
             ProfileScenarioKind::MultiModuleBugfix,
-            ".spark-scenarios/multi-module-bugfix/tests/invoice.test.ts",
+            "tests/invoice.test.ts",
             "applies discount before tax",
         ),
         (
             ProfileScenarioKind::TerminalRepair,
-            ".spark-scenarios/terminal-repair/config/settings.json",
+            "config/settings.json",
             "data/summary.json",
         ),
         (
             ProfileScenarioKind::MultiHopAnalysis,
-            ".spark-scenarios/multi-hop-analysis/data/orders.csv",
+            "data/orders.csv",
             "A6,Atlas,EMEA,1,80.00,returned",
         ),
         (
             ProfileScenarioKind::PolicySupportAgent,
-            ".spark-scenarios/policy-support-agent/policy.md",
+            "policy.md",
             "Damaged-on-arrival",
         ),
     ];
 
     for (scenario, path, expected) in scenarios {
         let dir = tempfile::tempdir().expect("tempdir");
-        prepare_profile_scenario(dir.path(), scenario).expect("prepare scenario");
+        prepare_benchmark_scenario(dir.path(), scenario).expect("prepare scenario");
         let content = std::fs::read_to_string(dir.path().join(path)).expect("fixture content");
         assert!(
             content.contains(expected),
@@ -1497,8 +1356,7 @@ fn real_world_issue_writing_and_reporting_scenarios_prepare_fixtures() {
         );
         if scenario == ProfileScenarioKind::OpsReport {
             let ops_brief =
-                std::fs::read_to_string(dir.path().join(".spark-scenarios/ops-report/brief.md"))
-                    .expect("ops brief");
+                std::fs::read_to_string(dir.path().join("brief.md")).expect("ops brief");
             assert!(
                 content.contains("Treat the first CSV line as the header, not a ticket")
                     || ops_brief.contains("Treat the first CSV line as the header, not a ticket"),
@@ -1533,29 +1391,17 @@ fn ci_failure_triage_declares_log_source_and_validation_expectations() {
     assert!(prompt.contains("do not modify source files"));
     assert!(benchmark_prompt.contains("SAVE20 path in applyDiscount"));
     assert!(benchmark_prompt.contains("Expected 80 / Received 100 evidence"));
-    assert_eq!(validation.workdir, ".spark-scenarios/ci-failure-triage");
+    assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, "powershell");
     assert!(command.contains("bun test"));
     assert!(command.contains("\\bExpected\\b[^\\r\\n]*\\b80\\b"));
     assert!(command.contains("\\bReceived\\b[^\\r\\n]*\\b100\\b"));
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
     assert_eq!(calls.len(), 6);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/ci-failure-triage/issue.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/ci-failure-triage/.github/workflows/frontend.yml"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/ci-failure-triage/logs/frontend-tests.log"
-    );
-    assert_eq!(
-        calls[5]["path"],
-        ".spark-scenarios/ci-failure-triage/ci-triage.md"
-    );
+    assert_eq!(calls[0]["path"], "issue.md");
+    assert_eq!(calls[1]["path"], ".github/workflows/frontend.yml");
+    assert_eq!(calls[2]["path"], "logs/frontend-tests.log");
+    assert_eq!(calls[5]["path"], "ci-triage.md");
 }
 
 #[test]
@@ -1646,33 +1492,18 @@ fn pull_request_review_declares_diff_source_and_validation_expectations() {
     assert!(prompt.contains("do not modify source files"));
     assert!(benchmark_prompt.contains("role.includes('admin')"));
     assert!(benchmark_prompt.contains("read-only-admin users"));
-    assert_eq!(validation.workdir, ".spark-scenarios/pull-request-review");
+    assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, "powershell");
     assert!(command.contains("read-only-admin"));
     assert!(command.contains("includes\\s*\\("));
     assert!(command.contains("strict equality"));
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
     assert_eq!(calls.len(), 5);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/pull-request-review/pr.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/pull-request-review/diff.patch"
-    );
-    assert_eq!(
-        calls[2]["path"],
-        ".spark-scenarios/pull-request-review/src/checkout.ts"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/pull-request-review/tests/checkout.test.ts"
-    );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/pull-request-review/review.md"
-    );
+    assert_eq!(calls[0]["path"], "pr.md");
+    assert_eq!(calls[1]["path"], "diff.patch");
+    assert_eq!(calls[2]["path"], "src/checkout.ts");
+    assert_eq!(calls[3]["path"], "tests/checkout.test.ts");
+    assert_eq!(calls[4]["path"], "review.md");
 }
 
 #[test]
@@ -1733,36 +1564,18 @@ fn dependency_upgrade_triage_declares_migration_source_and_validation_expectatio
     assert!(prompt.contains("do not modify source files"));
     assert!(benchmark_prompt.contains("@acme/time-utils 2.0.0"));
     assert!(benchmark_prompt.contains("date-only defaults from UTC to local time"));
-    assert_eq!(
-        validation.workdir,
-        ".spark-scenarios/dependency-upgrade-triage"
-    );
+    assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, "powershell");
     assert!(command.contains("@acme/time-utils"));
     assert!(command.contains("zone\\s*:\\s*"));
     assert!(command.contains("missing test gap recommendation"));
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
     assert_eq!(calls.len(), 7);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/dependency-upgrade-triage/upgrade.md"
-    );
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/dependency-upgrade-triage/package.json"
-    );
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/dependency-upgrade-triage/docs/time-utils-2.0.md"
-    );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/dependency-upgrade-triage/src/billingWindow.ts"
-    );
-    assert_eq!(
-        calls[6]["path"],
-        ".spark-scenarios/dependency-upgrade-triage/upgrade-triage.md"
-    );
+    assert_eq!(calls[0]["path"], "upgrade.md");
+    assert_eq!(calls[1]["path"], "package.json");
+    assert_eq!(calls[3]["path"], "docs/time-utils-2.0.md");
+    assert_eq!(calls[4]["path"], "src/billingWindow.ts");
+    assert_eq!(calls[6]["path"], "upgrade-triage.md");
 }
 
 #[test]
@@ -1935,23 +1748,11 @@ fn multi_module_bugfix_declares_cross_module_expectations() {
         ]
     );
     assert_eq!(calls.len(), 7);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/multi-module-bugfix/issue.md"
-    );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/multi-module-bugfix/src/invoice.ts"
-    );
-    assert_eq!(
-        calls[5]["path"],
-        ".spark-scenarios/multi-module-bugfix/src/total.ts"
-    );
+    assert_eq!(calls[0]["path"], "issue.md");
+    assert_eq!(calls[4]["path"], "src/invoice.ts");
+    assert_eq!(calls[5]["path"], "src/total.ts");
     assert_eq!(calls[6]["command"], "bun test");
-    assert_eq!(
-        optional[0]["path"],
-        ".spark-scenarios/multi-module-bugfix/src/tax.ts"
-    );
+    assert_eq!(optional[0]["path"], "src/tax.ts");
 }
 
 #[test]
@@ -2017,14 +1818,11 @@ fn terminal_repair_declares_terminal_first_expectations() {
     assert_eq!(calls[0]["tool"], "cmd.exec");
     assert_eq!(calls[0]["command"], "bun run start");
     assert_eq!(calls[0]["ok"], false);
-    assert_eq!(
-        calls[1]["path"],
-        ".spark-scenarios/terminal-repair/config/settings.json"
-    );
+    assert_eq!(calls[1]["path"], "config/settings.json");
     assert_eq!(calls[3]["command"], "bun run start");
     assert!(calls[3].get("ok").is_none());
     assert_eq!(groups[0], vec!["cmd.exec"]);
-    assert_eq!(validation.workdir, ".spark-scenarios/terminal-repair");
+    assert_eq!(validation.workdir, ".");
 }
 
 #[test]
@@ -2111,14 +1909,8 @@ fn multi_hop_analysis_validation_accepts_exact_answer_and_rejects_distractors() 
 
     let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::MultiHopAnalysis);
     assert_eq!(calls.len(), 6);
-    assert_eq!(
-        calls[3]["path"],
-        ".spark-scenarios/multi-hop-analysis/data/refunds.csv"
-    );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/multi-hop-analysis/answer.json"
-    );
+    assert_eq!(calls[3]["path"], "data/refunds.csv");
+    assert_eq!(calls[4]["path"], "answer.json");
     assert!(
         benchmark_task_prompt(ProfileScenarioKind::MultiHopAnalysis)
             .contains("joining the policy rules with both data files")
@@ -2929,14 +2721,8 @@ export function projectReservations(events: ReservationEvent[]): ReservationStat
     let calls =
         profile_scenario_expected_tool_calls(ProfileScenarioKind::StatefulReconciliationBugfix);
     assert_eq!(calls.len(), 8);
-    assert_eq!(
-        calls[5]["path"],
-        ".spark-scenarios/stateful-reconciliation-bugfix/src/normalize.ts"
-    );
-    assert_eq!(
-        calls[6]["path"],
-        ".spark-scenarios/stateful-reconciliation-bugfix/src/project.ts"
-    );
+    assert_eq!(calls[5]["path"], "src/normalize.ts");
+    assert_eq!(calls[6]["path"], "src/project.ts");
     assert_eq!(calls[7]["command"], "bun test");
 
     let artifacts = expected_scenario_artifacts(ProfileScenarioKind::StatefulReconciliationBugfix);
@@ -3184,14 +2970,8 @@ fn policy_support_agent_is_two_turn_and_validates_updated_resolution() {
 
     let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::PolicySupportAgent);
     assert_eq!(calls.len(), 5);
-    assert_eq!(
-        calls[0]["path"],
-        ".spark-scenarios/policy-support-agent/brief.md"
-    );
-    assert_eq!(
-        calls[4]["path"],
-        ".spark-scenarios/policy-support-agent/resolution.json"
-    );
+    assert_eq!(calls[0]["path"], "brief.md");
+    assert_eq!(calls[4]["path"], "resolution.json");
 }
 
 #[test]

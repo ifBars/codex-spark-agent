@@ -63,7 +63,7 @@ pub(crate) async fn run_opencode_benchmark(
                 scenario.name(),
                 scenario_cwd.display()
             );
-            scenarios::prepare_profile_scenario(&scenario_cwd, scenario)?;
+            scenarios::prepare_benchmark_scenario(&scenario_cwd, scenario)?;
             let row =
                 run_opencode_scenario(&options, &scenario_cwd, scenario, repeat_index, started_at)
                     .await?;
@@ -331,21 +331,21 @@ fn external_benchmark_prompt(
     scenario: ProfileScenarioKind,
 ) -> String {
     let base = scenarios::codex_cli_benchmark_prompt(scenario);
-    if same_path(source_cwd, scenario_cwd) {
+    let read_roots = workspace::benchmark_read_roots(source_cwd, scenario_cwd, scenario);
+    if read_roots.is_empty() {
         return base;
     }
-    format!(
-        "<benchmark_environment>\n  <cwd>{}</cwd>\n  <read_only_reference_root>{}</read_only_reference_root>\n  <note>Use cwd for scenario files and any writes. For repository source evidence, read from the read-only reference root instead of expecting a copied repo in cwd.</note>\n</benchmark_environment>\n\n{base}",
-        scenario_cwd.display(),
-        source_cwd.display()
-    )
-}
-
-fn same_path(left: &Path, right: &Path) -> bool {
-    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
+    let roots = read_roots
+        .iter()
+        .map(|root| {
+            format!(
+                "  <read_only_reference_root>{}</read_only_reference_root>",
+                root.display()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("<read_only_reference_roots>\n{roots}\n</read_only_reference_roots>\n\n{base}",)
 }
 
 #[derive(Default)]
@@ -812,7 +812,7 @@ mod tests {
     fn merge_conflict_resolution_has_artifact_expectation() {
         assert_eq!(
             expected_scenario_artifacts(ProfileScenarioKind::MergeConflictResolution),
-            &[".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"]
+            &["src/featureFlags.ts"]
         );
         assert!(expected_scenario_artifacts(ProfileScenarioKind::RepoSurvey).is_empty());
     }

@@ -131,7 +131,7 @@ pub(crate) async fn run_codex_cli_benchmark(
                 scenario.name(),
                 scenario_cwd.display()
             );
-            scenarios::prepare_profile_scenario(&scenario_cwd, scenario)?;
+            scenarios::prepare_benchmark_scenario(&scenario_cwd, scenario)?;
             let row = run_codex_cli_scenario(
                 &options,
                 &scenario_cwd,
@@ -498,10 +498,10 @@ fn external_benchmark_prompt(
     scenario: ProfileScenarioKind,
 ) -> String {
     let base = scenarios::codex_cli_benchmark_prompt(scenario);
-    if same_path(source_cwd, scenario_cwd) {
+    let read_roots = workspace::benchmark_read_roots(source_cwd, scenario_cwd, scenario);
+    if read_roots.is_empty() {
         return base;
     }
-    let read_roots = workspace::benchmark_read_roots(source_cwd, scenario_cwd, scenario);
     let roots = read_roots
         .iter()
         .map(|root| {
@@ -512,24 +512,7 @@ fn external_benchmark_prompt(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let reference_note = if roots.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\n{roots}\n  <note>Read source evidence only from the reference root or roots above.</note>"
-        )
-    };
-    format!(
-        "<benchmark_environment>\n  <cwd>{}</cwd>{reference_note}\n  <note>Use cwd for scenario files and any permitted writes. Do not expect source repositories to be copied into cwd.</note>\n</benchmark_environment>\n\n{base}",
-        scenario_cwd.display(),
-    )
-}
-
-fn same_path(left: &Path, right: &Path) -> bool {
-    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => left == right,
-    }
+    format!("<read_only_reference_roots>\n{roots}\n</read_only_reference_roots>\n\n{base}",)
 }
 
 fn prepare_isolated_codex_home(cwd: &Path, run_dir: &Path) -> Result<PathBuf> {
@@ -1293,7 +1276,7 @@ mod tests {
         );
         assert_eq!(
             expected_scenario_artifacts(ProfileScenarioKind::MergeConflictResolution),
-            &[".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts"]
+            &["src/featureFlags.ts"]
         );
         assert!(expected_scenario_artifacts(ProfileScenarioKind::RepoSurvey).is_empty());
     }

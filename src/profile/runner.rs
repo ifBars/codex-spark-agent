@@ -87,11 +87,12 @@ pub(crate) async fn run_profile_scenarios(
                     scenario.name(),
                     workspace.display()
                 );
+                scenarios::prepare_benchmark_scenario(&workspace, *scenario)?;
                 workspace
             } else {
-                options.cwd.clone()
+                scenarios::prepare_profile_scenario(&options.cwd, *scenario)?;
+                scenarios::profile_scenario_cwd(&options.cwd, *scenario)
             };
-            scenarios::prepare_profile_scenario(&scenario_cwd, *scenario)?;
             let read_roots = if options.benchmark_suite.is_some() {
                 workspace::benchmark_read_roots(&options.cwd, &scenario_cwd, *scenario)
             } else {
@@ -134,7 +135,7 @@ pub(crate) async fn run_profile_scenarios(
             )?;
             runner.set_read_roots(read_roots.clone());
             let startup_context = if options.benchmark_suite.is_some() {
-                benchmark_startup_context(&options.cwd, &scenario_cwd, &read_roots, *scenario)?
+                benchmark_startup_context(&options.cwd, &read_roots, *scenario)?
             } else {
                 None
             };
@@ -263,25 +264,21 @@ pub(crate) async fn run_profile_scenarios(
 
 fn benchmark_startup_context(
     source_cwd: &std::path::Path,
-    cwd: &std::path::Path,
     read_roots: &[PathBuf],
     scenario: ProfileScenarioKind,
 ) -> Result<Option<String>> {
     let reference_context = benchmark_reference_context(read_roots);
-    let filesystem_path_note = if read_roots.is_empty() {
-        "Use paths relative to cwd for native filesystem and shell tools. Do not copy the absolute cwd into fs.* path arguments.".to_string()
-    } else {
-        "For source exploration, use absolute fs.* paths beneath a read_only_reference_root exactly as shown below. Do not use .. path escapes. Keep writes and shell commands inside cwd."
-            .to_string()
-    };
     let environment = format!(
-        "<environment_context>\n  <cwd>{}</cwd>\n  <note>{}</note>\n  <note>For cmd.exec workdir, use a path inside this cwd, preferably a relative .spark-scenarios/... path. Do not use source repository or read-only reference-root absolute paths as command workdirs.</note>\n  <note>For benchmark prompts with exact .spark-scenarios paths, start by reading those paths directly. Do not list cwd, recursively list .spark-scenarios, or search for AGENTS.md just to rediscover provided fixtures or instructions.</note>\n  <note>When a benchmark prompt lists required actions, treat them as an execution checklist. Complete every required read, edit, command, search, and verification action explicitly before the final answer, even when a later smoke check seems sufficient.</note>{}\n</environment_context>\n\n<benchmark_quality_context>\n{}\n</benchmark_quality_context>",
-        context_path(cwd),
-        filesystem_path_note,
+        "<benchmark_context>{}\n  <note>When a benchmark prompt lists required actions, treat them as an execution checklist. Complete every required read, edit, command, search, and verification action explicitly before the final answer, even when a later smoke check seems sufficient.</note>\n</benchmark_context>\n\n<benchmark_quality_context>\n{}\n</benchmark_quality_context>",
         reference_context,
         benchmark_quality_context(scenario)
     );
-    let Some(agents) = agents_context_message(source_cwd)? else {
+    let source_is_reference = read_roots.iter().any(|root| same_path(root, source_cwd));
+    let Some(agents) = source_is_reference
+        .then(|| agents_context_message(source_cwd))
+        .transpose()?
+        .flatten()
+    else {
         return Ok(Some(environment));
     };
     Ok(Some(format!("{agents}\n\n{environment}")))
@@ -300,9 +297,7 @@ fn benchmark_reference_context(read_roots: &[PathBuf]) -> String {
                 )
             })
             .collect::<String>();
-        format!(
-            "\n  <note>Native read-only tools may read source evidence from the reference root, but writes and shell commands remain scoped to cwd.</note>{roots}"
-        )
+        roots
     }
 }
 
@@ -366,6 +361,12 @@ fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
         ProfileScenarioKind::PrecisePatch | ProfileScenarioKind::MultiFilePatch => {
             "Comparison evidence: Spark succeeds on patch tasks but loses quality when it over-calls tools or under-proves the final state. Spend extra effort here on precise verification: inspect the target files, make the smallest scoped edit, run the focused validation when available, re-check the changed lines, and avoid unrelated refactors."
         }
+        ProfileScenarioKind::ManifestContractWrite => {
+            "For this contract-write task, use only native file tools: read the two named inputs, write exactly the two required outputs, then reread them. Preserve source order and do not inspect unrelated files or invoke the shell."
+        }
+        ProfileScenarioKind::ScopedPolicyPatch => {
+            "For this scoped policy patch, use only native file tools: read the named specification and source file, make one line-scoped edit in canRetryPayment, then search and reread the source. Do not invoke the shell or inspect unrelated paths."
+        }
         ProfileScenarioKind::TerminalRepair => {
             "Comparison evidence: terminal repair quality depends on reading actual error output before editing. Run the failing start command first and treat the failure as the diagnostic signal, fix only config/settings.json (the JSON syntax and the dataPath), never src/index.js or data/report.csv, then rerun the same start command once and stop after REPORT OK with rows=5 and top=api."
         }
@@ -395,6 +396,13 @@ fn context_path(path: &std::path::Path) -> String {
         .strip_prefix(r"\\?\")
         .unwrap_or(&display)
         .to_string()
+}
+
+fn same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
 }
 
 fn agents_context_message(cwd: &std::path::Path) -> Result<Option<String>> {
@@ -515,43 +523,38 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_startup_context_includes_environment_cwd() {
+    fn benchmark_startup_context_does_not_repeat_workspace_cwd() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("AGENTS.md"), "Use bun.").expect("write agents");
 
-        let context =
-            benchmark_startup_context(dir.path(), dir.path(), &[], ProfileScenarioKind::RepoSurvey)
-                .expect("startup context")
-                .expect("context should exist");
+        let context = benchmark_startup_context(
+            dir.path(),
+            &[dir.path().to_path_buf()],
+            ProfileScenarioKind::RepoSurvey,
+        )
+        .expect("startup context")
+        .expect("context should exist");
 
         assert!(context.contains("# AGENTS.md instructions for "));
-        assert!(context.contains("<environment_context>"));
-        assert!(context.contains("<cwd>"));
+        assert!(context.contains("<benchmark_context>"));
+        assert!(!context.contains("<cwd>"));
+        assert!(!context.contains("Work only under"));
     }
 
     #[test]
-    fn benchmark_startup_context_includes_environment_without_agents_file() {
+    fn benchmark_startup_context_keeps_only_benchmark_specific_guidance() {
         let dir = tempfile::tempdir().expect("tempdir");
 
-        let context =
-            benchmark_startup_context(dir.path(), dir.path(), &[], ProfileScenarioKind::RepoSurvey)
-                .expect("startup context")
-                .expect("environment context should exist");
+        let context = benchmark_startup_context(dir.path(), &[], ProfileScenarioKind::RepoSurvey)
+            .expect("startup context")
+            .expect("benchmark context should exist");
 
         assert!(!context.contains("# AGENTS.md instructions for "));
-        assert!(context.contains("<environment_context>"));
-        assert!(context.contains("<cwd>"));
-        assert!(context.contains(&context_path(dir.path())));
-        assert!(context.contains("Use paths relative to cwd"));
-        assert!(context.contains("For cmd.exec workdir"));
-        assert!(
-            context.contains(
-                "Do not use source repository or read-only reference-root absolute paths"
-            )
-        );
-        assert!(context.contains("start by reading those paths directly"));
-        assert!(context.contains("Do not list cwd"));
-        assert!(context.contains("search for AGENTS.md"));
+        assert!(context.contains("<benchmark_context>"));
+        assert!(!context.contains("<cwd>"));
+        assert!(!context.contains(&context_path(dir.path())));
+        assert!(!context.contains("Use paths relative to cwd"));
+        assert!(!context.contains("For cmd.exec workdir"));
         assert!(context.contains("treat them as an execution checklist"));
         assert!(context.contains("Complete every required read, edit, command, search"));
     }
@@ -559,27 +562,18 @@ mod tests {
     #[test]
     fn benchmark_startup_context_includes_reference_root() {
         let source = tempfile::tempdir().expect("source");
-        let scenario = tempfile::tempdir().expect("scenario");
-
         let context = benchmark_startup_context(
             source.path(),
-            scenario.path(),
             &[source.path().to_path_buf()],
             ProfileScenarioKind::RepoSurvey,
         )
         .expect("startup context")
-        .expect("environment context should exist");
+        .expect("benchmark context should exist");
 
         assert!(context.contains("<read_only_reference_root>"));
         assert!(context.contains(&context_path(source.path())));
-        assert!(context.contains("writes and shell commands remain scoped to cwd"));
-        assert!(context.contains("use absolute fs.* paths beneath"));
-        assert!(context.contains("Do not use .. path escapes"));
-        assert!(
-            context.contains(
-                "Do not use source repository or read-only reference-root absolute paths"
-            )
-        );
+        assert!(!context.contains("writes and shell commands remain scoped to cwd"));
+        assert!(!context.contains("<cwd>"));
     }
 
     #[test]

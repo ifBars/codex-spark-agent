@@ -628,10 +628,10 @@ fn expected_repeated_source_reads_do_not_count_as_repeat_pressure() {
         "repeated_tool_calls": 1,
         "profile_scenario_call_expectations": {
             "expected_calls": [
-                {"tool": "fs.read", "path": ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs"},
-                {"tools": ["fs.edit", "fs.replace", "fs.write"], "path": ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs"},
+                {"tool": "fs.read", "path": "src/lib.rs"},
+                {"tools": ["fs.edit", "fs.replace", "fs.write"], "path": "src/lib.rs"},
                 {"tool": "cmd.exec", "command": "cargo test"},
-                {"tool": "fs.read", "path": ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs"}
+                {"tool": "fs.read", "path": "src/lib.rs"}
             ],
             "extra_calls_after_satisfied": 0
         }

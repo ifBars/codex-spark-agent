@@ -315,12 +315,12 @@ pub(crate) fn profile_scenario_validation_command(
 ) -> Option<ProfileScenarioValidationCommand> {
     match scenario {
         ProfileScenarioKind::ReactCalculatorScaffold => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/react-calculator",
+            workdir: ".",
             program: "bun",
             args: &["test"],
         }),
         ProfileScenarioKind::RustLogAnalyzerScaffold => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/rust-log-analyzer",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -329,27 +329,27 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::RustNotesTuiScaffold => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/rust-notes-tui",
+            workdir: ".",
             program: "powershell",
             args: &["-NoProfile", "-File", "validate-notes.ps1"],
         }),
         ProfileScenarioKind::GithubIssueBugfix => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/github-issue-bugfix",
+            workdir: ".",
             program: "bun",
             args: &["test"],
         }),
         ProfileScenarioKind::RustFailingTestBugfix => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/rust-failing-test-bugfix",
+            workdir: ".",
             program: "cargo",
             args: &["test"],
         }),
         ProfileScenarioKind::TypeScriptReducerBugfix => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/typescript-reducer-bugfix",
+            workdir: ".",
             program: "bun",
             args: &["test"],
         }),
         ProfileScenarioKind::MergeConflictResolution => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/merge-conflict-resolution",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -358,7 +358,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::GithubIssueTriage => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/github-issue-triage",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -367,7 +367,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::CiFailureTriage => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/ci-failure-triage",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -376,7 +376,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::PullRequestReview => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/pull-request-review",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -385,7 +385,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::DependencyUpgradeTriage => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/dependency-upgrade-triage",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -394,7 +394,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::TechnicalEssay => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/technical-essay",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -403,7 +403,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::ConfigMigration => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/config-migration",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -412,7 +412,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::OpsReport => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/ops-report",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -421,7 +421,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::InventoryRebalancePlan => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/inventory-rebalance-plan",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -430,7 +430,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::ExperimentRolloutAudit => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/experiment-rollout-audit",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -439,7 +439,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::ShellRecovery => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/shell-recovery",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -448,7 +448,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::PrecisePatch => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/precise-patch",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -457,7 +457,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::MultiFilePatch => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/multi-file-patch",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -465,14 +465,32 @@ pub(crate) fn profile_scenario_validation_command(
                 "$ErrorActionPreference='Stop'; $routes = Get-Content -LiteralPath 'src/routes.ts' -Raw; $nav = Get-Content -LiteralPath 'src/navigation.ts' -Raw; $docs = Get-Content -LiteralPath 'docs/routes.md' -Raw; if ($routes -notmatch \"id: 'reports'\" -or $routes -notmatch \"path: '/reports'\") { throw 'routes.ts missing reports route' }; if ($nav -notmatch \"label: 'Reports'\" -or $nav -notmatch \"routeId: 'reports'\") { throw 'navigation.ts missing Reports item' }; if ($docs -notmatch '/reports') { throw 'docs missing /reports' }",
             ],
         }),
+        ProfileScenarioKind::ManifestContractWrite => Some(ProfileScenarioValidationCommand {
+            workdir: ".",
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                "$ErrorActionPreference='Stop'; $manifest = Get-Content -LiteralPath 'generated/release-manifest.json' -Raw | ConvertFrom-Json; $keys = @($manifest.PSObject.Properties.Name | Sort-Object); if (($keys -join ',') -ne 'artifacts,channel,checksum,currentVersion,previousVersion') { throw 'manifest keys do not match contract' }; if ($manifest.channel -ne 'stable' -or $manifest.currentVersion -ne '1.4.0' -or $manifest.previousVersion -ne '1.3.9' -or $manifest.checksum -ne '9c2f8a1d') { throw 'manifest values do not match approved release' }; if ((@($manifest.artifacts) -join ',') -ne 'spark-1.4.0-windows-x64.zip,spark-1.4.0-checksums.txt') { throw 'manifest artifacts do not preserve approved order' }; $notes = Get-Content -LiteralPath 'generated/release-notes.md' -Raw; foreach ($text in @('# Spark 1.4.0','- spark-1.4.0-windows-x64.zip','- spark-1.4.0-checksums.txt','SHA-256: 9c2f8a1d')) { if (-not $notes.Contains($text)) { throw \"notes missing $text\" } }; if ($notes.Contains('1.4.1-rc.1') -or $notes.Contains('deadbeef')) { throw 'notes mention rejected release' }",
+            ],
+        }),
+        ProfileScenarioKind::ScopedPolicyPatch => Some(ProfileScenarioValidationCommand {
+            workdir: ".",
+            program: "powershell",
+            args: &[
+                "-NoProfile",
+                "-Command",
+                r"$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'src/rate_limit.ts' -Raw; if ($content -notmatch 'canRetryPayment[\s\S]*if \(!account\.active\) return false;[\s\S]*if \(account\.retriesToday >= 3\) return false;') { throw 'canRetryPayment does not reject inactive accounts first' }; if ($content -notmatch 'isRetryLimitExceeded[\s\S]*if \(!account\.active\) return true;[\s\S]*return account\.retriesToday >= 3;') { throw 'isRetryLimitExceeded was changed' }; if (($content | Select-String 'if \(!account\.active\)' -AllMatches).Matches.Count -ne 2) { throw 'inactive-account policy was over-edited' }",
+            ],
+        }),
         ProfileScenarioKind::MultiModuleBugfix => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/multi-module-bugfix",
+            workdir: ".",
             program: "bun",
             args: &["test"],
         }),
         ProfileScenarioKind::StatefulReconciliationBugfix => {
             Some(ProfileScenarioValidationCommand {
-                workdir: ".spark-scenarios/stateful-reconciliation-bugfix",
+                workdir: ".",
                 program: "powershell",
                 args: &[
                     "-NoProfile",
@@ -483,7 +501,7 @@ pub(crate) fn profile_scenario_validation_command(
         }
         ProfileScenarioKind::FeatureRolloutConsistencyBugfix => {
             Some(ProfileScenarioValidationCommand {
-                workdir: ".spark-scenarios/feature-rollout-consistency-bugfix",
+                workdir: ".",
                 program: "powershell",
                 args: &[
                     "-NoProfile",
@@ -493,7 +511,7 @@ pub(crate) fn profile_scenario_validation_command(
             })
         }
         ProfileScenarioKind::FrontierRuleTransfer => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/frontier-rule-transfer",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -502,7 +520,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::TerminalRepair => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/terminal-repair",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -511,7 +529,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::MultiHopAnalysis => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/multi-hop-analysis",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",
@@ -520,7 +538,7 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         ProfileScenarioKind::PolicySupportAgent => Some(ProfileScenarioValidationCommand {
-            workdir: ".spark-scenarios/policy-support-agent",
+            workdir: ".",
             program: "powershell",
             args: &[
                 "-NoProfile",

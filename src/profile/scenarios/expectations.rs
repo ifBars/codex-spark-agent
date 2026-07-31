@@ -63,6 +63,16 @@ pub(crate) fn profile_scenario_expected_tool_groups(
         | ProfileScenarioKind::Il2CppInteropExploration => {
             vec![vec!["fs.list"], vec!["fs.read"], vec!["fs.search"]]
         }
+        ProfileScenarioKind::ManifestContractWrite => {
+            vec![vec!["fs.read"], vec!["fs.write"], vec!["fs.read"]]
+        }
+        ProfileScenarioKind::ScopedPolicyPatch => {
+            vec![
+                vec!["fs.read"],
+                vec!["fs.edit", "fs.replace"],
+                vec!["fs.search"],
+            ]
+        }
         ProfileScenarioKind::ReactCalculatorScaffold => {
             vec![vec!["fs.read"], vec!["fs.write"], vec!["cmd.exec"]]
         }
@@ -169,45 +179,45 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::FileEdit => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/file-edit/notes.md",
+                "path": "notes.md",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/file-edit/summary.txt",
+                "path": "summary.txt",
             }),
         ],
         ProfileScenarioKind::FileOps => vec![
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/file-ops/drafts/report-draft.md",
+                "path": "drafts/report-draft.md",
             }),
             json!({
                 "tool": "fs.rename",
-                "from": ".spark-scenarios/file-ops/drafts/report-draft.md",
-                "to": ".spark-scenarios/file-ops/final/report.md",
+                "from": "drafts/report-draft.md",
+                "to": "final/report.md",
             }),
             json!({
                 "tool": "fs.stat",
-                "path": ".spark-scenarios/file-ops/final/report.md",
+                "path": "final/report.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/file-ops/final/report.md",
+                "path": "final/report.md",
             }),
             json!({
                 "tool": "fs.search",
-                "path": ".spark-scenarios/file-ops",
+                "path": ".",
             }),
         ],
         ProfileScenarioKind::ToolRecovery => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/tool-recovery/source/missing-note.md",
+                "path": "source/missing-note.md",
                 "ok": false,
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/tool-recovery/source/note.md",
+                "path": "source/note.md",
             }),
         ],
         ProfileScenarioKind::ShellRecovery => vec![
@@ -220,63 +230,63 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/shell-recovery/summary.txt",
+                "path": "summary.txt",
             }),
         ],
         ProfileScenarioKind::PrecisePatch => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/precise-patch/tests/status_map.spec.md",
+                "path": "tests/status_map.spec.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/precise-patch/src/status_map.ts",
+                "path": "src/status_map.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace"],
-                "path": ".spark-scenarios/precise-patch/src/status_map.ts",
+                "path": "src/status_map.ts",
             }),
             json!({
                 "tool": "fs.search",
-                "path": ".spark-scenarios/precise-patch/src",
+                "path": "src",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/precise-patch/src/status_map.ts",
+                "path": "src/status_map.ts",
             }),
         ],
         ProfileScenarioKind::MultiFilePatch => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-file-patch/src/routes.ts",
+                "path": "src/routes.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-file-patch/src/navigation.ts",
+                "path": "src/navigation.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-file-patch/docs/routes.md",
+                "path": "docs/routes.md",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/multi-file-patch/src/routes.ts",
+                "path": "src/routes.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/multi-file-patch/src/navigation.ts",
+                "path": "src/navigation.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/multi-file-patch/docs/routes.md",
+                "path": "docs/routes.md",
             }),
             json!({
                 "tool": "fs.search",
-                "path": ".spark-scenarios/multi-file-patch",
+                "path": ".",
             }),
             json!({
                 "tool": "fs.search",
-                "path": ".spark-scenarios/multi-file-patch",
+                "path": ".",
             }),
         ],
         ProfileScenarioKind::SkillUse => vec![
@@ -357,6 +367,21 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
                 "path": "src",
             }),
         ],
+        ProfileScenarioKind::ManifestContractWrite => vec![
+            json!({ "tool": "fs.read", "path": "brief.md" }),
+            json!({ "tool": "fs.read", "path": "data/releases.json" }),
+            json!({ "tool": "fs.write", "path": "generated/release-manifest.json" }),
+            json!({ "tool": "fs.write", "path": "generated/release-notes.md" }),
+            json!({ "tool": "fs.read", "path": "generated/release-manifest.json" }),
+            json!({ "tool": "fs.read", "path": "generated/release-notes.md" }),
+        ],
+        ProfileScenarioKind::ScopedPolicyPatch => vec![
+            json!({ "tool": "fs.read", "path": "tests/rate_limit.spec.md" }),
+            json!({ "tool": "fs.read", "path": "src/rate_limit.ts" }),
+            json!({ "tools": ["fs.edit", "fs.replace"], "path": "src/rate_limit.ts" }),
+            json!({ "tool": "fs.search", "path": "src" }),
+            json!({ "tool": "fs.read", "path": "src/rate_limit.ts" }),
+        ],
         ProfileScenarioKind::AssetRipperExploration => vec![
             json!({
                 "tool": "fs.read",
@@ -434,31 +459,31 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::ReactCalculatorScaffold => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/react-calculator/brief.md",
+                "path": "brief.md",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/react-calculator/package.json",
+                "path": "package.json",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/react-calculator/index.html",
+                "path": "index.html",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/react-calculator/src/main.tsx",
+                "path": "src/main.tsx",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/react-calculator/src/App.tsx",
+                "path": "src/App.tsx",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/react-calculator/src/App.test.tsx",
+                "path": "src/App.test.tsx",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/react-calculator/src/styles.css",
+                "path": "src/styles.css",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -468,23 +493,23 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::RustLogAnalyzerScaffold => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/rust-log-analyzer/brief.md",
+                "path": "brief.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/rust-log-analyzer/sample.log",
+                "path": "sample.log",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/rust-log-analyzer/Cargo.toml",
+                "path": "Cargo.toml",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/rust-log-analyzer/src/lib.rs",
+                "path": "src/lib.rs",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/rust-log-analyzer/src/main.rs",
+                "path": "src/main.rs",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -494,19 +519,19 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::RustNotesTuiScaffold => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/rust-notes-tui/brief.md",
+                "path": "brief.md",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/rust-notes-tui/Cargo.toml",
+                "path": "Cargo.toml",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/rust-notes-tui/src/lib.rs",
+                "path": "src/lib.rs",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/rust-notes-tui/src/main.rs",
+                "path": "src/main.rs",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -516,19 +541,19 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::GithubIssueBugfix => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/github-issue-bugfix/issue.md",
+                "path": "issue.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/github-issue-bugfix/src/quote.ts",
+                "path": "src/quote.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/github-issue-bugfix/tests/quote.test.ts",
+                "path": "tests/quote.test.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/github-issue-bugfix/src/quote.ts",
+                "path": "src/quote.ts",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -538,19 +563,19 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::RustFailingTestBugfix => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/rust-failing-test-bugfix/issue.md",
+                "path": "issue.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
+                "path": "src/lib.rs",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/rust-failing-test-bugfix/tests/retry_scheduler.rs",
+                "path": "tests/retry_scheduler.rs",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
+                "path": "src/lib.rs",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -560,19 +585,19 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::TypeScriptReducerBugfix => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/typescript-reducer-bugfix/issue.md",
+                "path": "issue.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
+                "path": "src/cart.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/typescript-reducer-bugfix/tests/cart.test.ts",
+                "path": "tests/cart.test.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
+                "path": "src/cart.ts",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -582,19 +607,19 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::MergeConflictResolution => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/merge-conflict-resolution/issue.md",
+                "path": "issue.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts",
+                "path": "src/featureFlags.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/merge-conflict-resolution/tests/featureFlags.test.ts",
+                "path": "tests/featureFlags.test.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts",
+                "path": "src/featureFlags.ts",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -602,147 +627,147 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tools": ["fs.search", "fs.read"],
-                "path": ".spark-scenarios/merge-conflict-resolution/src/featureFlags.ts",
+                "path": "src/featureFlags.ts",
             }),
         ],
         ProfileScenarioKind::GithubIssueTriage => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/github-issue-triage/issue.md",
+                "path": "issue.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/github-issue-triage/src/cachePolicy.ts",
+                "path": "src/cachePolicy.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/github-issue-triage/logs/warehouse-import.log",
+                "path": "logs/warehouse-import.log",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/github-issue-triage/triage.md",
+                "path": "triage.md",
             }),
         ],
         ProfileScenarioKind::CiFailureTriage => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/ci-failure-triage/issue.md",
+                "path": "issue.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/ci-failure-triage/.github/workflows/frontend.yml",
+                "path": ".github/workflows/frontend.yml",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/ci-failure-triage/logs/frontend-tests.log",
+                "path": "logs/frontend-tests.log",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/ci-failure-triage/src/discount.ts",
+                "path": "src/discount.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/ci-failure-triage/tests/discount.test.ts",
+                "path": "tests/discount.test.ts",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/ci-failure-triage/ci-triage.md",
+                "path": "ci-triage.md",
             }),
         ],
         ProfileScenarioKind::PullRequestReview => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/pull-request-review/pr.md",
+                "path": "pr.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/pull-request-review/diff.patch",
+                "path": "diff.patch",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/pull-request-review/src/checkout.ts",
+                "path": "src/checkout.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/pull-request-review/tests/checkout.test.ts",
+                "path": "tests/checkout.test.ts",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/pull-request-review/review.md",
+                "path": "review.md",
             }),
         ],
         ProfileScenarioKind::DependencyUpgradeTriage => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/dependency-upgrade-triage/upgrade.md",
+                "path": "upgrade.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/dependency-upgrade-triage/package.json",
+                "path": "package.json",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/dependency-upgrade-triage/bun.lock",
+                "path": "bun.lock",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/dependency-upgrade-triage/docs/time-utils-2.0.md",
+                "path": "docs/time-utils-2.0.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/dependency-upgrade-triage/src/billingWindow.ts",
+                "path": "src/billingWindow.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/dependency-upgrade-triage/tests/billingWindow.test.ts",
+                "path": "tests/billingWindow.test.ts",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/dependency-upgrade-triage/upgrade-triage.md",
+                "path": "upgrade-triage.md",
             }),
         ],
         ProfileScenarioKind::TechnicalEssay => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/technical-essay/brief.md",
+                "path": "brief.md",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/technical-essay/essay.md",
+                "path": "essay.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/technical-essay/essay.md",
+                "path": "essay.md",
             }),
         ],
         ProfileScenarioKind::ConfigMigration => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/config-migration/migration.md",
+                "path": "migration.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/config-migration/config/app.json",
+                "path": "config/app.json",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/config-migration/src/config.ts",
+                "path": "src/config.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/config-migration/docs/config.md",
+                "path": "docs/config.md",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/config-migration/config/app.json",
+                "path": "config/app.json",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/config-migration/src/config.ts",
+                "path": "src/config.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/config-migration/docs/config.md",
+                "path": "docs/config.md",
             }),
             json!({
                 "tools": ["cmd.exec", "fs.search"],
@@ -751,135 +776,135 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::OpsReport => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/ops-report/brief.md",
+                "path": "brief.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/ops-report/data/tickets.csv",
+                "path": "data/tickets.csv",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/ops-report/metrics.json",
+                "path": "metrics.json",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/ops-report/report.md",
+                "path": "report.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/ops-report/metrics.json",
+                "path": "metrics.json",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/ops-report/report.md",
+                "path": "report.md",
             }),
         ],
         ProfileScenarioKind::InventoryRebalancePlan => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/inventory-rebalance-plan/brief.md",
+                "path": "brief.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/inventory-rebalance-plan/policy.md",
+                "path": "policy.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/inventory-rebalance-plan/data/products.csv",
+                "path": "data/products.csv",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/inventory-rebalance-plan/data/warehouses.csv",
+                "path": "data/warehouses.csv",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/inventory-rebalance-plan/data/transfer_options.csv",
+                "path": "data/transfer_options.csv",
             }),
             json!({
                 "tool": "cmd.exec",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/inventory-rebalance-plan/plan.json",
+                "path": "plan.json",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/inventory-rebalance-plan/memo.md",
+                "path": "memo.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/inventory-rebalance-plan/plan.json",
+                "path": "plan.json",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/inventory-rebalance-plan/memo.md",
+                "path": "memo.md",
             }),
         ],
         ProfileScenarioKind::ExperimentRolloutAudit => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/experiment-rollout-audit/brief.md",
+                "path": "brief.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/experiment-rollout-audit/policy.md",
+                "path": "policy.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/experiment-rollout-audit/data/assignments.csv",
+                "path": "data/assignments.csv",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/experiment-rollout-audit/data/exclusions.csv",
+                "path": "data/exclusions.csv",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/experiment-rollout-audit/data/events.csv",
+                "path": "data/events.csv",
             }),
             json!({
                 "tool": "cmd.exec",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/experiment-rollout-audit/audit.json",
+                "path": "audit.json",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/experiment-rollout-audit/memo.md",
+                "path": "memo.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/experiment-rollout-audit/audit.json",
+                "path": "audit.json",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/experiment-rollout-audit/memo.md",
+                "path": "memo.md",
             }),
         ],
         ProfileScenarioKind::MultiModuleBugfix => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-module-bugfix/issue.md",
+                "path": "issue.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-module-bugfix/src/invoice.ts",
+                "path": "src/invoice.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-module-bugfix/src/total.ts",
+                "path": "src/total.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-module-bugfix/tests/invoice.test.ts",
+                "path": "tests/invoice.test.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/multi-module-bugfix/src/invoice.ts",
+                "path": "src/invoice.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/multi-module-bugfix/src/total.ts",
+                "path": "src/total.ts",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -889,31 +914,31 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::StatefulReconciliationBugfix => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/stateful-reconciliation-bugfix/issue.md",
+                "path": "issue.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/stateful-reconciliation-bugfix/docs/invariants.md",
+                "path": "docs/invariants.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/stateful-reconciliation-bugfix/logs/incident.log",
+                "path": "logs/incident.log",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/normalize.ts",
+                "path": "src/normalize.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/project.ts",
+                "path": "src/project.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/normalize.ts",
+                "path": "src/normalize.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/project.ts",
+                "path": "src/project.ts",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -923,27 +948,27 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::FeatureRolloutConsistencyBugfix => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/issue.md",
+                "path": "issue.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/docs/invariants.md",
+                "path": "docs/invariants.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/logs/incident.log",
+                "path": "logs/incident.log",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/src/store.ts",
+                "path": "src/store.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/src/cache.ts",
+                "path": "src/cache.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/feature-rollout-consistency-bugfix/src/evaluate.ts",
+                "path": "src/evaluate.ts",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -953,23 +978,23 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::FrontierRuleTransfer => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/frontier-rule-transfer/task.md",
+                "path": "task.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/frontier-rule-transfer/examples.json",
+                "path": "examples.json",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/frontier-rule-transfer/src/types.ts",
+                "path": "src/types.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/frontier-rule-transfer/src/solver.ts",
+                "path": "src/solver.ts",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/frontier-rule-transfer/src/solver.ts",
+                "path": "src/solver.ts",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -984,11 +1009,11 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/terminal-repair/config/settings.json",
+                "path": "config/settings.json",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/terminal-repair/config/settings.json",
+                "path": "config/settings.json",
             }),
             json!({
                 "tool": "cmd.exec",
@@ -998,49 +1023,49 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
         ProfileScenarioKind::MultiHopAnalysis => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-hop-analysis/question.md",
+                "path": "question.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-hop-analysis/policy.md",
+                "path": "policy.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-hop-analysis/data/orders.csv",
+                "path": "data/orders.csv",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-hop-analysis/data/refunds.csv",
+                "path": "data/refunds.csv",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/multi-hop-analysis/answer.json",
+                "path": "answer.json",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/multi-hop-analysis/answer.md",
+                "path": "answer.md",
             }),
         ],
         ProfileScenarioKind::PolicySupportAgent => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/policy-support-agent/brief.md",
+                "path": "brief.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/policy-support-agent/policy.md",
+                "path": "policy.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/policy-support-agent/cases/order_5591.json",
+                "path": "cases/order_5591.json",
             }),
             json!({
                 "tool": "fs.write",
-                "path": ".spark-scenarios/policy-support-agent/resolution.json",
+                "path": "resolution.json",
             }),
             json!({
                 "tools": ["fs.edit", "fs.replace", "fs.write"],
-                "path": ".spark-scenarios/policy-support-agent/resolution.json",
+                "path": "resolution.json",
             }),
         ],
     }
@@ -1050,94 +1075,94 @@ pub(crate) fn profile_scenario_optional_tool_calls(scenario: ProfileScenarioKind
     match scenario {
         ProfileScenarioKind::GithubIssueBugfix => vec![json!({
             "tool": "fs.read",
-            "path": ".spark-scenarios/github-issue-bugfix/src/quote.ts",
+            "path": "src/quote.ts",
         })],
         ProfileScenarioKind::RustFailingTestBugfix => vec![json!({
             "tool": "fs.read",
-            "path": ".spark-scenarios/rust-failing-test-bugfix/src/lib.rs",
+            "path": "src/lib.rs",
         })],
         ProfileScenarioKind::TypeScriptReducerBugfix => vec![json!({
             "tool": "fs.read",
-            "path": ".spark-scenarios/typescript-reducer-bugfix/src/cart.ts",
+            "path": "src/cart.ts",
         })],
         ProfileScenarioKind::ConfigMigration => vec![
             json!({
                 "tool": "fs.search",
-                "path": ".spark-scenarios/config-migration",
+                "path": ".",
             }),
             json!({
                 "tool": "fs.search",
-                "path": ".spark-scenarios/config-migration",
+                "path": ".",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/config-migration/config/app.json",
+                "path": "config/app.json",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/config-migration/src/config.ts",
+                "path": "src/config.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/config-migration/docs/config.md",
+                "path": "docs/config.md",
             }),
         ],
         ProfileScenarioKind::MultiFilePatch => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-file-patch/src/routes.ts",
+                "path": "src/routes.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-file-patch/src/navigation.ts",
+                "path": "src/navigation.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-file-patch/docs/routes.md",
+                "path": "docs/routes.md",
             }),
         ],
         ProfileScenarioKind::MultiModuleBugfix => vec![json!({
             "tool": "fs.read",
-            "path": ".spark-scenarios/multi-module-bugfix/src/tax.ts",
+            "path": "src/tax.ts",
         })],
         ProfileScenarioKind::StatefulReconciliationBugfix => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/stateful-reconciliation-bugfix/src/types.ts",
+                "path": "src/types.ts",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/stateful-reconciliation-bugfix/tests/projection.test.ts",
+                "path": "tests/projection.test.ts",
             }),
         ],
         ProfileScenarioKind::TerminalRepair => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/terminal-repair/src/index.js",
+                "path": "src/index.js",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/terminal-repair/data/report.csv",
+                "path": "data/report.csv",
             }),
         ],
         ProfileScenarioKind::MultiHopAnalysis => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-hop-analysis/answer.json",
+                "path": "answer.json",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/multi-hop-analysis/answer.md",
+                "path": "answer.md",
             }),
         ],
         ProfileScenarioKind::PolicySupportAgent => vec![
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/policy-support-agent/policy.md",
+                "path": "policy.md",
             }),
             json!({
                 "tool": "fs.read",
-                "path": ".spark-scenarios/policy-support-agent/resolution.json",
+                "path": "resolution.json",
             }),
         ],
         _ => Vec::new(),

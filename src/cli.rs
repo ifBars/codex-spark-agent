@@ -472,6 +472,10 @@ pub(crate) enum ProfileScenarioKind {
     PrecisePatch,
     /// Coordinated multi-file edit task that checks consistency across code and docs.
     MultiFilePatch,
+    /// Exact multi-artifact write task that checks schema, source-data, and prose consistency.
+    ManifestContractWrite,
+    /// Scoped code patch task that checks a targeted policy change against lookalike branches.
+    ScopedPolicyPatch,
     /// Repo-local skill mention task that exercises automatic skill compile/load.
     SkillUse,
     /// Open-ended SteamNetworkLib repo explanation that stresses redundant read/search behavior.
@@ -643,6 +647,8 @@ impl ProfileScenarioKind {
             Self::ShellRecovery => "shell-recovery",
             Self::PrecisePatch => "precise-patch",
             Self::MultiFilePatch => "multi-file-patch",
+            Self::ManifestContractWrite => "manifest-contract-write",
+            Self::ScopedPolicyPatch => "scoped-policy-patch",
             Self::SkillUse => "skill-use",
             Self::SteamNetworkLibSurvey => "steamnetworklib-survey",
             Self::S1ApiSurvey => "s1api-survey",
@@ -731,6 +737,8 @@ impl ProfileBenchmarkSuiteKind {
             Self::Editing => &[
                 ProfileScenarioKind::PrecisePatch,
                 ProfileScenarioKind::MultiFilePatch,
+                ProfileScenarioKind::ManifestContractWrite,
+                ProfileScenarioKind::ScopedPolicyPatch,
                 ProfileScenarioKind::GithubIssueBugfix,
                 ProfileScenarioKind::RustFailingTestBugfix,
                 ProfileScenarioKind::TypeScriptReducerBugfix,
@@ -756,6 +764,8 @@ impl ProfileBenchmarkSuiteKind {
             ],
             Self::Coding => &[
                 ProfileScenarioKind::MultiFilePatch,
+                ProfileScenarioKind::ManifestContractWrite,
+                ProfileScenarioKind::ScopedPolicyPatch,
                 ProfileScenarioKind::GithubIssueBugfix,
                 ProfileScenarioKind::RustFailingTestBugfix,
                 ProfileScenarioKind::TypeScriptReducerBugfix,
@@ -820,6 +830,8 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::ShellRecovery,
                 ProfileScenarioKind::PrecisePatch,
                 ProfileScenarioKind::MultiFilePatch,
+                ProfileScenarioKind::ManifestContractWrite,
+                ProfileScenarioKind::ScopedPolicyPatch,
                 ProfileScenarioKind::GithubIssueBugfix,
                 ProfileScenarioKind::RustFailingTestBugfix,
                 ProfileScenarioKind::TypeScriptReducerBugfix,

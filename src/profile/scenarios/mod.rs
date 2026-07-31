@@ -7,7 +7,9 @@ pub(crate) use expectations::{
     profile_scenario_expected_skills, profile_scenario_expected_tool_calls,
     profile_scenario_expected_tool_groups, profile_scenario_optional_tool_calls,
 };
-pub(crate) use fixtures::prepare_profile_scenario;
+pub(crate) use fixtures::{
+    prepare_benchmark_scenario, prepare_profile_scenario, profile_scenario_cwd,
+};
 #[cfg_attr(not(test), allow(unused_imports))]
 pub(crate) use prompts::benchmark_task_prompt;
 pub(crate) use prompts::{

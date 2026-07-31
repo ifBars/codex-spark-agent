@@ -2,6 +2,8 @@ function Get-QuickRealWorldScenario {
     return @(
         "precise-patch",
         "multi-file-patch",
+        "manifest-contract-write",
+        "scoped-policy-patch",
         "github-issue-bugfix",
         "rust-failing-test-bugfix",
         "typescript-reducer-bugfix",

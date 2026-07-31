@@ -5,13 +5,38 @@ use anyhow::Result;
 use crate::cli::ProfileScenarioKind;
 
 pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind) -> Result<()> {
-    let Some(name) = (match scenario {
+    let Some(name) = profile_scenario_fixture_name(scenario) else {
+        return Ok(());
+    };
+    prepare_profile_scenario_at(&cwd.join(".spark-scenarios").join(name), scenario)
+}
+
+pub(crate) fn profile_scenario_cwd(
+    cwd: &Path,
+    scenario: ProfileScenarioKind,
+) -> std::path::PathBuf {
+    profile_scenario_fixture_name(scenario)
+        .map(|name| cwd.join(".spark-scenarios").join(name))
+        .unwrap_or_else(|| cwd.to_path_buf())
+}
+
+pub(crate) fn prepare_benchmark_scenario(cwd: &Path, scenario: ProfileScenarioKind) -> Result<()> {
+    if profile_scenario_fixture_name(scenario).is_none() {
+        return Ok(());
+    }
+    prepare_profile_scenario_at(cwd, scenario)
+}
+
+fn profile_scenario_fixture_name(scenario: ProfileScenarioKind) -> Option<&'static str> {
+    match scenario {
         ProfileScenarioKind::FileEdit => Some("file-edit"),
         ProfileScenarioKind::FileOps => Some("file-ops"),
         ProfileScenarioKind::ToolRecovery => Some("tool-recovery"),
         ProfileScenarioKind::ShellRecovery => Some("shell-recovery"),
         ProfileScenarioKind::PrecisePatch => Some("precise-patch"),
         ProfileScenarioKind::MultiFilePatch => Some("multi-file-patch"),
+        ProfileScenarioKind::ManifestContractWrite => Some("manifest-contract-write"),
+        ProfileScenarioKind::ScopedPolicyPatch => Some("scoped-policy-patch"),
         ProfileScenarioKind::ReactCalculatorScaffold => Some("react-calculator"),
         ProfileScenarioKind::RustLogAnalyzerScaffold => Some("rust-log-analyzer"),
         ProfileScenarioKind::RustNotesTuiScaffold => Some("rust-notes-tui"),
@@ -38,16 +63,15 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
         ProfileScenarioKind::MultiHopAnalysis => Some("multi-hop-analysis"),
         ProfileScenarioKind::PolicySupportAgent => Some("policy-support-agent"),
         _ => None,
-    }) else {
-        return Ok(());
-    };
+    }
+}
 
-    let dir = cwd.join(".spark-scenarios").join(name);
+fn prepare_profile_scenario_at(dir: &Path, scenario: ProfileScenarioKind) -> Result<()> {
     if dir.exists() {
-        std::fs::remove_dir_all(&dir)
+        std::fs::remove_dir_all(dir)
             .map_err(|error| anyhow::anyhow!("failed to reset {}: {error}", dir.display()))?;
     }
-    std::fs::create_dir_all(&dir)
+    std::fs::create_dir_all(dir)
         .map_err(|error| anyhow::anyhow!("failed to create {}: {error}", dir.display()))?;
     match scenario {
         ProfileScenarioKind::FileEdit => {
@@ -156,6 +180,36 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 "# Routes\n\n- `/` home dashboard\n- `/settings` settings page\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture routes.md: {error}"))?;
+        }
+        ProfileScenarioKind::ManifestContractWrite => {
+            std::fs::create_dir_all(dir.join("data"))
+                .map_err(|error| anyhow::anyhow!("failed to create data fixture: {error}"))?;
+            std::fs::write(
+                dir.join("brief.md"),
+                "# Release artifact contract\n\nCreate the two files under `generated/` from the approved release in `data/releases.json`. The candidate release is rejected and must not appear in either output. Preserve artifact order and use only the approved values.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
+            std::fs::write(
+                dir.join("data").join("releases.json"),
+                "[\n  {\n    \"status\": \"rejected\",\n    \"channel\": \"stable\",\n    \"version\": \"1.4.1-rc.1\",\n    \"previousVersion\": \"1.4.0\",\n    \"sha256\": \"deadbeef\",\n    \"artifacts\": [\"spark-1.4.1-rc.1.zip\"]\n  },\n  {\n    \"status\": \"approved\",\n    \"channel\": \"stable\",\n    \"version\": \"1.4.0\",\n    \"previousVersion\": \"1.3.9\",\n    \"sha256\": \"9c2f8a1d\",\n    \"artifacts\": [\"spark-1.4.0-windows-x64.zip\", \"spark-1.4.0-checksums.txt\"]\n  }\n]\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture releases.json: {error}"))?;
+        }
+        ProfileScenarioKind::ScopedPolicyPatch => {
+            std::fs::create_dir_all(dir.join("src"))
+                .map_err(|error| anyhow::anyhow!("failed to create src fixture: {error}"))?;
+            std::fs::create_dir_all(dir.join("tests"))
+                .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("rate_limit.ts"),
+                "export type Account = { active: boolean; retriesToday: number };\n\nexport function canRetryPayment(account: Account): boolean {\n  if (account.retriesToday >= 3) return false;\n  return true;\n}\n\nexport function isRetryLimitExceeded(account: Account): boolean {\n  if (!account.active) return true;\n  return account.retriesToday >= 3;\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture rate_limit.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("rate_limit.spec.md"),
+                "# Retry policy\n\nInactive accounts cannot start payment retries, even with zero prior attempts. `isRetryLimitExceeded` reports true for inactive accounts and is already correct; do not change it. Active accounts can retry below three attempts and cannot retry at three or more.\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture rate_limit.spec.md: {error}"))?;
         }
         ProfileScenarioKind::ReactCalculatorScaffold => {
             std::fs::write(
@@ -505,7 +559,7 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 .map_err(|error| anyhow::anyhow!("failed to create data fixture: {error}"))?;
             std::fs::write(
                 dir.join("brief.md"),
-                "# Inventory Rebalance Brief\n\nChoose transfer options for two planning cases: the base budget is 325 and the contingency budget is 250. Write `.spark-scenarios/inventory-rebalance-plan/plan.json` with exactly the top-level keys `basePlan`, `contingencyPlan`, and `incrementalNetBenefit`, plus `.spark-scenarios/inventory-rebalance-plan/memo.md` with a concise recommendation and tradeoff explanation. Each plan must contain exactly `budget`, `selectedOptionIds`, `totalUnits`, `totalCost`, `grossAvoidedPenalty`, `netBenefit`, and `remainingBudget`. Keep option ids sorted. Use every rule in `policy.md` and all three CSV files. Do not edit the inputs. Use a short script or command to enumerate all feasible subsets rather than relying on a greedy guess.\n",
+                "# Inventory Rebalance Brief\n\nChoose transfer options for two planning cases: the base budget is 325 and the contingency budget is 250. Write `plan.json` with exactly the top-level keys `basePlan`, `contingencyPlan`, and `incrementalNetBenefit`, plus `memo.md` with a concise recommendation and tradeoff explanation. Each plan must contain exactly `budget`, `selectedOptionIds`, `totalUnits`, `totalCost`, `grossAvoidedPenalty`, `netBenefit`, and `remainingBudget`. Keep option ids sorted. Use every rule in `policy.md` and all three CSV files. Do not edit the inputs. Use a short script or command to enumerate all feasible subsets rather than relying on a greedy guess.\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
             std::fs::write(
@@ -536,7 +590,7 @@ pub(crate) fn prepare_profile_scenario(cwd: &Path, scenario: ProfileScenarioKind
                 .map_err(|error| anyhow::anyhow!("failed to create data fixture: {error}"))?;
             std::fs::write(
                 dir.join("brief.md"),
-                "# Experiment Rollout Audit\n\nAudit the `control` and `treatment` variants using `policy.md` and all three CSV files. Write `.spark-scenarios/experiment-rollout-audit/audit.json` and `.spark-scenarios/experiment-rollout-audit/memo.md`. The JSON must contain exactly the top-level keys `control`, `dataQuality`, `decision`, `treatment`, and `uplifts`. Each variant must contain exactly `conversionRatePct`, `converters`, `eligibleUsers`, `grossRevenueCents`, `netRevenueCents`, `netRevenuePerEligibleCents`, `orders`, `refundCents`, `refundRatePct`, and `refundedOrders`. `uplifts` must contain exactly `conversionUpliftPercentagePoints`, `netRevenuePerEligibleUpliftPct`, `refundRateDeltaPercentagePoints`, and `relativeConversionUpliftPct`. `dataQuality` must contain exactly `assignmentRows`, `conflictedUsers`, `duplicateAssignmentRows`, `duplicateEventRows`, `duplicateOrderEvents`, `eventRows`, `excludedUsers`, `orphanEvents`, and `outOfWindowCheckouts`. Use numeric percentages, not fractions. `decision` must be `launch` or `hold`. Do not edit the inputs. Use a short Bun or PowerShell audit script rather than hand-counting rows.\n",
+                "# Experiment Rollout Audit\n\nAudit the `control` and `treatment` variants using `policy.md` and all three CSV files. Write `audit.json` and `memo.md`. The JSON must contain exactly the top-level keys `control`, `dataQuality`, `decision`, `treatment`, and `uplifts`. Each variant must contain exactly `conversionRatePct`, `converters`, `eligibleUsers`, `grossRevenueCents`, `netRevenueCents`, `netRevenuePerEligibleCents`, `orders`, `refundCents`, `refundRatePct`, and `refundedOrders`. `uplifts` must contain exactly `conversionUpliftPercentagePoints`, `netRevenuePerEligibleUpliftPct`, `refundRateDeltaPercentagePoints`, and `relativeConversionUpliftPct`. `dataQuality` must contain exactly `assignmentRows`, `conflictedUsers`, `duplicateAssignmentRows`, `duplicateEventRows`, `duplicateOrderEvents`, `eventRows`, `excludedUsers`, `orphanEvents`, and `outOfWindowCheckouts`. Use numeric percentages, not fractions. `decision` must be `launch` or `hold`. Do not edit the inputs. Use a short Bun or PowerShell audit script rather than hand-counting rows.\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture brief.md: {error}"))?;
             std::fs::write(
