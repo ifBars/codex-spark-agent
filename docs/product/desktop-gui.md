@@ -1,6 +1,6 @@
 # Spark desktop direction
 
-Status: concept selection pending, August 2026
+Status: Proofline selected for implementation, August 2026
 
 ## Product decision
 
@@ -79,18 +79,33 @@ automation, a plugin marketplace, full benchmark dashboards, and complex
 multi-agent boards. Multiple active runs should still be represented in the
 core event model so a compact queue can evolve without a protocol rewrite.
 
-## Visual concepts
+## Selected visual direction: Proofline
+
+Proofline is the implementation target. It uses a warm paper-white surface,
+quiet orange accent, narrow chronological thread rail, and document-like work
+review. A completed turn leads with its outcome, changed files, validation, and
+checkpoint evidence; the underlying model steps and tool calls remain collapsed
+under **How Spark worked** until requested. The bottom composer keeps model,
+reasoning, and workspace authority visible, while a persistent status ribbon
+shows branch, checkpoint, elapsed time, source-reported tokens, pricing
+availability, and local/privacy state.
+
+This direction gives Spark a recognizable evidence-first identity without
+turning the primary experience into an IDE or monitoring console. The first
+prototype should match the selected mockup's density and hierarchy before adding
+secondary surfaces.
+
+## Explored visual concepts
 
 1. **Velocity Desk**: a light daily-driver workspace closest to the supplied
    compact reference. It prioritizes the project/thread rail, transcript, and
    composer.
 2. **Pulse Stack**: a dark operations workspace with compact active-worker
    status and a persistent evidence drawer. It makes parallel work clearest.
-3. **Proofline**: a warm, document-like review workspace where completed work,
-   validation, and checkpoints read as a calm evidence record.
+3. **Proofline (selected)**: a warm, document-like review workspace where
+   completed work, validation, and checkpoints read as a calm evidence record.
 
-Implementation should begin only after one concept is selected. The chosen
-direction should be tested against startup time, time to first visible token,
+The implementation should be tested against startup time, time to first visible token,
 approval discoverability, transcript readability, and the cost of inspecting a
 diff or failed validation.
 
