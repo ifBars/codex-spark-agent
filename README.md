@@ -93,11 +93,44 @@ Inspect without allowing edits or command execution:
 spark chat --mode ask "Review the public API surface."
 ```
 
+Create a standalone repository brief with only local, read-only filesystem tools:
+
+```powershell
+spark brief "How are commands dispatched?" --cwd . --path src --format text
+spark brief "Trace configuration loading." --path src/config.rs --format json --trace
+```
+
+`spark brief` defaults to text output, medium reasoning, a 120-second deadline, and no trace.
+It has a deterministic budget of 16 local filesystem tool invocations: after that, it advertises no
+tools and must synthesize from its gathered evidence. It never advertises web search, MCP, subagents,
+shell, browser, or write tools. Text writes only
+the Markdown brief to stdout; JSON writes one versioned report envelope. A missing brief contract
+returns a nonzero exit code while still emitting that report.
+
 Save a trace and print a profile after the run:
 
 ```powershell
 spark chat --trace --profile "Fix the failing test and explain the patch."
 ```
+
+Inspect the source-reported ChatGPT Codex quota, credits, and any rate-limit windows:
+
+```powershell
+spark usage
+spark usage --json
+```
+
+This command reads your saved Spark OAuth login and calls the Codex account-usage service. It reports provider quota/credit metadata exactly as available, but it does not infer token counts, messages, dollars, or a price for `gpt-5.3-codex-spark`. The JSON includes a source-labeled pricing-availability record so automation can distinguish unavailable pricing from a zero price.
+
+Aggregate local Codex CLI token history without making an account or provider request:
+
+```powershell
+spark usage --history
+spark usage --history --json --since-days 30
+spark usage --history --codex-home D:\\CodexHome --max-files 500 --output .spark-profile\\usage-history.json
+```
+
+The history scanner reads only `sessions/**/*.jsonl` and `archived_sessions/*.jsonl` beneath `CODEX_HOME` (or `~/.codex`), and emits an aggregate-only `spark.usage_history.v1` report suitable for Spark Bench. It never includes prompts, messages, raw tool output, credentials, session paths, or working directories. Totals are coverage-labeled: input contains cached and cache-write subsets; reasoning output remains a diagnostic subset of output. A `files_truncated` or partial-coverage signal means the report is not complete. It does not estimate dollars or subscription spend.
 
 <details>
 <summary><strong>More chat options</strong></summary>
@@ -216,6 +249,16 @@ spark analyze-trace --timeline
 
 The profiler tracks request size, token pressure, tool failures, repeated calls, command duration, compaction, and cache hits.
 
+Trace files are local and can contain prompts, source, tool output, command output, and model responses. Spark never removes them automatically. Inspect the default 30-day policy, then review a dry run before explicitly confirming a purge:
+
+```powershell
+spark trace-retention --cwd .
+spark trace-retention --cwd . --older-than-days 14 --purge
+spark trace-retention --cwd . --older-than-days 14 --purge --confirm
+```
+
+Plain inspection prints only policy and counts. The dry run and final command list the exact resolved `.spark-runs/run-<timestamp>` directories beneath the selected workspace; only the final command removes them. Keep traces private and choose a retention period appropriate for the workspace.
+
 Benchmark workflows and profiler internals are documented in [Development and internals](docs/development.md).
 
 ## Setup and authentication
@@ -260,6 +303,7 @@ This project is not a sandbox.
 - Work mode can edit files inside the selected workspace.
 - MCP servers may add tools with their own security boundaries.
 - Traces can contain prompts, source, tool output, command output, and model responses.
+- Spark does not automatically delete traces; `spark trace-retention --purge --confirm` only removes eligible local run directories under the selected workspace's `.spark-runs/` root.
 
 Only run Spark in workspaces you trust. Keep `.spark-runs/`, `.spark-profile/`, `.spark/`, `.spark-codex/`, and `~/.spark-codex/` private.
 

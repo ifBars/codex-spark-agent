@@ -3,7 +3,9 @@ use serde_json::{Value, json};
 use crate::agent::AgentRunner;
 use crate::mcp::McpRegistry;
 use crate::profiler::tool_signature;
-use crate::tools::{ToolResult, invoke_with_read_roots, is_readonly_tool};
+use crate::tools::{
+    ToolResult, invoke_with_read_roots, is_local_filesystem_tool, is_readonly_tool,
+};
 
 #[derive(Debug, Clone)]
 pub(super) struct CachedToolObservation {
@@ -14,6 +16,34 @@ pub(super) struct CachedToolObservation {
 
 impl AgentRunner {
     pub(super) async fn invoke_with_cache(&mut self, tool_name: &str, args: Value) -> ToolResult {
+        if self.local_filesystem_only && !is_local_filesystem_tool(tool_name) {
+            let message =
+                format!("tool `{tool_name}` is blocked by the local-filesystem-only capability");
+            return ToolResult {
+                ok: false,
+                data: json!({"error_kind": "tool_blocked", "tool": tool_name, "message": message}),
+                error: Some(message),
+            };
+        }
+        if self.local_filesystem_only
+            && is_local_filesystem_tool(tool_name)
+            && let Some(budget) = &mut self.local_filesystem_tool_budget
+            && !budget.try_consume()
+        {
+            let message = "local filesystem evidence budget reached; synthesize from the evidence already gathered";
+            return ToolResult {
+                ok: false,
+                data: json!({
+                    "error_kind": "tool_budget_reached",
+                    "tool": tool_name,
+                    "max": budget.max,
+                    "used": budget.used,
+                    "remaining": 0,
+                    "message": message,
+                }),
+                error: Some(message.to_string()),
+            };
+        }
         if tool_name.starts_with("subagent.") {
             return Box::pin(self.invoke_subagent_tool(tool_name, args)).await;
         }
@@ -92,5 +122,103 @@ pub(in crate::agent) fn cached_readonly_result(
             "original_error": cached.result.error,
         }),
         error: cached.result.error.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn auth_tokens() -> crate::auth::AuthTokens {
+        crate::auth::AuthTokens {
+            id_token: "id".to_string(),
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            expires_at: i64::MAX,
+            account_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn local_filesystem_capability_blocks_stale_hosted_and_mcp_calls() {
+        let dir = TempDir::new().expect("tempdir");
+        let mut runner = AgentRunner::new(
+            auth_tokens(),
+            dir.path().to_path_buf(),
+            crate::DEFAULT_MODEL.to_string(),
+            false,
+            false,
+            crate::DEFAULT_COMPACT_AFTER_CHARS,
+            crate::DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS,
+            crate::DEFAULT_MAX_INPUT_CHARS,
+            false,
+            None,
+            false,
+            None,
+            crate::tools::AgentMode::Ask,
+        )
+        .expect("runner");
+        runner.enforce_local_filesystem_only();
+
+        for tool in [
+            "web.search",
+            "mcp__example__tool",
+            "subagent.run",
+            "fs.write",
+        ] {
+            let result = runner.invoke_with_cache(tool, json!({})).await;
+            assert!(!result.ok, "{tool} must be blocked");
+            assert_eq!(result.data["error_kind"], "tool_blocked");
+        }
+    }
+
+    #[tokio::test]
+    async fn repo_brief_evidence_budget_executes_only_the_first_sixteen_calls() {
+        let dir = TempDir::new().expect("tempdir");
+        for index in 0..17 {
+            std::fs::write(dir.path().join(format!("evidence-{index}.txt")), "evidence")
+                .expect("fixture");
+        }
+        let mut runner = AgentRunner::new(
+            auth_tokens(),
+            dir.path().to_path_buf(),
+            crate::DEFAULT_MODEL.to_string(),
+            false,
+            false,
+            crate::DEFAULT_COMPACT_AFTER_CHARS,
+            crate::DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS,
+            crate::DEFAULT_MAX_INPUT_CHARS,
+            false,
+            None,
+            false,
+            None,
+            crate::tools::AgentMode::Ask,
+        )
+        .expect("runner");
+        runner.enforce_local_filesystem_only();
+        runner.set_local_filesystem_tool_budget(16);
+
+        for index in 0..16 {
+            let result = runner
+                .invoke_with_cache("fs.stat", json!({"path": format!("evidence-{index}.txt")}))
+                .await;
+            assert!(result.ok, "call {index} should execute");
+        }
+
+        let blocked = runner
+            .invoke_with_cache("fs.stat", json!({"path": "evidence-16.txt"}))
+            .await;
+        assert!(!blocked.ok);
+        assert_eq!(blocked.data["error_kind"], "tool_budget_reached");
+        assert_eq!(blocked.data["max"], 16);
+        assert_eq!(blocked.data["used"], 16);
+        assert_eq!(blocked.data["remaining"], 0);
+        assert_eq!(
+            runner.profile_summary()["local_filesystem_tool_budget"],
+            json!({"max": 16, "used": 16, "remaining": 0})
+        );
     }
 }

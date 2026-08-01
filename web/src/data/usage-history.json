@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "kind": "spark_usage_history",
+  "availability": "unavailable",
+  "reason": "No aggregate Spark usage history has been imported for this public benchmark build.",
+  "generatedAt": null,
+  "aggregate": null,
+  "byDay": [],
+  "byModel": [],
+  "pricing": {
+    "status": "unavailable",
+    "reason": "No public API token price is available for gpt-5.3-codex-spark."
+  },
+  "quota": {
+    "status": "unavailable",
+    "reason": "Account quota is intentionally not published with benchmark artifacts."
+  }
+}

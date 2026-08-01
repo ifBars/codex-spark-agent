@@ -26,6 +26,7 @@ Useful inspection commands:
 spark tools
 spark skills
 spark commands
+spark brief "Explain the command dispatch path." --path src
 ```
 
 ## Native tools
@@ -69,6 +70,41 @@ spark analyze-trace --timeline
 ```
 
 The profiler tracks request size, token pressure, tool failures, repeated calls, command duration, compaction, and cache hits. Traces are written under `.spark-runs/`.
+
+Traces are retained locally until the user removes them; Spark has no automatic deletion job. Use `spark trace-retention --cwd .` to inspect the default 30-day policy. `--purge` is a dry run, and deletion requires the separate `--confirm` flag:
+
+```powershell
+spark trace-retention --cwd . --older-than-days 14 --purge
+spark trace-retention --cwd . --older-than-days 14 --purge --confirm
+```
+
+Plain inspection prints only the policy and counts; the dry run and confirmed purge list exact candidates. The purge only accepts resolved, direct `.spark-runs/run-<timestamp>` children of the selected workspace. Treat all trace contents as private before retaining, sharing, or deleting them.
+
+## Repository briefs
+
+`spark brief` is a standalone, local-filesystem-only read pass for a concrete repository question.
+It accepts repeated `--path` starting points, rejects absolute or parent-traversing paths before
+authentication/provider work, and uses the default Spark model with `low`, `medium`, `high`, or
+`xhigh` reasoning. It has a 120-second standalone deadline by default; this is a request deadline,
+not an agent-loop turn cap.
+
+```powershell
+spark brief "Where does authentication enter the client?" --cwd . --path src --format text
+spark brief "Trace auth handling." --path src/auth.rs --format json --trace
+```
+
+The model can use only `fs.read`, `fs.list`, `fs.stat`, and `fs.search`; the harness removes hosted
+web search, MCP, subagents, shell, browser, and writes from the advertised schema. Repo Brief has a
+deterministic budget of 16 local filesystem invocations. The first 16 dispatch normally; subsequent
+calls receive a compact `tool_budget_reached` result and the next model request has an empty tool
+schema, requiring natural synthesis from gathered evidence. Its compaction threshold is 320,000 JSON
+characters (remote-first compaction remains available at that threshold), avoiding premature evidence
+loss during a compact read pass. Text stdout is
+only the Markdown brief. JSON stdout is one schema-versioned `repo_brief` object with profile and
+authoritative provider response-usage data when the provider supplied it. The deterministic contract
+diagnostic requires Answer, Evidence, Risks/unknowns, and Next inspection headings plus one or more
+repository-relative `file:line` citations. Incomplete contracts and deadline/error reports have a
+stable nonzero exit code but still emit their JSON envelope.
 
 ## Benchmarks
 

@@ -118,6 +118,54 @@
         }
       ],
       "note": "This legacy artifact plots 141 successful rows and excludes four failed attempts. It does not classify infrastructure exclusions; prefer the expanded suite for current methodology."
+    },
+    {
+      "id": "real-world-quick-slice",
+      "status": "Development pilot",
+      "date": "July 31, 2026",
+      "runSource": "real-world-quick-slice-2026-07-31.csv",
+      "runField": "runs",
+      "scenarioField": "scenario",
+      "expectedScenarioCount": 4,
+      "providerExclusions": null,
+      "taskFailureExclusions": 0,
+      "taskFailuresRetained": false,
+      "pendingScenarios": [],
+      "sources": [
+        {
+          "label": "Paired quick-slice rows",
+          "path": "docs/benchmarks/real-world-quick-slice-2026-07-31.csv"
+        },
+        {
+          "label": "Methodology",
+          "path": "docs/benchmarks/real-world-quick-slice-2026-07-31.md"
+        }
+      ],
+      "note": "A current four-task paired development slice at medium reasoning. All eight runner/scenario attempts passed validation; one attempt per point means no confidence interval is published."
+    },
+    {
+      "id": "real-world-spark-extension",
+      "status": "Spark-only pilot",
+      "date": "August 1, 2026",
+      "runSource": "real-world-spark-extension-2026-08-01.csv",
+      "runField": "runs",
+      "scenarioField": "scenario",
+      "expectedScenarioCount": 8,
+      "providerExclusions": null,
+      "taskFailureExclusions": 0,
+      "taskFailuresRetained": false,
+      "pendingScenarios": [],
+      "sources": [
+        {
+          "label": "Spark extension rows",
+          "path": "docs/benchmarks/real-world-spark-extension-2026-08-01.csv"
+        },
+        {
+          "label": "Methodology",
+          "path": "docs/benchmarks/real-world-spark-extension-2026-08-01.md"
+        }
+      ],
+      "note": "Eight fresh medium-reasoning Spark harness runs all passed validation. Native Codex preflight was invalid in this pass, so this dataset intentionally contains no native comparison rows."
     }
   ]
 }

@@ -43,6 +43,10 @@ pub(crate) fn is_readonly_tool(tool_name: &str) -> bool {
     )
 }
 
+pub(crate) fn is_local_filesystem_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "fs.read" | "fs.list" | "fs.stat" | "fs.search")
+}
+
 pub(crate) fn tools_for_mode(
     tools: impl IntoIterator<Item = ToolDescriptor>,
     mode: AgentMode,

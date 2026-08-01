@@ -1,0 +1,121 @@
+{
+  "datasets": [
+    {
+      "id": "real-world-quick-slice",
+      "label": "Recent paired quick slice",
+      "shortLabel": "Quick slice",
+      "date": "July 31, 2026",
+      "sample": "8 successful task runs",
+      "rangeKind": "Successful-run means; no interval published",
+      "description": "A current four-task paired development slice at medium reasoning for the Spark harness and native Codex CLI.",
+      "hasIntervals": false,
+      "sourceEvidenceId": "real-world-quick-slice",
+      "runnerNames": {
+        "codex": "Codex CLI 0.146.0"
+      },
+      "rows": [
+        {
+          "runner": "spark",
+          "reasoning": "medium",
+          "runs": 4,
+          "scenarios": 4,
+          "successfulRuns": 4,
+          "excludedRuns": 0,
+          "successRate": 100,
+          "quality": 82,
+          "tokens": 53733,
+          "duration": 18.38
+        },
+        {
+          "runner": "codex",
+          "reasoning": "medium",
+          "runs": 4,
+          "scenarios": 4,
+          "successfulRuns": 4,
+          "excludedRuns": 0,
+          "successRate": 100,
+          "quality": 84.75,
+          "tokens": 226231,
+          "duration": 70.97
+        }
+      ],
+      "scenarioViews": [
+        {
+          "id": "manifest-contract-write",
+          "label": "Manifest contract write",
+          "description": "Exact multi-artifact release manifest, notes, and checksum task with schema and source-data consistency checks.",
+          "rangeKind": "Successful-run mean; no per-run interval published",
+          "rows": [
+            { "runner": "codex", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 85, "tokens": 365877, "duration": 78.43 },
+            { "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 49572, "duration": 17.56 }
+          ]
+        },
+        {
+          "id": "scoped-policy-patch",
+          "label": "Scoped policy patch",
+          "description": "Narrow policy edit that changes one retry branch while preserving the neighboring limit behavior.",
+          "rangeKind": "Successful-run mean; no per-run interval published",
+          "rows": [
+            { "runner": "codex", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 85, "tokens": 343890, "duration": 82.83 },
+            { "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 48928, "duration": 16.63 }
+          ]
+        },
+        {
+          "id": "multi-module-bugfix",
+          "label": "Multi-module bugfix",
+          "description": "Two-module TypeScript repair preserving fractional precision and applying discounts before tax.",
+          "rangeKind": "Successful-run mean; no per-run interval published",
+          "rows": [
+            { "runner": "codex", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 85, "tokens": 98587, "duration": 67.61 },
+            { "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 66680, "duration": 23.34 }
+          ]
+        },
+        {
+          "id": "multi-hop-analysis",
+          "label": "Multi-hop analysis",
+          "description": "Policy-guided join across orders and refunds to compute a constrained revenue answer.",
+          "rangeKind": "Successful-run mean; no per-run interval published",
+          "rows": [
+            { "runner": "codex", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 84, "tokens": 96568, "duration": 55 },
+            { "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 49751, "duration": 15.99 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "real-world-spark-extension",
+      "label": "Fresh Spark extension",
+      "shortLabel": "Spark extension",
+      "date": "August 1, 2026",
+      "sample": "8 successful task runs",
+      "rangeKind": "Successful-run means; no interval published",
+      "description": "Eight fresh medium-reasoning Spark harness tasks. Native Codex preflight was invalid in this pass, so this view intentionally contains Spark only.",
+      "hasIntervals": false,
+      "sourceEvidenceId": "real-world-spark-extension",
+      "rows": [
+        {
+          "runner": "spark",
+          "reasoning": "medium",
+          "runs": 8,
+          "scenarios": 8,
+          "successfulRuns": 8,
+          "excludedRuns": 0,
+          "successRate": 100,
+          "quality": 82,
+          "tokens": 40178,
+          "duration": 9.71
+        }
+      ],
+      "scenarioViews": [
+        { "id": "precise-patch", "label": "Precise patch", "description": "Small single-file behavior correction with a focused validation contract.", "rangeKind": "Successful-run mean; no per-run interval published", "rows": [{ "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 33634, "duration": 13.47 }] },
+        { "id": "multi-file-patch", "label": "Multi-file patch", "description": "Coordinated source, navigation, and documentation update with search-based consistency checks.", "rangeKind": "Successful-run mean; no per-run interval published", "rows": [{ "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 55364, "duration": 12.31 }] },
+        { "id": "manifest-contract-write", "label": "Manifest contract write", "description": "Exact multi-artifact release manifest, notes, and checksum task with schema and source-data consistency checks.", "rangeKind": "Successful-run mean; no per-run interval published", "rows": [{ "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 28538, "duration": 5.94 }] },
+        { "id": "scoped-policy-patch", "label": "Scoped policy patch", "description": "Narrow policy edit that changes one retry branch while preserving the neighboring limit behavior.", "rangeKind": "Successful-run mean; no per-run interval published", "rows": [{ "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 30001, "duration": 5.78 }] },
+        { "id": "github-issue-bugfix", "label": "GitHub issue bugfix", "description": "Issue-driven production repair with a focused test command and minimal scoped change.", "rangeKind": "Successful-run mean; no per-run interval published", "rows": [{ "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 38188, "duration": 10.01 }] },
+        { "id": "rust-failing-test-bugfix", "label": "Rust failing-test bugfix", "description": "Rust repair guided by a failing test, followed by the required cargo validation.", "rangeKind": "Successful-run mean; no per-run interval published", "rows": [{ "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 41471, "duration": 10.89 }] },
+        { "id": "multi-module-bugfix", "label": "Multi-module bugfix", "description": "Two-module TypeScript repair preserving fractional precision and applying discounts before tax.", "rangeKind": "Successful-run mean; no per-run interval published", "rows": [{ "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 66241, "duration": 14.8 }] },
+        { "id": "multi-hop-analysis", "label": "Multi-hop analysis", "description": "Policy-guided join across orders and refunds to compute a constrained revenue answer.", "rangeKind": "Successful-run mean; no per-run interval published", "rows": [{ "runner": "spark", "reasoning": "medium", "runs": 1, "successfulRuns": 1, "excludedRuns": 0, "successRate": 100, "quality": 82, "tokens": 27990, "duration": 4.46 }] }
+      ]
+    }
+  ]
+}

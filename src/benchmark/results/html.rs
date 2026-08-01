@@ -829,7 +829,11 @@ fn comparison_delta_table(rows: &[ComparisonRow]) -> String {
             continue;
         };
         let duration_delta = spark.duration_ms as i128 - codex.duration_ms as i128;
-        let token_ratio = ratio_or_zero(spark.input_tokens as f64, codex.input_tokens as f64);
+        let token_ratio = spark
+            .input_tokens
+            .zip(codex.input_tokens)
+            .map(|(spark, codex)| format!("{:.1}x", ratio_or_zero(spark as f64, codex as f64)))
+            .unwrap_or_else(|| "unavailable".to_string());
         let tool_ratio = ratio_or_zero(
             spark.tool_or_item_calls as f64,
             codex.tool_or_item_calls as f64,
@@ -838,7 +842,7 @@ fn comparison_delta_table(rows: &[ComparisonRow]) -> String {
             spark.benchmark_index.unwrap_or(0.0) - codex.benchmark_index.unwrap_or(0.0);
         let _ = write!(
             html,
-            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}x</td><td class=\"num\">{:.1}x</td><td class=\"num\">{:+.1}</td></tr>",
+            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}x</td><td class=\"num\">{:+.1}</td></tr>",
             html_escape(&scenario),
             signed_ms(duration_delta),
             token_ratio,

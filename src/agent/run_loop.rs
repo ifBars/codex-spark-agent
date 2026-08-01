@@ -7,12 +7,12 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::compaction::{compaction_trigger_for_turn, format_compaction_notice};
-use crate::agent::{AgentRunner, TOOL_ONLY_STREAK_COMPACTION_TRIGGER};
+use crate::agent::{AgentRunner, LocalFilesystemToolBudget, TOOL_ONLY_STREAK_COMPACTION_TRIGGER};
 use crate::client::{
     ReasoningDisplayUpdate, WebSearchDisplayUpdate, function_calls, output_items_for_next_input,
     output_text_delta, reasoning_display_update, response_text, web_search_display_update,
 };
-use crate::tools::{ToolDescriptor, builtin_tools, tools_for_mode};
+use crate::tools::{ToolDescriptor, builtin_tools, is_local_filesystem_tool, tools_for_mode};
 
 impl AgentRunner {
     pub(super) fn push_user_message(&mut self, prompt: &str) {
@@ -32,7 +32,6 @@ impl AgentRunner {
         cancellation: CancellationToken,
     ) -> Result<String> {
         self.ensure_mcp_registry().await;
-        let tools = self.tools_for_current_loop();
 
         let mut turn = 0usize;
         let mut last_tool_only_compaction_streak = 0usize;
@@ -44,6 +43,8 @@ impl AgentRunner {
             if cancellation.is_cancelled() {
                 return self.record_cancelled(turn, "turn_start");
             }
+
+            let tools = self.tools_for_current_loop();
 
             let tool_only_streak = self.profiler.current_tool_only_turn_streak();
             let compaction_trigger = compaction_trigger_for_turn(
@@ -303,6 +304,7 @@ impl AgentRunner {
                 }
             };
             let request_duration_ms = request_started.elapsed().as_millis() as u64;
+            self.profiler.record_response_usage(&raw);
             let output_tokens = response_output_tokens(&raw);
             let generation_duration_ms = generation_started
                 .map(|started| started.elapsed().as_millis().min(u64::MAX as u128) as u64)
@@ -426,7 +428,7 @@ impl AgentRunner {
             "role": "user",
             "content": [{
                 "type": "input_text",
-                "text": tool_only_recovery_notice(tool_only_streak)
+                "text": tool_only_recovery_notice(tool_only_streak, self.local_filesystem_only)
             }]
         }));
         true
@@ -463,11 +465,7 @@ impl AgentRunner {
 }
 
 fn response_output_tokens(raw: &Value) -> Option<u64> {
-    raw.get("response")
-        .unwrap_or(raw)
-        .get("usage")
-        .and_then(|usage| usage.get("output_tokens"))
-        .and_then(Value::as_u64)
+    crate::profiler::ResponseUsage::from_response_raw(raw).and_then(|usage| usage.output_tokens)
 }
 
 fn average_tokens_per_second(output_tokens: Option<u64>, duration_ms: u64) -> Option<f64> {
@@ -484,6 +482,15 @@ impl AgentRunner {
             .into_iter()
             .filter(|tool| self.subagent_depth == 0 || !tool.name.starts_with("subagent."))
             .collect::<Vec<_>>();
+        if self.local_filesystem_only {
+            tools = filter_local_filesystem_tools(tools);
+            if self
+                .local_filesystem_tool_budget
+                .is_some_and(LocalFilesystemToolBudget::exhausted)
+            {
+                return Vec::new();
+            }
+        }
         if self.mode == crate::tools::AgentMode::Work
             && let Some(registry) = &self.mcp_registry
         {
@@ -491,6 +498,21 @@ impl AgentRunner {
         }
         tools
     }
+}
+
+#[cfg(test)]
+fn local_filesystem_brief_tools() -> Vec<ToolDescriptor> {
+    filter_local_filesystem_tools(tools_for_mode(
+        builtin_tools(),
+        crate::tools::AgentMode::Ask,
+    ))
+}
+
+fn filter_local_filesystem_tools(tools: Vec<ToolDescriptor>) -> Vec<ToolDescriptor> {
+    tools
+        .into_iter()
+        .filter(|tool| is_local_filesystem_tool(&tool.name))
+        .collect()
 }
 
 fn web_search_display_args(query: Option<String>) -> String {
@@ -547,7 +569,12 @@ fn tool_only_notice_interval(compact_after_tool_only_turns: usize) -> usize {
     }
 }
 
-fn tool_only_recovery_notice(tool_only_streak: usize) -> String {
+fn tool_only_recovery_notice(tool_only_streak: usize, local_filesystem_only: bool) -> String {
+    if local_filesystem_only {
+        return format!(
+            "[spark harness recovery]\nYou have made {tool_only_streak} consecutive tool-only turns. Stop broad investigation now. Synthesize the requested read-only repository brief from the local evidence already gathered, including citations, risks/unknowns, and the next inspection. Do not repeat read-only calls or enumerate new areas unless a specific citation cannot be completed."
+        );
+    }
     format!(
         "[spark harness recovery]\nYou have made {tool_only_streak} consecutive tool-only turns. Stop broad investigation now. On your next turn, either make the smallest implementation/edit supported by the evidence already gathered, or provide the final answer if no edit is needed. Do not repeat read-only calls or enumerate new areas. Use another tool only to resolve a specific compiler, test, or command error after attempting the work."
     )
@@ -556,10 +583,46 @@ fn tool_only_recovery_notice(tool_only_streak: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        average_tokens_per_second, response_output_tokens, should_retry_response_stream_error,
-        stream_retry_base_delay, tool_only_notice_interval, tool_only_recovery_notice,
+        average_tokens_per_second, local_filesystem_brief_tools, response_output_tokens,
+        should_retry_response_stream_error, stream_retry_base_delay, tool_only_notice_interval,
+        tool_only_recovery_notice,
     };
+    use crate::agent::AgentRunner;
+    use crate::auth::AuthTokens;
+    use crate::tools::AgentMode;
     use serde_json::json;
+    use tempfile::TempDir;
+
+    fn auth_tokens() -> AuthTokens {
+        AuthTokens {
+            id_token: "id".to_string(),
+            access_token: "access".to_string(),
+            refresh_token: "refresh".to_string(),
+            expires_at: i64::MAX,
+            account_id: None,
+        }
+    }
+
+    fn runner() -> (TempDir, AgentRunner) {
+        let dir = TempDir::new().expect("tempdir");
+        let runner = AgentRunner::new(
+            auth_tokens(),
+            dir.path().to_path_buf(),
+            crate::DEFAULT_MODEL.to_string(),
+            false,
+            false,
+            crate::DEFAULT_COMPACT_AFTER_CHARS,
+            crate::DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS,
+            crate::DEFAULT_MAX_INPUT_CHARS,
+            false,
+            None,
+            false,
+            None,
+            AgentMode::Ask,
+        )
+        .expect("runner");
+        (dir, runner)
+    }
 
     #[test]
     fn tool_only_notice_arrives_before_compaction_threshold() {
@@ -571,12 +634,44 @@ mod tests {
 
     #[test]
     fn tool_only_recovery_requires_progress_or_completion() {
-        let notice = tool_only_recovery_notice(6);
+        let notice = tool_only_recovery_notice(6, false);
 
         assert!(notice.contains("Stop broad investigation now"));
         assert!(notice.contains("make the smallest implementation/edit"));
         assert!(notice.contains("provide the final answer"));
         assert!(notice.contains("compiler, test, or command error"));
+    }
+
+    #[test]
+    fn local_filesystem_notice_requires_evidence_synthesis_not_implementation() {
+        let notice = tool_only_recovery_notice(6, true);
+
+        assert!(notice.contains("Synthesize the requested read-only repository brief"));
+        assert!(notice.contains("citations, risks/unknowns, and the next inspection"));
+        assert!(!notice.contains("implementation/edit"));
+    }
+
+    #[test]
+    fn exhausted_local_filesystem_budget_advertises_no_tool_schemas() {
+        let (_dir, mut runner) = runner();
+        runner.enforce_local_filesystem_only();
+        runner.set_local_filesystem_tool_budget(0);
+
+        assert!(runner.tools_for_current_loop().is_empty());
+    }
+
+    #[test]
+    fn ordinary_runner_keeps_its_advertised_tools_without_a_budget() {
+        let (_dir, runner) = runner();
+        let names = runner
+            .tools_for_current_loop()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"fs.read".to_string()));
+        assert!(names.contains(&"web.search".to_string()));
+        assert!(names.contains(&"subagent.run".to_string()));
     }
 
     #[test]
@@ -615,5 +710,23 @@ mod tests {
         assert_eq!(average_tokens_per_second(output_tokens, 2_000), Some(21.0));
         assert_eq!(average_tokens_per_second(output_tokens, 0), None);
         assert_eq!(average_tokens_per_second(None, 2_000), None);
+    }
+
+    #[test]
+    fn local_repo_brief_schemas_exclude_network_execution_and_writes() {
+        let names = local_filesystem_brief_tools()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["fs.read", "fs.list", "fs.stat", "fs.search"]);
+        for forbidden in [
+            "web.search",
+            "cmd.exec",
+            "browser.run",
+            "fs.write",
+            "subagent.run",
+        ] {
+            assert!(!names.iter().any(|name| name == forbidden));
+        }
     }
 }

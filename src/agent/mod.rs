@@ -104,6 +104,38 @@ pub(in crate::agent) enum AgentDisplay {
 
 pub(crate) type SharedDisplayEvents = Arc<Mutex<Vec<AgentDisplayEvent>>>;
 
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct LocalFilesystemToolBudget {
+    max: usize,
+    used: usize,
+}
+
+impl LocalFilesystemToolBudget {
+    pub(crate) fn new(max: usize) -> Self {
+        Self { max, used: 0 }
+    }
+
+    pub(crate) fn try_consume(&mut self) -> bool {
+        if self.used >= self.max {
+            return false;
+        }
+        self.used += 1;
+        true
+    }
+
+    pub(crate) fn exhausted(self) -> bool {
+        self.used >= self.max
+    }
+
+    pub(crate) fn summary(self) -> Value {
+        json!({
+            "max": self.max,
+            "used": self.used,
+            "remaining": self.max.saturating_sub(self.used),
+        })
+    }
+}
+
 pub struct AgentRunner {
     pub(in crate::agent) client: SparkClient,
     pub(in crate::agent) cwd: PathBuf,
@@ -129,6 +161,8 @@ pub struct AgentRunner {
     /// shell/browser/MCP execution for that worker.
     pub(in crate::agent) delegated_write_ownership: Option<Vec<String>>,
     pub(in crate::agent) mcp_registry: Option<McpRegistry>,
+    pub(in crate::agent) local_filesystem_only: bool,
+    pub(in crate::agent) local_filesystem_tool_budget: Option<LocalFilesystemToolBudget>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -252,6 +286,8 @@ impl AgentRunner {
             subagent_team: SubagentTeam::from_environment(),
             delegated_write_ownership: None,
             mcp_registry: None,
+            local_filesystem_only: false,
+            local_filesystem_tool_budget: None,
         })
     }
 
@@ -612,6 +648,9 @@ impl AgentRunner {
                 json!(self.reasoning_effort()),
             );
             object.insert("memory_enabled".to_string(), json!(self.memory_enabled));
+            if let Some(budget) = self.local_filesystem_tool_budget {
+                object.insert("local_filesystem_tool_budget".to_string(), budget.summary());
+            }
             object.insert(
                 "live_context".to_string(),
                 context_pressure_json(&self.input, self.compact_after_chars, self.max_input_chars)
@@ -677,6 +716,23 @@ impl AgentRunner {
 
     pub(crate) fn disable_subagents(&mut self) {
         self.subagent_depth = 1;
+    }
+
+    /// Restrict advertised and executable native tools to read-only local filesystem access.
+    pub(crate) fn enforce_local_filesystem_only(&mut self) {
+        self.local_filesystem_only = true;
+        self.disable_mcp();
+        self.disable_subagents();
+        self.set_mode(AgentMode::Ask);
+    }
+
+    /// Set a deterministic dispatch budget for local filesystem calls in a scoped read-only run.
+    pub(crate) fn set_local_filesystem_tool_budget(&mut self, max: usize) {
+        self.local_filesystem_tool_budget = Some(LocalFilesystemToolBudget::new(max));
+    }
+
+    pub(crate) fn trace_dir(&self) -> Option<PathBuf> {
+        self.trace.as_ref().map(|trace| trace.dir.clone())
     }
 
     pub(in crate::agent) async fn ensure_mcp_registry(&mut self) {

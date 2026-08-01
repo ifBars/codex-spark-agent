@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { ArrowRight, Flask, Info } from "@phosphor-icons/react";
+import usageHistory from "../data/usage-history.json";
 import {
   coverageLabel,
   datasets,
@@ -14,6 +15,7 @@ import { FrontierPendingChart } from "./FrontierPendingChart.jsx";
 import { RankingLedger } from "./RankingLedger.jsx";
 import { ResultsLedger } from "./ResultsLedger.jsx";
 import { ScenarioLens } from "./ScenarioLens.jsx";
+import { UsageEvidence } from "./UsageEvidence.jsx";
 
 function toggleSet(current, value) {
   const next = new Set(current);
@@ -73,6 +75,8 @@ export function BenchmarkExplorer() {
 
           <EvidenceStrip evidence={dataset.evidence} />
 
+          <UsageEvidence history={usageHistory} />
+
           <FilterStrip
             datasetId={datasetId}
             onDatasetChange={(value) => {
@@ -111,7 +115,12 @@ export function BenchmarkExplorer() {
               wide
               showTooltip={false}
             />
-            <RankingLedger rows={rows} xMetric={xMetric} yMetric={yMetric} />
+            <RankingLedger
+              rows={rows}
+              xMetric={xMetric}
+              yMetric={yMetric}
+              hasIntervals={dataset.hasIntervals ?? true}
+            />
           </section>
 
           {visibleViews.length > 1 && (
@@ -164,6 +173,7 @@ export function BenchmarkExplorer() {
             yMetric={yMetric}
             source={dataset.source}
             rangeKind={dataset.rangeKind}
+            showRangeColumns={dataset.hasIntervals ?? true}
           />
         </main>
       </div>

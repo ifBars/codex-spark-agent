@@ -36,10 +36,17 @@ if (report.rows.some((row) => row.success !== true || row.attempts < 1)) {
   throw new Error("Successful-only comparison contains a failed or empty row");
 }
 
-const runnerLabels = {
-  "spark-harness": "Spark harness",
-  "codex-cli": "Codex CLI 0.145.0",
-};
+function runnerLabel(row, runner) {
+  if (runner === "spark-harness") return "Spark harness";
+  if (runner !== "codex-cli") throw new Error(`Unsupported runner label: ${row.runner}`);
+
+  const version = String(row.command_version ?? "").trim();
+  const match = /^codex-cli\s+(.+)$/.exec(version);
+  if (!match) {
+    throw new Error(`Missing Codex CLI command version for ${row.runner}/${row.scenario}`);
+  }
+  return `Codex CLI ${match[1]}`;
+}
 async function sparkTotalTokens(source) {
   const tracePaths = source
     .replace(/^averaged \d+ attempts:\s*/, "")
@@ -79,8 +86,8 @@ const headers = [
 const rows = await Promise.all(report.rows
   .map(async (row) => {
     const [runner, reasoning] = row.runner.split("/");
-    const runnerLabel = runnerLabels[runner];
-    if (!runnerLabel || !["low", "medium", "high"].includes(reasoning)) {
+    const label = runnerLabel(row, runner);
+    if (!["low", "medium", "high"].includes(reasoning)) {
       throw new Error(`Unsupported runner label: ${row.runner}`);
     }
     if (row.attempts > expectedRepeats) {
@@ -90,7 +97,7 @@ const rows = await Promise.all(report.rows
       ? await sparkTotalTokens(row.source)
       : Math.round(Number(row.input_tokens) + Number(row.output_tokens));
     return [
-      runnerLabel,
+      label,
       reasoning,
       row.scenario,
       row.attempts,
