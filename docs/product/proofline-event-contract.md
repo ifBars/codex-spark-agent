@@ -1,8 +1,8 @@
 # Proofline renderer event contract
 
-Status: architecture contract for an additive desktop proof-of-concept. It is
-not an implemented Tauri API. Source audit completed 2026-08-01 against
-`agent/proofline-mvp`.
+Status: architecture contract for the future live Spark boundary. Source audit
+completed 2026-08-01. A separate, fixed-fixture Wave 1 Tauri measurement host
+now exists; it does not implement the live snapshot-plus-delta API below.
 
 ## Decision
 
@@ -144,26 +144,39 @@ timestamp, and source command/tool; generic message text is not review evidence.
 
 ## Implementation sequence
 
-1. Create a desktop-facing Rust module with serializable `ProoflineSnapshot`
+1. Preserve the fixed-fixture Wave 1 host as a narrow measurement boundary;
+   do not expand its categorical ledger into a generic transcript store.
+2. Create a desktop-facing Rust module with serializable `ProoflineSnapshot`
    and `ProoflineDelta`; retain internal `AgentDisplayEvent` and add exhaustive
    mapping tests.
-2. Add read-only `list_sessions`, `load_snapshot`, and `scan_usage_history`
+3. Add read-only `list_sessions`, `load_snapshot`, and `scan_usage_history`
    commands. Use `SessionStore::list` metadata; do not expose SQLite or raw
    history paths to the frontend.
-3. Add `start_run` with Channel relay, IDs/sequences, bounded buffering,
+4. Add `start_run` with Channel relay, IDs/sequences, bounded buffering,
    cancellation, terminal states, and snapshot recovery.
-4. Render the selected Proofline hierarchy. Mark changed files, validations,
+5. Render the selected Proofline hierarchy. Mark changed files, validations,
    checkpoints, approvals, and pricing absent until typed backend records exist.
-5. Add a narrow mode-policy command. Ask is read-only; Work needs a deliberate
+6. Add a narrow mode-policy command. Ask is read-only; Work needs a deliberate
    local-authority explanation. Do not equate either with an OS sandbox. Add
    approve/deny only with a tool-dispatch interception point and durable record.
-6. Add opt-in trace opening/redaction and per-thread lineage only after schema
+7. Add opt-in trace opening/redaction and per-thread lineage only after schema
    and retention review, then run the planned Proofline validation protocol.
 
 ## Explicit unknowns and non-goals
 
-- No Tauri crate, desktop host, frontend-to-Rust command API, or wire schema
-  exists in this repository yet.
+- The Tauri host currently supports only the deterministic Wave 1 fixture,
+  byte-attested fixture evidence, protected categorical measurement, aggregate
+  export, retention deadline metadata, explicit early purge, and lazy automatic
+  crypto-erasure of expired artifacts at the next preflight. It has no timer or
+  background expiry purge. Host-generated event identity, timestamp, and
+  sequence remain inside the encrypted ledger; the
+  renderer cannot submit or retrieve them. Production preflight deliberately
+  remains non-countable until native process-start and actual first-paint
+  instrumentation exists. The host has no live Spark session/run stream,
+  process supervision, restart reconstruction, or snapshot recovery API.
+- The aggregate's invalid-preflight counter covers fixture request/byte
+  failures only. It is not a complete readiness, startup, task-attempt, or
+  participant denominator.
 - No source-backed changed-file/diff/checkpoint/validation/approval model
   exists. The mock is direction, not evidence that those controls work.
 - `AgentSnapshot.input` is provider conversation state, not a privacy-minimized

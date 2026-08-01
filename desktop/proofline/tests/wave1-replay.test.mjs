@@ -1,131 +1,305 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import {
-  WAVE1_EVENT_SCHEMA,
-  WAVE1_FIXTURE_SHA256,
-  canonicalWave1FixtureManifest,
-  createWave1Interaction,
-  createRedactedWave1Export,
-  getWave1Scenario,
-  initialWave1ReplayState,
-  isPrivacySafeWave1Event,
-  reduceWave1ReplayState,
-  wave1FixtureManifest,
-  wave1TaskGroup,
-} from "../src/wave1-replay.js";
+import { createWave1Adapter, isParticipantId, validateAggregate, validateEvent, validateHostAcknowledgement, validateHostPreflight, validateHostSession, validatePurge } from "../src/wave1-bridge.js";
+import { initialWave1MeasurementState, reduceWave1MeasurementState } from "../src/wave1-ledger.js";
+import { getWave1Scenario, initialWave1ReplayViewState, reduceWave1ReplayViewState, WAVE1_FIXTURE_ID, WAVE1_FIXTURE_REVISION, WAVE1_FIXTURE_SHA256, wave1FixtureRequest, wave1TaskGroup } from "../src/wave1-replay.js";
 
-function act(state, type, scenario, extra = {}) {
-  return reduceWave1ReplayState(state, { type, scenario, ...extra });
-}
+const fixtureRequest = wave1FixtureRequest();
+const fixture = { ...fixtureRequest, verified: true, build_verified: true };
+const retention = {
+  status: "encrypted_local",
+  purge_status: "ready",
+  retention_deadline_days: 30,
+  retention_deadline_status: "active",
+};
+const preflight = {
+  capture_mode: "host_authoritative",
+  countable: true,
+  fixture,
+  retention: { ...retention, retention_deadline_status: "not_started" },
+  build: { git_sha: "a".repeat(40), dirty: false },
+};
+const session = {
+  capture_mode: "host_authoritative",
+  countable: true,
+  participant_id: "P01",
+  session_namespace: "wave1-12345678",
+  fixture,
+  retention,
+};
+const aggregate = {
+  schema: "spark.proofline.validation.aggregate.v1",
+  event_count: 8,
+  invalid_preflight_attempt_count: 0,
+  task_counts: [{ task_id: "proofline-1", count: 3 }],
+  outcome_counts: [{ outcome: "success", count: 3 }],
+  hint_count: 1,
+  abandonment_count: 1,
+  first_activity_ms: null,
+  retention,
+  download_ready: true,
+};
+const purge = {
+  purged: true,
+  next_session_namespace: "wave1-87654321",
+  retention: {
+    status: "not_persisted",
+    purge_status: "crypto_erased",
+    retention_deadline_days: 30,
+    retention_deadline_status: "not_started",
+  },
+};
 
-test("Wave 1 exposes all five documented replay tasks with their executable evidence states", () => {
+test("all five rich rehearsal task states remain accessible", () => {
   assert.equal(wave1TaskGroup.tasks.length, 5);
-  assert.deepEqual(wave1TaskGroup.tasks.map((task) => task.scenario), [
-    "repo-brief", "completed-change", "failed-validation", "pending-approval", "partial-usage",
+  const repo = getWave1Scenario("repo-brief");
+  const change = getWave1Scenario("completed-change");
+  const failed = getWave1Scenario("failed-validation");
+  const approval = getWave1Scenario("pending-approval");
+  const usage = getWave1Scenario("partial-usage");
+  assert.match(repo.citation.source, /:\d+$/);
+  assert.equal(change.files.length, 2);
+  assert.equal(change.validation, "Passed fixture validation");
+  assert.match(failed.failureCommand, /^fixture validate/);
+  assert.equal(failed.choices.length, 3);
+  assert.match(approval.policy, /Approve fixture-only/i);
+  assert.deepEqual(usage.sourceReportedTokens, { input: 18742, output: 4396 });
+  assert.equal(usage.pricingState, "unavailable");
+});
+
+test("renderer and native fixture identity share the exact manifest-byte SHA and aggregate schema", () => {
+  const nativeManifestBytes = readFileSync(new URL("../src-tauri/fixtures/wave1-manifest.json", import.meta.url));
+  const nativeTypesSource = readFileSync(new URL("../src-tauri/src/wave1/types.rs", import.meta.url), "utf8");
+  assert.equal(createHash("sha256").update(nativeManifestBytes).digest("hex"), WAVE1_FIXTURE_SHA256);
+  assert.deepEqual(fixtureRequest, {
+    id: WAVE1_FIXTURE_ID,
+    revision: WAVE1_FIXTURE_REVISION,
+    sha256: "29415e0ce8f7659093e01032ce52365197c59d0010bad7aa4361048fdb86abe5",
+  });
+  assert.equal(aggregate.schema, "spark.proofline.validation.aggregate.v1");
+  assert.match(nativeTypesSource, /AGGREGATE_SCHEMA: &str = "spark\.proofline\.validation\.aggregate\.v1"/);
+});
+
+test("visible replay state remains display-only and creates no telemetry identity", () => {
+  let state = initialWave1ReplayViewState;
+  for (const action of [{ type: "start" }, { type: "open-evidence" }, { type: "open-change" }, { type: "recover", choice: "Restore simulated checkpoint" }, { type: "decide", decision: "approve" }, { type: "usage" }]) state = reduceWave1ReplayViewState(state, action);
+  assert.equal(state.openedRepoEvidence, true);
+  assert.equal(state.openedDiff, true);
+  assert.equal(state.recoveryChoice, "Restore simulated checkpoint");
+  assert.equal(state.approvalDecision, "approve");
+  assert.equal(state.usageViewed, true);
+  assert.doesNotMatch(JSON.stringify(state), /event_id|timestamp|occurred_at|sequence|session/i);
+});
+
+test("browser adapter remains visibly non-countable with a zero aggregate and no-op purge", async () => {
+  const adapter = createWave1Adapter({ hostAvailable: false });
+  assert.equal(adapter.kind, "browser");
+  assert.equal((await adapter.preflight(fixtureRequest)).countable, false);
+  assert.equal(
+    (
+      await adapter.startSession({
+        participantId: "P01",
+        fixture: fixtureRequest,
+      })
+    ).countable,
+    false,
+  );
+  assert.equal((await adapter.appendEvent({ event_type: "task_outcome" })).acknowledged, false);
+  assert.deepEqual(await adapter.previewAggregate(), {
+    schema: "spark.proofline.validation.aggregate.v1",
+    event_count: 0,
+    invalid_preflight_attempt_count: 0,
+    task_counts: [],
+    outcome_counts: [],
+    hint_count: 0,
+    abandonment_count: 0,
+    first_activity_ms: null,
+    retention: {
+      status: "not_persisted",
+      purge_status: "not_applicable",
+      retention_deadline_days: 0,
+      retention_deadline_status: "not_applicable",
+    },
+    download_ready: false,
+  });
+  assert.deepEqual(await adapter.purgeSession(), {
+    purged: false,
+    next_session_namespace: "browser-rehearsal",
+    retention: {
+      status: "not_persisted",
+      purge_status: "not_applicable",
+      retention_deadline_days: 0,
+      retention_deadline_status: "not_applicable",
+    },
+  });
+});
+
+test("adapter sends only the constrained snake_case renderer DTO", async () => {
+  const calls = [];
+  const invoke = async (command, args) => {
+    calls.push({ command, args });
+    if (command === "wave1_preflight") return preflight;
+    if (command === "wave1_start_session") return session;
+    if (command === "wave1_append_event") {
+      return { acknowledged: true, event_type: args.event.event_type };
+    }
+    if (command === "wave1_preview_aggregate") return aggregate;
+    return purge;
+  };
+  const adapter = createWave1Adapter({ invoke });
+  await adapter.preflight(fixtureRequest);
+  await adapter.startSession({ participantId: "P01", fixture: fixtureRequest });
+  await adapter.appendEvent({
+    event_type: "run_submitted",
+    participant_id: "P01",
+    task_id: "proofline-1",
+    outcome: "success",
+    capture_mode: "host_authoritative",
+  });
+  await adapter.previewAggregate({ download: true });
+  await adapter.purgeSession();
+  assert.deepEqual(calls, [
+    { command: "wave1_preflight", args: { fixture: fixtureRequest } },
+    {
+      command: "wave1_start_session",
+      args: { participant_id: "P01", fixture: fixtureRequest },
+    },
+    {
+      command: "wave1_append_event",
+      args: {
+        event: {
+          event_type: "run_submitted",
+          participant_id: "P01",
+          task_id: "proofline-1",
+          outcome: "success",
+          capture_mode: "host_authoritative",
+        },
+      },
+    },
+    { command: "wave1_preview_aggregate", args: { download: true } },
+    { command: "wave1_purge_session", args: { confirm: true } },
   ]);
-  assert.match(getWave1Scenario("repo-brief").citation.source, /:\d+$/);
-  assert.equal(getWave1Scenario("completed-change").files.length, 2);
-  assert.equal(getWave1Scenario("completed-change").validation, "Passed fixture validation");
-  assert.equal(getWave1Scenario("failed-validation").runState, "failed");
-  assert.match(getWave1Scenario("failed-validation").failureCommand, /^fixture validate/);
-  assert.match(getWave1Scenario("failed-validation").failureOutput, /assertion failed/i);
-  assert.deepEqual(getWave1Scenario("failed-validation").choices, ["Inspect simulated diff", "Retry simulated validation", "Restore simulated checkpoint"]);
-  assert.equal(getWave1Scenario("pending-approval").runState, "awaiting_approval");
-  assert.equal(getWave1Scenario("partial-usage").usageState, "partial");
-  assert.equal(getWave1Scenario("partial-usage").pricingState, "unavailable");
-  assert.deepEqual(getWave1Scenario("partial-usage").sourceReportedTokens, { input: 18742, output: 4396 });
+  const serialized = JSON.stringify(calls);
+  assert.doesNotMatch(serialized, /thread_id|parent_thread_id|session_id|event_id|occurred_at|timestamp|sequence|content|text/);
 });
 
-test("the replay fixture has a pinned manifest revision, evidence file, and SHA-256 representation", async () => {
-  const actual = createHash("sha256").update(canonicalWave1FixtureManifest()).digest("hex");
-  assert.equal(actual, WAVE1_FIXTURE_SHA256);
-  const evidence = await readFile(new URL("../fixtures/ownership-map.md", import.meta.url));
-  assert.equal(createHash("sha256").update(evidence).digest("hex"), wave1FixtureManifest.evidence_files[0].sha256);
-  assert.equal(evidence.toString("utf8").split(/\r?\n/)[13], getWave1Scenario("repo-brief").citation.excerpt);
+test("host validators accept exact reports and reject unallowlisted response fields", () => {
+  assert.deepEqual(validateHostPreflight(preflight), preflight);
+  const blockedPreflight = {
+    capture_mode: "host_authoritative",
+    countable: false,
+    fixture: {
+      id: "unavailable",
+      revision: "unavailable",
+      sha256: "unavailable",
+      verified: false,
+      build_verified: false,
+    },
+    retention: {
+      ...retention,
+      status: "not_persisted",
+      retention_deadline_status: "not_started",
+    },
+    build: { git_sha: "unknown", dirty: false },
+    reason: "native lifecycle boundary is not verified; countability remains fail-closed",
+  };
+  assert.deepEqual(validateHostPreflight(blockedPreflight), blockedPreflight);
+  assert.deepEqual(validateHostSession(session, "P01"), session);
+  assert.deepEqual(
+    validateHostAcknowledgement({
+      acknowledged: true,
+      event_type: "activity_rendered",
+    }),
+    { acknowledged: true, event_type: "activity_rendered" },
+  );
+  assert.deepEqual(validateAggregate(aggregate), aggregate);
+  assert.deepEqual(validatePurge(purge), purge);
+  assert.throws(() => validateHostSession({ ...session, thread_id: "native-only" }, "P01"), /not verified/i);
+  assert.throws(
+    () =>
+      validateHostAcknowledgement({
+        acknowledged: true,
+        event_type: "run_submitted",
+        event_id: "native-only",
+      }),
+    /invalid/i,
+  );
+  assert.throws(
+    () => validateHostAcknowledgement({ acknowledged: true, event_type: "activity_rendered", latency_ms: 67 }),
+    /invalid/i,
+  );
+  assert.throws(() => validateAggregate({ ...aggregate, thread_id: "native-only" }), /aggregate-only/i);
+  assert.throws(() => {
+    const { invalid_preflight_attempt_count: _, ...missingDenominator } = aggregate;
+    validateAggregate(missingDenominator);
+  }, /aggregate-only/i);
+  assert.throws(
+    () =>
+      validateAggregate({
+        ...aggregate,
+        task_counts: [{ task_id: "proofline-6", count: 1 }],
+      }),
+    /aggregate-only/i,
+  );
+  assert.throws(
+    () =>
+      validateAggregate({
+        ...aggregate,
+        retention: { status: "encrypted_local", purge_status: "ready" },
+      }),
+    /aggregate-only/i,
+  );
 });
 
-test("replay interactions are local, versioned, monotonic, and free of disallowed content", () => {
-  let state = initialWave1ReplayState();
-  state = act(state, "start-replay", "repo-brief");
-  state = act(state, "open-repo-evidence", "repo-brief");
-  state = act(state, "open-diff", "completed-change");
-  state = act(state, "recover", "failed-validation", { choice: "Restore simulated checkpoint" });
-  state = act(state, "decide-approval", "pending-approval", { decision: "approve" });
-  state = act(state, "view-usage", "partial-usage");
-
-  assert.deepEqual(state.events.map((event) => event.sequence), [1, 2, 3, 4, 5, 6, 7, 8]);
-  assert.deepEqual(state.events.map((event) => event.event_id), ["wave1-local-1-1", "wave1-local-1-2", "wave1-local-1-3", "wave1-local-1-4", "wave1-local-1-5", "wave1-local-1-6", "wave1-local-1-7", "wave1-local-1-8"]);
-  assert.equal(state.events[0].event_type, "app_ready");
-  assert.equal(state.events[1].event_type, "run_submitted");
-  assert.equal(state.events[2].event_type, "activity_rendered");
-  assert.equal(state.events[2].latency_ms, 200);
-  for (const event of state.events) {
-    assert.equal(event.schema, WAVE1_EVENT_SCHEMA);
-    assert.equal(event.session_id, "wave1-local-fixture-1");
-    assert.equal(event.participant_id, null);
-    assert.equal(isPrivacySafeWave1Event(event), true);
-    assert.deepEqual(Object.keys(event.metadata).sort(), ["approval_kind", "pricing_state", "task_id", "usage_state", "validation_state"]);
-  }
+test("renderer events reject identity, time, sequence, and freeform fields", () => {
+  const event = {
+    event_type: "task_outcome",
+    participant_id: "P01",
+    task_id: "proofline-3",
+    outcome: "hinted",
+    capture_mode: "host_authoritative",
+  };
+  assert.equal(isParticipantId("P01"), true);
+  assert.equal(isParticipantId("P00"), false);
+  assert.deepEqual(validateEvent(event), event);
+  assert.throws(() => validateEvent({ ...event, event_type: "app_ready" }), /allowlisted/i);
+  assert.throws(() => validateEvent({ ...event, event_type: "recovery_selected" }), /allowlisted/i);
+  for (const extra of [{ prompt: "fixture evidence" }, { thread_id: "renderer-owned" }, { event_id: "renderer-owned" }, { occurred_at: "2026-08-01T00:00:00Z" }, { timestamp_ms: 1 }, { sequence: 1 }, { content: "freeform" }]) assert.throws(() => validateEvent({ ...event, ...extra }), /allowlisted/i);
 });
 
-test("reset, purge, and redacted export remain local fixture operations", () => {
-  let state = initialWave1ReplayState();
-  state = act(state, "start-replay", "repo-brief");
-  state = act(state, "open-repo-evidence", "repo-brief");
-  const exported = createRedactedWave1Export(state.events);
-  assert.equal(exported.redaction, "aggregate-only");
-  assert.equal(exported.event_count, 4);
-  assert.deepEqual(Object.keys(exported).sort(), ["event_count", "event_counts_by_task", "fixture", "redaction", "schema"]);
-  assert.doesNotMatch(JSON.stringify(exported), /wave1-local-|occurred_at|session_id|fixture\/ownership|command|prompt|token/i);
-
-  const reset = act(state, "reset-local-replay", "repo-brief");
-  assert.equal(reset.events.length, 1);
-  assert.equal(reset.events[0].event_type, "app_ready");
-  assert.equal(reset.runEpoch, 2);
-  assert.equal(reset.sessionId, "wave1-local-fixture-2");
-  assert.equal(reset.events[0].event_id, "wave1-local-2-1");
-  assert.notEqual(reset.events[0].event_id, state.events[0].event_id);
-  const purged = act(state, "purge-local-events", "repo-brief");
-  assert.equal(purged.events.length, 0);
-  assert.equal(purged.nextSequence, 1);
-  assert.equal(purged.runEpoch, state.runEpoch + 1);
-  assert.equal(purged.sessionId, "wave1-local-fixture-2");
-  assert.equal(purged.purged, true);
-
-  const afterPurge = act(purged, "open-repo-evidence", "repo-brief");
-  assert.equal(afterPurge.events[0].event_id, "wave1-local-2-1");
-  assert.notEqual(afterPurge.events[0].event_id, state.events[0].event_id);
-});
-
-test("recovery and approval actions change only simulated local replay state", () => {
-  const recovered = act(initialWave1ReplayState(), "recover", "failed-validation", { choice: "Retry simulated validation" });
-  assert.equal(recovered.recoveryChoice, "Retry simulated validation");
-  assert.equal(recovered.events[1].run_state, "failed");
-  assert.equal(recovered.events[1].metadata.validation_state, "failed");
-
-  const denied = act(initialWave1ReplayState(), "decide-approval", "pending-approval", { decision: "deny" });
-  assert.equal(denied.approvalDecision, "deny");
-  assert.equal(denied.events[1].event_type, "approval_decided");
-  assert.equal(denied.events[1].metadata.approval_kind, "file_change");
-  assert.equal(denied.events[1].result, "abandoned");
-});
-
-test("event construction rejects unrecognized event categories rather than accepting arbitrary payloads", () => {
-  assert.throws(() => createWave1Interaction({
-    sequence: 1,
-    taskId: "proofline-1",
-    eventType: "network_posted",
-    runState: "completed",
-    surface: "transcript",
-  }), /Unsupported Wave 1 event type/);
-  assert.throws(() => createWave1Interaction({
-    sequence: 1,
-    taskId: "proofline-1",
-    eventType: "approval_decided",
-    runState: "completed",
-    surface: "transcript",
-    metadata: { approval_kind: "C:/private/customer/repo" },
-  }), /Unsupported Wave 1 metadata category/);
+test("measurement reducer receives validated host reports without inventing authority", () => {
+  let state = reduceWave1MeasurementState(initialWave1MeasurementState, {
+    type: "preflight",
+    capture: preflight,
+    fixture,
+    retention: preflight.retention,
+  });
+  state = reduceWave1MeasurementState(state, {
+    type: "session",
+    capture: session,
+    fixture,
+    retention,
+    sessionNamespace: session.session_namespace,
+  });
+  state = reduceWave1MeasurementState(state, {
+    type: "ack",
+    eventType: "activity_rendered:success",
+    acknowledgement: {
+      acknowledged: true,
+      event_type: "activity_rendered",
+    },
+  });
+  assert.equal(state.sessionNamespace, session.session_namespace);
+  assert.equal(state.acknowledgements["activity_rendered:success"].acknowledged, true);
+  assert.equal(state.acknowledgements["activity_rendered:success"].latency_ms, undefined);
+  const afterPurge = reduceWave1MeasurementState(state, {
+    type: "purged",
+    capture: { ...preflight, retention: purge.retention },
+    retention: purge.retention,
+    nextSessionNamespace: purge.next_session_namespace,
+  });
+  assert.equal(afterPurge.sessionNamespace, null);
+  assert.equal(afterPurge.purged, true);
 });

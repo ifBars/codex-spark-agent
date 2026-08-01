@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "The local Proofline window can invoke its five Wave 1 host commands.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

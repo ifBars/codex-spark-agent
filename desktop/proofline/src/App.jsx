@@ -1,290 +1,661 @@
-import { useReducer, useState } from "react";
-import {
-  ArrowRight,
-  CaretDown,
-  CaretRight,
-  CheckCircle,
-  Circle,
-  Clock,
-  Cube,
-  FileCode,
-  FolderSimple,
-  Gear,
-  GitBranch,
-  Info,
-  Minus,
-  PaperPlaneTilt,
-  PencilSimple,
-  ShieldCheck,
-  Sparkle,
-  Tag,
-  UserCircle,
-  X,
-} from "@phosphor-icons/react";
-import {
-  authorityModes,
-  getTaskFixture,
-  hasDetailedEvidence,
-  initialProoflineViewState,
-  prototypeSubmissionNotice,
-  reduceProoflineViewState,
-  taskGroups,
-} from "./proofline-state.js";
-import {
-  createRedactedWave1Export,
-  getWave1Scenario,
-  initialWave1ReplayState,
-  reduceWave1ReplayState,
-  WAVE1_FIXTURE_ID,
-  WAVE1_FIXTURE_REVISION,
-  WAVE1_FIXTURE_SHA256,
-} from "./wave1-replay.js";
+import { useEffect, useMemo, useReducer, useState } from "react";
+import { ArrowRight, CaretDown, CheckCircle, Circle, Clock, Cube, FileCode, Gear, GitBranch, Info, Minus, PaperPlaneTilt, PencilSimple, ShieldCheck, Sparkle, Tag, UserCircle, X } from "@phosphor-icons/react";
+import { authorityModes, getTaskFixture, initialProoflineViewState, prototypeSubmissionNotice, reduceProoflineViewState, taskGroups } from "./proofline-state.js";
+import { createWave1Adapter, isParticipantId } from "./wave1-bridge.js";
+import { initialWave1MeasurementState, reduceWave1MeasurementState } from "./wave1-ledger.js";
+import { getWave1Scenario, initialWave1ReplayViewState, reduceWave1ReplayViewState, wave1FixtureRequest } from "./wave1-replay.js";
+import prooflineMark from "../assets/proofline-mark.png";
 
 function ThreadItem({ thread, active, onClick }) {
   return (
     <button className={`thread-item ${active ? "selected" : ""}`} onClick={onClick} type="button">
       <span className="thread-copy">
         <span className="thread-title">{thread.title}</span>
-        <span className="thread-meta">{thread.time}<span className="dot">•</span>{thread.elapsed}</span>
+        <span className="thread-meta">
+          {thread.time}
+          <span className="dot">•</span>
+          {thread.elapsed}
+        </span>
       </span>
-      {thread.complete ? <CheckCircle size={17} weight="regular" /> : <Circle size={17} weight="regular" />}
+      {thread.complete ? <CheckCircle size={17} /> : <Circle size={17} />}
     </button>
   );
 }
-
-function ActionButton({ children, icon: Icon, onClick, primary = false, disabled = false, title }) {
+function CaptureState({ measurement }) {
+  const capture = measurement.capture;
+  const native = capture?.capture_mode === "host_authoritative";
+  const countable = capture?.countable === true;
+  const verified = capture?.fixture?.verified === true && capture?.fixture?.build_verified === true && capture?.build?.dirty === false;
+  const deadline = countable && measurement.retention?.retention_deadline_status === "active" ? `${measurement.retention.retention_deadline_days}-day deadline active` : "Not persisted";
   return (
-    <button type="button" className={`action-button ${primary ? "primary" : ""}`} disabled={disabled} onClick={onClick} title={title}>
-      <span>{children}</span><Icon size={19} weight="regular" />
-    </button>
-  );
-}
-
-function PrototypeBoundary() {
-  return (
-    <p className="prototype-boundary" role="note">
-      <Info size={15} weight="fill" />
-      Simulated prototype data — not connected to a Spark session, repository, or provider account.
-    </p>
-  );
-}
-
-function UnavailableEvidence({ task }) {
-  return (
-    <section className="evidence-section evidence-unavailable" aria-labelledby="evidence-heading">
-      <div className="section-heading"><h2 id="evidence-heading">Evidence</h2><span className="evidence-state">Not recorded</span></div>
-      <div className="evidence-empty" role="status">
-        <Info size={18} weight="regular" />
-        <div><strong>No detailed fixture evidence</strong><span>{task.evidence.message} Files, validation, work steps, checkpoint, and token counts are unavailable for this task.</span></div>
+    <section className={`measurement-state ${countable ? "verified" : "rehearsal"}`} aria-live="polite">
+      <div>
+        <span>Capture mode</span>
+        <strong>{countable ? "Host-authoritative" : native ? "Native preflight blocked" : "Browser rehearsal"}</strong>
+      </div>
+      <div>
+        <span>Fixture / build</span>
+        <strong>{verified ? "Verified" : "Not host-verified"}</strong>
+      </div>
+      <div>
+        <span>Counting</span>
+        <strong>{countable ? "Countable" : "Non-countable"}</strong>
+      </div>
+      <div>
+        <span>Retention</span>
+        <strong>{deadline}</strong>
       </div>
     </section>
   );
 }
-
-function SimulatedEvidence({ task, viewState, dispatchView, setNotice }) {
-  const { evidence } = task;
-  const focusedFile = viewState.focusedFile ?? evidence.files[0][0];
-
+function RendererReceipt({ acknowledgements }) {
+  const acknowledgement = acknowledgements["activity_rendered:success"];
+  if (!acknowledgement) return null;
   return (
-    <>
-      <section className="evidence-section" aria-labelledby="changed-files-heading">
-        <div className="section-heading"><h2 id="changed-files-heading">Simulated changed files</h2><span className="count">{evidence.files.length}</span><span className="fixture-label">Fixture only</span></div>
+    <div className="replay-event-note" role="status">
+      Host accepted a non-authoritative renderer receipt. It is not a process-start boundary, actual first paint, or official lifecycle timing.
+    </div>
+  );
+}
+function AggregatePanel({ aggregate }) {
+  if (!aggregate) return null;
+  return (
+    <div className="replay-export" role="status">
+      <strong>Aggregate-only preview</strong>
+      <span>
+        {aggregate.event_count} categorical events. Hints: {aggregate.hint_count}; abandonments: {aggregate.abandonment_count}. No prompts, paths, commands, diffs, raw token values, identities, fixture content, or lifecycle records are exported.
+      </span>
+    </div>
+  );
+}
+function ReplayEventNote({ countable }) {
+  return <p className="replay-event-note">{countable ? "Displayed fixture content is never included in host telemetry; only supported categorical events are acknowledged." : "This browser rehearsal updates visible state only. It is non-countable and sends no telemetry."}</p>;
+}
+
+function OutcomeControls({ recordOutcome }) {
+  return (
+    <div className="replay-actions">
+      <button type="button" className="action-button primary" onClick={() => recordOutcome("success")}>
+        <span>Complete task</span>
+        <CheckCircle size={17} />
+      </button>
+      <button type="button" className="action-button" onClick={() => recordOutcome("failure")}>
+        <span>Record failure</span>
+        <ArrowRight size={17} />
+      </button>
+      <button type="button" className="action-button" onClick={() => recordOutcome("hinted")}>
+        <span>Request hint</span>
+        <Info size={17} />
+      </button>
+      <button type="button" className="action-button" onClick={() => recordOutcome("abandoned")}>
+        <span>Abandon task</span>
+        <X size={17} />
+      </button>
+    </div>
+  );
+}
+
+function RichReplay({ selected, replay, dispatchReplay, recordOutcome, countable, setNotice }) {
+  const scenario = getWave1Scenario(selected.scenario);
+  const display = (action, notice) => {
+    dispatchReplay(action);
+    setNotice(notice);
+  };
+  if (selected.scenario === "repo-brief")
+    return (
+      <section className="replay-section" aria-label="Wave 1 Task 1 replay">
+        <div className="section-heading">
+          <h2>Repo Brief evidence</h2>
+          <span className="fixture-label">Task 1 of 5</span>
+        </div>
+        <div className="replay-card">
+          <p>
+            Likely ownership boundary: <strong>{scenario.answer}</strong>
+          </p>
+          <button className="action-button primary" type="button" disabled={!replay.runStarted} onClick={() => display({ type: "open-evidence" }, "Opened cited rehearsal evidence. Content remains display-only.")}>
+            <span>Open cited evidence</span>
+            <ArrowRight size={18} />
+          </button>
+        </div>
+        {replay.openedRepoEvidence && (
+          <div className="replay-detail">
+            <strong>{scenario.citation.source}</strong>
+            <p>{scenario.citation.excerpt}</p>
+            <p>
+              <b>Uncertainty:</b> {scenario.uncertainty}
+            </p>
+            <p>
+              <b>Next check:</b> {scenario.nextCheck}
+            </p>
+          </div>
+        )}
+        <OutcomeControls recordOutcome={recordOutcome} />
+        <ReplayEventNote countable={countable} />
+      </section>
+    );
+  if (selected.scenario === "completed-change")
+    return (
+      <section className="replay-section" aria-label="Wave 1 Task 2 replay">
+        <div className="section-heading">
+          <h2>Completed fixture evidence</h2>
+          <span className="fixture-label">Task 2 of 5</span>
+        </div>
         <div className="file-ledger">
-          {evidence.files.map(([path, added, removed, explanation]) => (
-            <button className="file-row" type="button" key={path} onClick={() => { dispatchView({ type: "select-file", path }); setNotice(`Opened simulated file inspector for ${path}.`); }}>
-              <FileCode size={15} weight="regular" /><code>{path}</code><span className="added">{added}</span><span className="removed">{removed}</span><span className="file-note">{explanation}</span>
+          {scenario.files.map((file) => (
+            <button className="file-row" type="button" key={file} onClick={() => display({ type: "open-change" }, "Opened the simulated two-file change. No diff content was captured.")}>
+              <FileCode size={15} />
+              <code>{file}</code>
+              <span className="added">fixture</span>
+              <span className="removed">only</span>
+              <span className="file-note">Simulated changed-file record</span>
             </button>
           ))}
         </div>
-        {viewState.showFiles && <aside className="file-inspector" aria-label="Simulated file inspector">
-          <div><span>Simulated file inspector</span><strong>{focusedFile}</strong></div>
-          <p>This fixture demonstrates the review anatomy only. It does not open a local file or expose a real diff.</p>
-        </aside>}
-      </section>
-
-      <section className="validation-section" aria-labelledby="validation-heading">
-        <div className="section-heading validation-heading"><h2 id="validation-heading">Simulated validation</h2><span className="all-passed"><CheckCircle size={16} />Fixture checks passed</span></div>
-        <div className="validation-list">
-          {evidence.validations.map(([command, duration]) => <button type="button" className="validation-row" key={command} onClick={() => setNotice(`Selected simulated validation output: ${command}`)}><CheckCircle size={16} /><code>{command}</code><span>{duration}</span></button>)}
+        <div className="replay-detail">
+          <p>
+            <CheckCircle size={16} /> <b>{scenario.validation}</b>
+          </p>
+          <p>
+            Checkpoint: <strong>{scenario.checkpoint}</strong>
+          </p>
+          {replay.openedDiff && <p>Simulated change inspection is open. This rehearsal never reads a local repository.</p>}
         </div>
-        <button type="button" className="output-link" onClick={() => setNotice("This fixture has no local command output to open.")}>About this fixture <ArrowRight size={15} /></button>
+        <OutcomeControls recordOutcome={recordOutcome} />
+        <ReplayEventNote countable={countable} />
       </section>
+    );
+  if (selected.scenario === "failed-validation")
+    return (
+      <section className="replay-section" aria-label="Wave 1 Task 3 replay">
+        <div className="section-heading">
+          <h2>Failed fixture validation</h2>
+          <span className="fixture-label">Task 3 of 5</span>
+        </div>
+        <div className="replay-detail replay-failure">
+          <p>
+            <b>{scenario.validation}</b>
+          </p>
+          <p>{scenario.failure}</p>
+          <p>
+            <b>Simulated command:</b> <code>{scenario.failureCommand}</code>
+          </p>
+          <p>
+            <b>Simulated result:</b> {scenario.failureOutput}
+          </p>
+          <p>This is a failed run state, not a completed result.</p>
+        </div>
+        <div className="replay-actions">
+          {scenario.choices.map((choice) => (
+            <button type="button" className="action-button" key={choice} onClick={() => display({ type: "recover", choice }, `${choice} selected in the visible rehearsal.`)}>
+              <span>{choice}</span>
+              <ArrowRight size={17} />
+            </button>
+          ))}
+        </div>
+        {replay.recoveryChoice && (
+          <p className="replay-detail">
+            <b>Selected recovery:</b> {replay.recoveryChoice}. No validation, retry, restore, or repository mutation ran.
+          </p>
+        )}
+        <OutcomeControls recordOutcome={recordOutcome} />
+        <ReplayEventNote countable={countable} />
+      </section>
+    );
+  if (selected.scenario === "pending-approval")
+    return (
+      <section className="replay-section" aria-label="Wave 1 Task 4 replay">
+        <div className="section-heading">
+          <h2>Pending fixture approval</h2>
+          <span className="fixture-label">Task 4 of 5</span>
+        </div>
+        <div className="replay-detail replay-approval">
+          <p>
+            <b>Run status: awaiting approval</b>
+          </p>
+          <p>Requested authority: fixture file change.</p>
+          <p>
+            <b>Policy card:</b> {scenario.policy}
+          </p>
+        </div>
+        <div className="replay-actions">
+          <button type="button" className="action-button" onClick={() => display({ type: "open-change" }, "Opened the fixture approval policy.")}>
+            <span>Review policy</span>
+            <ArrowRight size={17} />
+          </button>
+          <button type="button" className="action-button primary" onClick={() => display({ type: "decide", decision: "approve" }, "Approved fixture-only file change in the rehearsal.")}>
+            <span>Approve fixture change</span>
+            <CheckCircle size={18} />
+          </button>
+          <button type="button" className="action-button" onClick={() => display({ type: "decide", decision: "deny" }, "Denied fixture request in the rehearsal.")}>
+            <span>Deny request</span>
+            <X size={18} />
+          </button>
+        </div>
+        {replay.approvalDecision && (
+          <p className="replay-detail">
+            <b>Policy outcome:</b> {replay.approvalDecision === "approve" ? "approved fixture-only file change" : "denied request"}. No authority was granted.
+          </p>
+        )}
+        <OutcomeControls recordOutcome={recordOutcome} />
+        <ReplayEventNote countable={countable} />
+      </section>
+    );
+  return (
+    <section className="replay-section" aria-label="Wave 1 Task 5 replay">
+      <div className="section-heading">
+        <h2>Usage and handoff boundary</h2>
+        <span className="fixture-label">Task 5 of 5</span>
+      </div>
+      <div className="replay-detail">
+        <p>
+          <b>Source-reported fixture tokens:</b> {scenario.sourceReportedTokens.input.toLocaleString()} input · {scenario.sourceReportedTokens.output.toLocaleString()} output.
+        </p>
+        <p>
+          <b>Usage coverage:</b> Partial source-reported history; this is not quota.
+        </p>
+        <p>
+          <b>Pricing:</b> Unavailable. This does not mean free or complete.
+        </p>
+        <p>{scenario.handoff}</p>
+      </div>
+      <button type="button" className="action-button primary" onClick={() => display({ type: "usage" }, "Partial usage and unavailable pricing were reviewed.")}>
+        <span>{replay.usageViewed ? "Usage boundary reviewed" : "Review usage boundary"}</span>
+        <ArrowRight size={18} />
+      </button>
+      <OutcomeControls recordOutcome={recordOutcome} />
+      <ReplayEventNote countable={countable} />
+    </section>
+  );
+}
 
-      <section className={`how-worked ${viewState.showWork ? "open" : ""}`}>
-        <button type="button" className="how-worked-toggle" onClick={() => dispatchView({ type: "toggle-work" })} aria-expanded={viewState.showWork}>
-          {viewState.showWork ? <CaretDown size={18} /> : <CaretRight size={18} />}<strong>How the fixture is structured</strong><span>Simulated plan, evidence, and validation</span><small>{evidence.work.length} steps</small>
-        </button>
-        {viewState.showWork && <div className="work-details">{evidence.work.map(([label, description]) => <div key={label}><strong>{label}</strong><span>{description}</span></div>)}</div>}
+function Wave1Measurement({ selected, measurement, dispatch, setNotice }) {
+  const adapter = useMemo(() => createWave1Adapter(), []);
+  const [replay, dispatchReplay] = useReducer(reduceWave1ReplayViewState, initialWave1ReplayViewState);
+  const [confirmPurge, setConfirmPurge] = useState(false);
+  const active = measurement.phase === "active" && measurement.capture?.countable === true;
+  const nativeBlocked = measurement.capture?.capture_mode === "host_authoritative" && measurement.capture?.countable !== true;
+  useEffect(() => {
+    let alive = true;
+    const fixture = wave1FixtureRequest();
+    adapter
+      .preflight(fixture)
+      .then((capture) => {
+        if (!alive) return;
+        dispatch({
+          type: "preflight",
+          capture,
+          fixture: capture.fixture,
+          retention: capture.retention,
+        });
+        setNotice(capture.countable ? "Host preflight passed. Start a host-owned Wave 1 session." : capture.capture_mode === "host_authoritative" ? "Native preflight is deliberately non-countable until lifecycle instrumentation is complete. The five tasks remain available as rehearsal." : "Browser rehearsal is functional but deliberately non-countable; host verification is required to capture measurement.");
+      })
+      .catch((error) => alive && dispatch({ type: "error", error: error.message }));
+    return () => {
+      alive = false;
+    };
+  }, [adapter, dispatch, setNotice]);
+  async function append(eventType, outcome, allowStartingSession = false) {
+    if (!active && !allowStartingSession) return;
+    try {
+      const acknowledgement = await adapter.appendEvent({
+        event_type: eventType,
+        participant_id: measurement.participantId,
+        task_id: getWave1Scenario(selected.scenario).taskId,
+        outcome,
+        capture_mode: "host_authoritative",
+      });
+      dispatch({
+        type: "ack",
+        eventType: `${eventType}:${outcome}`,
+        acknowledgement,
+      });
+    } catch (error) {
+      dispatch({ type: "error", error: error.message });
+    }
+  }
+  async function startSession() {
+    if (!isParticipantId(measurement.participantId)) {
+      dispatch({
+        type: "error",
+        error: "Use a pseudonymous participant label from P01 through P99.",
+      });
+      return;
+    }
+    try {
+      const result = await adapter.startSession({
+        participantId: measurement.participantId,
+        fixture: wave1FixtureRequest(),
+      });
+      dispatch({
+        type: "session",
+        capture: result,
+        fixture: result.fixture,
+        retention: result.retention,
+        sessionNamespace: result.session_namespace,
+      });
+      dispatchReplay({ type: "start" });
+      if (!result.countable) {
+        setNotice("Browser rehearsal started. It does not create a countable session, aggregate, or persisted measurement.");
+        return;
+      }
+      await append("run_submitted", "success", true);
+      await append("activity_rendered", "success", true);
+      setNotice("Host accepted a constrained submission event and non-authoritative renderer receipt. Official lifecycle timing remains separate protocol work.");
+    } catch (error) {
+      dispatch({ type: "error", error: error.message });
+    }
+  }
+  async function recordOutcome(outcome) {
+    if (!active) {
+      setNotice("Outcome controls remain visible in rehearsal, but only a verified host session can record them.");
+      return;
+    }
+    await append("task_outcome", outcome);
+    setNotice(`Host acknowledged the categorical ${outcome} outcome.`);
+  }
+  async function preview(download = false) {
+    try {
+      const aggregate = await adapter.previewAggregate({ download });
+      if (!measurement.capture?.countable) {
+        setNotice("Browser rehearsal has no countable aggregate. Connect the host to create one.");
+        return;
+      }
+      dispatch({ type: "aggregate", aggregate });
+      setNotice(download && aggregate.download_ready ? "Host prepared an aggregate-only download." : "Host returned an aggregate-only preview.");
+    } catch (error) {
+      dispatch({ type: "error", error: error.message });
+    }
+  }
+  async function purge() {
+    try {
+      const result = await adapter.purgeSession();
+      setConfirmPurge(false);
+      if (!result.purged) {
+        setNotice("Browser rehearsal has no persisted measurement to purge.");
+        return;
+      }
+      dispatch({
+        type: "purged",
+        capture: { ...measurement.capture, retention: result.retention },
+        retention: result.retention,
+        nextSessionNamespace: result.next_session_namespace,
+      });
+      setNotice("Host confirmed purge. Start a fresh session before recording more measurement.");
+    } catch (error) {
+      dispatch({ type: "error", error: error.message });
+    }
+  }
+  return (
+    <>
+      <section className="replay-fixture-controls" aria-label="Wave 1 measurement controls">
+        <div>
+          <span>Wave 1 measurement</span>
+          <strong>Host-authoritative only after preflight</strong>
+          <small>The renderer displays fixture evidence but sends only supported categorical event DTOs.</small>
+        </div>
+        <p>Enter a pseudonymous participant ID. The native host owns ledger event identity, ordering, and receipt timestamps.</p>
+        <CaptureState measurement={measurement} />
+        {nativeBlocked && <p className="replay-event-note">Native capture is installed but not participant-countable. Process-start and actual first-paint instrumentation remain outstanding.</p>}
+        <div className="measurement-start">
+          <label>
+            Pseudonymous participant ID
+            <input
+              aria-label="Pseudonymous participant ID"
+              value={measurement.participantId}
+              onChange={(event) =>
+                dispatch({
+                  type: "participant",
+                  participantId: event.target.value.toUpperCase(),
+                })
+              }
+              maxLength="3"
+              placeholder="P01"
+              pattern="P(?:0[1-9]|[1-9][0-9])"
+            />
+          </label>
+          <button type="button" className="action-button primary" onClick={startSession} disabled={active || nativeBlocked}>
+            <span>{active ? "Measurement active" : nativeBlocked ? "Native preflight blocked" : "Start measurement"}</span>
+            <ArrowRight size={17} />
+          </button>
+        </div>
+        <div className="replay-actions">
+          <button type="button" className="action-button" onClick={() => preview(false)}>
+            <span>Preview aggregate</span>
+            <ArrowRight size={17} />
+          </button>
+          <button type="button" className="action-button" onClick={() => preview(true)}>
+            <span>Download aggregate</span>
+            <ArrowRight size={17} />
+          </button>
+          <button type="button" className="action-button" onClick={() => setConfirmPurge(true)}>
+            <span>Purge session</span>
+            <X size={17} />
+          </button>
+        </div>
+        {confirmPurge && (
+          <div className="replay-detail replay-failure" role="alert">
+            <p>
+              <b>Purge local measurement?</b> {measurement.capture?.countable ? "This invokes host crypto-erasure for the active session." : "No countable measurement is active; confirming exercises the host or browser no-op boundary."}
+            </p>
+            <div className="replay-actions">
+              <button type="button" className="action-button primary" onClick={purge}>
+                <span>Confirm purge</span>
+                <X size={17} />
+              </button>
+              <button type="button" className="action-button" onClick={() => setConfirmPurge(false)}>
+                <span>Cancel</span>
+                <ArrowRight size={17} />
+              </button>
+            </div>
+          </div>
+        )}
+        {measurement.sessionNamespace && <p className="replay-event-note">{measurement.capture?.countable ? "A host-owned measurement namespace is active. Its authoritative event IDs, timestamps, and sequence stay inside the protected native ledger." : "Browser rehearsal state is volatile and non-countable; its aggregate remains zero and reload retains no measurement state."}</p>}
+        <RendererReceipt acknowledgements={measurement.acknowledgements} />
+        {measurement.purged && <p className="replay-event-note">Host confirmed explicit purge. A new session is required before any countable interaction.</p>}
+        {measurement.error && (
+          <p className="measurement-error" role="alert">
+            {measurement.error}
+          </p>
+        )}
+        <AggregatePanel aggregate={measurement.aggregate} />
       </section>
+      <RichReplay selected={selected} replay={replay} dispatchReplay={dispatchReplay} recordOutcome={recordOutcome} countable={active} setNotice={setNotice} />
     </>
   );
 }
 
-function ReplayEventNote({ eventCount }) {
-  return <p className="replay-event-note" role="status">Local fixture interactions recorded: {eventCount}. Event payloads exclude fixture content, prompts, paths, commands, diffs, raw tokens, identities, and transport.</p>;
-}
-
-function ReplayFixtureControls({ selected, replayState, dispatchReplay, setNotice }) {
-  const redacted = createRedactedWave1Export(replayState.events);
-  const act = (action, notice) => {
-    dispatchReplay({ ...action, scenario: selected.scenario });
-    setNotice(notice);
-  };
-  return <section className="replay-fixture-controls" aria-label="Local replay fixture controls">
-    <div><span>Local replay fixture</span><strong>{WAVE1_FIXTURE_ID}</strong><small>Revision {WAVE1_FIXTURE_REVISION} · SHA-256 {WAVE1_FIXTURE_SHA256.slice(0, 12)}…</small></div>
-    <p>Deterministic, local-only fixture. The manifest identity is displayed for facilitator preflight; this browser prototype does not verify an archive or collect launch samples.</p>
-    <div className="replay-actions"><button type="button" className="action-button primary" disabled={replayState.runStarted} onClick={() => act({ type: "start-replay" }, "Replay submitted; first visible fixture activity rendered after 200 ms.")}>{replayState.runStarted ? "Replay activity rendered" : "Start selected replay"} <ArrowRight size={17} /></button><button type="button" className="action-button" onClick={() => act({ type: "view-redacted-export" }, "Redacted aggregate preview prepared locally.")}>Preview redacted export <ArrowRight size={17} /></button><button type="button" className="action-button" onClick={() => act({ type: "reset-local-replay" }, "Fixture state reset locally. No external profile or repository was changed.")}>Reset fixture <ArrowRight size={17} /></button><button type="button" className="action-button" onClick={() => act({ type: "purge-local-events" }, "In-memory replay events purged. This prototype has no persistent event store.")}>Purge local events <X size={17} /></button></div>
-    {replayState.exportViewed && <div className="replay-export" role="status"><strong>Redacted aggregate preview</strong><span>Fixture {redacted.fixture.revision}; {redacted.event_count} local event categories across {redacted.event_counts_by_task.length} task(s). No event IDs, timestamps, prompts, fixture paths, commands, diffs, raw tokens, identities, or transport details are exported.</span></div>}
-    {replayState.purged && <p className="replay-event-note">Local in-memory replay events are empty after purge.</p>}
-  </section>;
-}
-
-function Wave1Replay({ selected, replayState, dispatchReplay, setNotice }) {
-  const scenario = getWave1Scenario(selected.scenario);
-  const act = (action, notice) => {
-    dispatchReplay({ ...action, scenario: selected.scenario });
-    setNotice(notice);
-  };
-
-  if (selected.scenario === "repo-brief") {
-    return <section className="replay-section" aria-label="Wave 1 Task 1 replay">
-      <div className="section-heading"><h2>Repo Brief evidence</h2><span className="fixture-label">Task 1 of 5</span></div>
-      <div className="replay-card"><p>Likely ownership boundary: <strong>{scenario.answer}</strong></p><button className="action-button primary" type="button" disabled={!replayState.runStarted} onClick={() => act({ type: "open-repo-evidence" }, "Opened the cited fixture evidence.")}>Open cited evidence <ArrowRight size={18} /></button></div>
-      {replayState.openedRepoEvidence && <div className="replay-detail"><strong>{scenario.citation.source}</strong><p>{scenario.citation.excerpt}</p><p><b>Uncertainty:</b> {scenario.uncertainty}</p><p><b>Next check:</b> {scenario.nextCheck}</p></div>}
-      <ReplayEventNote eventCount={replayState.events.length} />
-    </section>;
-  }
-
-  if (selected.scenario === "completed-change") {
-    return <section className="replay-section" aria-label="Wave 1 Task 2 replay">
-      <div className="section-heading"><h2>Completed fixture evidence</h2><span className="fixture-label">Task 2 of 5</span></div>
-      <div className="file-ledger">{scenario.files.map((file) => <button className="file-row" type="button" key={file} onClick={() => act({ type: "open-diff" }, "Opened the simulated two-file change.")}><FileCode size={15} /><code>{file}</code><span className="added">fixture</span><span className="removed">only</span><span className="file-note">Simulated changed-file record</span></button>)}</div>
-      <div className="replay-detail"><p><CheckCircle size={16} /> <b>{scenario.validation}</b></p><p>Checkpoint: <strong>{scenario.checkpoint}</strong></p>{replayState.openedDiff && <p>Simulated diff inspection is open. This fixture does not read a local repository.</p>}</div>
-      <ReplayEventNote eventCount={replayState.events.length} />
-    </section>;
-  }
-
-  if (selected.scenario === "failed-validation") {
-    return <section className="replay-section" aria-label="Wave 1 Task 3 replay">
-      <div className="section-heading"><h2>Failed fixture validation</h2><span className="fixture-label">Task 3 of 5</span></div>
-      <div className="replay-detail replay-failure"><p><b>{scenario.validation}</b></p><p>{scenario.failure}</p><p><b>Simulated command:</b> <code>{scenario.failureCommand}</code></p><p><b>Simulated result:</b> {scenario.failureOutput}</p><p>This is a failed run state, not a completed result.</p></div>
-      <div className="replay-actions">{scenario.choices.map((choice) => <button type="button" className="action-button" key={choice} onClick={() => act({ type: "recover", choice }, `${choice} selected in the simulated replay.`)}>{choice} <ArrowRight size={17} /></button>)}</div>
-      {replayState.recoveryChoice && <p className="replay-detail"><b>Recorded recovery choice:</b> {replayState.recoveryChoice}. No validation, retry, restore, or repository mutation ran.</p>}
-      <ReplayEventNote eventCount={replayState.events.length} />
-    </section>;
-  }
-
-  if (selected.scenario === "pending-approval") {
-    return <section className="replay-section" aria-label="Wave 1 Task 4 replay">
-      <div className="section-heading"><h2>Pending fixture approval</h2><span className="fixture-label">Task 4 of 5</span></div>
-      <div className="replay-detail replay-approval"><p><b>Run status: awaiting approval</b></p><p>Requested authority: fixture file change.</p><p><b>Policy card:</b> {scenario.policy}</p></div>
-      <div className="replay-actions"><button type="button" className="action-button primary" onClick={() => act({ type: "decide-approval", decision: "approve" }, "Fixture file-change approval recorded locally.")}>Approve fixture change <CheckCircle size={18} /></button><button type="button" className="action-button" onClick={() => act({ type: "decide-approval", decision: "deny" }, "Fixture approval denial recorded locally.")}>Deny request <X size={18} /></button></div>
-      {replayState.approvalDecision && <p className="replay-detail"><b>Policy outcome:</b> {replayState.approvalDecision === "approve" ? "approved fixture-only file change" : "denied request"}. No authority was granted.</p>}
-      <ReplayEventNote eventCount={replayState.events.length} />
-    </section>;
-  }
-
-  return <section className="replay-section" aria-label="Wave 1 Task 5 replay">
-    <div className="section-heading"><h2>Usage and handoff boundary</h2><span className="fixture-label">Task 5 of 5</span></div>
-    <div className="replay-detail"><p><b>Source-reported fixture tokens:</b> {scenario.sourceReportedTokens.input.toLocaleString()} input · {scenario.sourceReportedTokens.output.toLocaleString()} output.</p><p><b>Usage coverage:</b> Partial source-reported history; this is not quota.</p><p><b>Pricing:</b> Unavailable. This does not mean free or complete.</p><p>{scenario.handoff}</p></div>
-    <button type="button" className="action-button primary" onClick={() => act({ type: "view-usage" }, "Partial usage and unavailable pricing were reviewed.")}>{replayState.usageViewed ? "Usage boundary reviewed" : "Review usage boundary"} <ArrowRight size={18} /></button>
-    <ReplayEventNote eventCount={replayState.events.length} />
-  </section>;
-}
-
 export function App() {
   const [viewState, setViewState] = useState(initialProoflineViewState);
-  const [wave1State, dispatchWave1] = useReducer(reduceWave1ReplayState, undefined, initialWave1ReplayState);
+  const [measurement, dispatchMeasurement] = useReducer(reduceWave1MeasurementState, initialWave1MeasurementState);
   const [composer, setComposer] = useState("");
   const [notice, setNotice] = useState("");
   const [model, setModel] = useState("GPT-5.3-Codex-Spark");
   const [reasoning, setReasoning] = useState("Medium");
   const [authorityMode, setAuthorityMode] = useState("ask");
   const selected = getTaskFixture(viewState.selectedId);
-  const isWave1Replay = Boolean(selected.scenario);
-  const detailed = hasDetailedEvidence(selected);
+  const isWave1 = Boolean(selected.scenario);
   const authority = authorityModes[authorityMode];
+  const captureLabel = measurement.capture?.countable ? "Host measurement" : measurement.capture?.capture_mode === "host_authoritative" ? "Native preflight blocked" : "Browser rehearsal";
   const dispatchView = (event) => setViewState((state) => reduceProoflineViewState(state, event));
-
-  function chooseThread(id) {
-    dispatchView({ type: "select-task", id });
-    setNotice("");
-  }
-
   function submitComposer(event) {
     event.preventDefault();
     if (!composer.trim()) return;
     setNotice(prototypeSubmissionNotice());
     setComposer("");
   }
-
-  function toggleReview() {
-    const opening = !viewState.reviewing;
-    dispatchView({ type: "toggle-review" });
-    setNotice(opening ? "Simulated review mode is open: inspect the fixture evidence below." : "Review closed. Spark remains ready.");
-  }
-
-  function toggleFiles() {
-    const opening = !viewState.showFiles;
-    dispatchView({ type: "toggle-files" });
-    setNotice(opening ? "Simulated file inspector opened below the fixture ledger." : "Simulated file inspector closed.");
-  }
-
   return (
     <main className="app-shell">
       <header className="window-bar">
-        <div className="window-product"><span className="mini-mark"><Sparkle size={15} weight="fill" /></span><span>Proofline for Spark</span></div>
-        <div className="window-controls" aria-label="Window controls"><button type="button" aria-label="Minimize"><Minus size={16} /></button><button type="button" aria-label="Maximize"><Cube size={14} /></button><button type="button" aria-label="Close"><X size={16} /></button></div>
+        <div className="window-product">
+          <img className="mini-mark" src={prooflineMark} alt="" />
+          <span>Proofline for Spark</span>
+        </div>
+        <div className="window-controls" aria-label="Window controls">
+          <button type="button" aria-label="Minimize">
+            <Minus size={16} />
+          </button>
+          <button type="button" aria-label="Maximize">
+            <Cube size={14} />
+          </button>
+          <button type="button" aria-label="Close">
+            <X size={16} />
+          </button>
+        </div>
       </header>
-
       <div className="workspace-shell">
         <aside className="thread-rail" aria-label="Spark task history">
           <div className="rail-brand">
-            <Sparkle className="brand-mark" size={42} weight="regular" />
-            <div><strong>Proofline</strong><span>for Spark</span></div>
-            <button type="button" className="icon-button new-task" aria-label="New task" onClick={() => setNotice("A fresh task is ready for your next instruction.")}><PencilSimple size={19} /></button>
+            <img className="brand-image" src={prooflineMark} alt="" />
+            <div>
+              <strong>Proofline</strong>
+              <span>for Spark</span>
+            </div>
+            <button type="button" className="icon-button new-task" aria-label="New task" onClick={() => setNotice("A fresh task is ready for your next instruction.")}>
+              <PencilSimple size={19} />
+            </button>
           </div>
           <nav>
-            {taskGroups.map((group) => <div key={group.label}><p className={`period-label ${group.label === "This week" ? "week-label" : ""}`}>{group.label}</p><div className="thread-list">{group.tasks.map((thread) => <ThreadItem key={thread.id} thread={thread} active={viewState.selectedId === thread.id} onClick={() => chooseThread(thread.id)} />)}</div></div>)}
+            {taskGroups.map((group) => (
+              <div key={group.label}>
+                <p className={`period-label ${group.label === "This week" ? "week-label" : ""}`}>{group.label}</p>
+                <div className="thread-list">
+                  {group.tasks.map((thread) => (
+                    <ThreadItem
+                      key={thread.id}
+                      thread={thread}
+                      active={viewState.selectedId === thread.id}
+                      onClick={() => {
+                        dispatchView({ type: "select-task", id: thread.id });
+                        setNotice("");
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
           </nav>
-          <div className="rail-footer"><button type="button" className="icon-button" aria-label="Settings"><Gear size={18} /></button><button type="button" className="icon-button" aria-label="Profile"><UserCircle size={19} /></button></div>
+          <div className="rail-footer">
+            <button type="button" className="icon-button" aria-label="Settings">
+              <Gear size={18} />
+            </button>
+            <button type="button" className="icon-button" aria-label="Profile">
+              <UserCircle size={19} />
+            </button>
+          </div>
         </aside>
-
         <section className="task-surface">
           <div className="task-content">
-            <div className={`outcome-meta ${selected.complete ? "" : "in-progress"}`}><CheckCircle size={19} weight="regular" /><strong>{viewState.reviewing ? "REVIEWING" : selected.complete ? "COMPLETED" : "IN PROGRESS"}</strong><span className="dot">•</span><span>{selected.time}</span><span className="dot">•</span><span>{selected.elapsed}</span></div>
+            <div className={`outcome-meta ${selected.complete ? "" : "in-progress"}`}>
+              <CheckCircle size={19} weight="regular" />
+              <strong>{selected.complete ? "COMPLETED" : "IN PROGRESS"}</strong>
+              <span className="dot">•</span>
+              <span>{selected.time}</span>
+              <span className="dot">•</span>
+              <span>{selected.elapsed}</span>
+            </div>
             <h1>{selected.title}</h1>
             <p className="summary">{selected.summary}</p>
-            <PrototypeBoundary />
-
-            {isWave1Replay ? <><ReplayFixtureControls selected={selected} replayState={wave1State} dispatchReplay={dispatchWave1} setNotice={setNotice} /><Wave1Replay selected={selected} replayState={wave1State} dispatchReplay={dispatchWave1} setNotice={setNotice} /></> : <><div className="action-row">
-              <ActionButton icon={ArrowRight} primary disabled={!detailed} title={detailed ? undefined : "No detailed fixture evidence is recorded for this task."} onClick={toggleReview}>{viewState.reviewing ? "Close review" : detailed ? "Review fixture" : "Review unavailable"}</ActionButton>
-              <ActionButton icon={ArrowRight} onClick={() => { setComposer(`Continue ${selected.title.toLowerCase()} with `); setNotice("Continuation prepared in the composer."); }}>Continue</ActionButton>
-              <ActionButton icon={FolderSimple} disabled={!detailed} title={detailed ? undefined : "No detailed fixture files are recorded for this task."} onClick={toggleFiles}>{viewState.showFiles ? "Close files" : detailed ? "Open files" : "Files unavailable"}</ActionButton>
-            </div>
-
-            {notice && <div className="action-notice" role="status"><CheckCircle size={16} />{notice}</div>}
-
-            {detailed ? <SimulatedEvidence task={selected} viewState={viewState} dispatchView={dispatchView} setNotice={setNotice} /> : <UnavailableEvidence task={selected} />}</>}
-
-            {isWave1Replay && notice && <div className="action-notice" role="status"><CheckCircle size={16} />{notice}</div>}
-
+            <p className="prototype-boundary" role="note">
+              <Info size={15} weight="fill" />
+              {isWave1 ? "Browser and lifecycle-blocked native modes are rehearsal-only. No participant-countable Wave 1 session is available yet." : "Simulated prototype data — not connected to a Spark session, repository, or provider account."}
+            </p>
+            {isWave1 ? (
+              <Wave1Measurement selected={selected} measurement={measurement} dispatch={dispatchMeasurement} setNotice={setNotice} />
+            ) : (
+              <section className="evidence-section evidence-unavailable">
+                <div className="section-heading">
+                  <h2>Evidence</h2>
+                  <span className="evidence-state">Not recorded</span>
+                </div>
+                <div className="evidence-empty">
+                  <Info size={18} />
+                  <div>
+                    <strong>No detailed fixture evidence</strong>
+                    <span>This task is deliberately unavailable until a fixture or host record exists.</span>
+                  </div>
+                </div>
+              </section>
+            )}
+            {notice && (
+              <div className="action-notice" role="status" style={isWave1 ? { marginTop: 8 } : undefined}>
+                <CheckCircle size={16} />
+                {notice}
+              </div>
+            )}
             <form className="composer" onSubmit={submitComposer}>
               <textarea value={composer} onChange={(event) => setComposer(event.target.value)} placeholder="What should Spark do next?" aria-label="What should Spark do next?" />
-              <p className="authority-note"><ShieldCheck size={15} />{authority.note}</p>
+              <p className="authority-note">
+                <ShieldCheck size={15} />
+                {authority.note}
+              </p>
               <div className="composer-footer">
-                <label>Model<select value={model} onChange={(event) => setModel(event.target.value)}><option>GPT-5.3-Codex-Spark</option><option>GPT-5.6-Luna</option></select><CaretDown size={14} /></label>
-                <label>Reasoning<select value={reasoning} onChange={(event) => setReasoning(event.target.value)}><option>Low</option><option>Medium</option><option>High</option></select><CaretDown size={14} /></label>
-                <label>Mode<select value={authorityMode} onChange={(event) => setAuthorityMode(event.target.value)}>{Object.entries(authorityModes).map(([value, option]) => <option value={value} key={value}>{option.label}</option>)}</select><CaretDown size={14} /></label>
-                <button className="send-button" type="submit" aria-label="Send to Spark"><PaperPlaneTilt size={20} weight="bold" /></button>
+                <label>
+                  Model
+                  <select value={model} onChange={(event) => setModel(event.target.value)}>
+                    <option>GPT-5.3-Codex-Spark</option>
+                    <option>GPT-5.6-Luna</option>
+                  </select>
+                  <CaretDown size={14} />
+                </label>
+                <label>
+                  Reasoning
+                  <select value={reasoning} onChange={(event) => setReasoning(event.target.value)}>
+                    <option>Low</option>
+                    <option>Medium</option>
+                    <option>High</option>
+                  </select>
+                  <CaretDown size={14} />
+                </label>
+                <label>
+                  Mode
+                  <select value={authorityMode} onChange={(event) => setAuthorityMode(event.target.value)}>
+                    {Object.entries(authorityModes).map(([value, option]) => (
+                      <option value={value} key={value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <CaretDown size={14} />
+                </label>
+                <button className="send-button" type="submit" aria-label="Stage prototype instruction">
+                  <PaperPlaneTilt size={20} weight="bold" />
+                </button>
               </div>
             </form>
           </div>
         </section>
       </div>
-
       <footer className="status-ribbon">
-        <span><GitBranch size={17} />{isWave1Replay ? "Local replay fixture" : "Fixture branch  main"}</span><i /><span>{detailed ? <>Fixture checkpoint&nbsp; {selected.evidence.checkpoint}</> : isWave1Replay ? "No repository checkpoint" : "Checkpoint unavailable"}</span><i /><span><Clock size={17} />Elapsed&nbsp; {selected.elapsed}</span><i /><span><Cube size={17} />{detailed ? <>Fixture tokens&nbsp; {selected.evidence.tokens}</> : selected.scenario === "partial-usage" ? <>Source-reported fixture tokens&nbsp; {selected.evidence?.tokens ?? "18,742 in · 4,396 out"}</> : "Tokens unavailable"}</span><i /><span><Tag size={17} />Pricing&nbsp; Unavailable</span><span className="status-spacer" /><span className="local"><b />Local-first</span><span><ShieldCheck size={17} />Mode shown</span>
+        <span>
+          <GitBranch size={17} />
+          {isWave1 ? captureLabel : "Fixture branch main"}
+        </span>
+        <i />
+        <span>{isWave1 ? (measurement.capture?.fixture?.verified ? "Fixture evidence verified" : "Host verification required") : "Checkpoint unavailable"}</span>
+        <i />
+        <span>
+          <Clock size={17} />
+          Elapsed {selected.elapsed}
+        </span>
+        <i />
+        <span>
+          <Cube size={17} />
+          {isWave1 ? "Usage display only" : "Tokens unavailable"}
+        </span>
+        <i />
+        <span>
+          <Tag size={17} />
+          Pricing unavailable
+        </span>
+        <span className="status-spacer" />
+        <span className="local">
+          <b />
+          Local-first
+        </span>
+        <span>
+          <ShieldCheck size={17} />
+          Capture shown
+        </span>
       </footer>
     </main>
   );

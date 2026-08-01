@@ -1,0 +1,3 @@
+desktop/proofline/fixtures/** text eol=lf
+desktop/proofline/src-tauri/fixtures/** text eol=lf
+desktop/proofline/src/wave1-replay.js text eol=lf

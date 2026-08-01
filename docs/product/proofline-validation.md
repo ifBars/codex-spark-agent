@@ -49,6 +49,10 @@ repository.
 
 ## Test environment and fixtures
 
+- Count a session only in the native Proofline host. Browser and Sites builds
+  are rehearsal surfaces: they may display the fixed fixture, but they cannot
+  establish process timing, protected local storage, or authoritative event
+  ordering and must report `countable=false`.
 - Use a local, disposable fixture repository with deterministic command output,
   simulated tool and approval events, one successful validation, and one
   failed validation. Do not use a participant's production repository in
@@ -60,7 +64,20 @@ repository.
   was live or replayed.
 - Start every session with a fresh local profile. Retain raw event logs only on
   the test machine for 30 days unless the participant asks for earlier purge.
-  The repository receives only aggregated, redacted findings.
+  The native host supports explicit early purge and lazily crypto-erases
+  expired artifacts on the next preflight. It has no timer/background purge,
+  so the facilitator must still verify the retention checklist. The repository
+  receives only aggregated, redacted findings.
+
+The current production native host deliberately reports `countable=false`
+until native process-start and actual first-paint boundaries are implemented
+and tested. Its lifecycle receipt timing is not an official cold/warm startup
+or first-visible-activity sample. A future native `countable=true` would be
+necessary but still not sufficient for a valid Wave 1 row: the wave must also
+complete the 10 cold and 10 warm launch samples, privacy-owner review,
+moderator protocol, and participant/task gates below. The aggregate's rejected-
+preflight counter covers fixture mismatches only and is not a complete
+participant or task denominator.
 
 ## Five realistic prototype tasks
 
@@ -167,6 +184,12 @@ for at most 30 days and expose a visible purge action. Export only aggregate
 wave summaries and redacted defect labels. Mark token/pricing fields
 `partial` or `unavailable` rather than inferring values. Never send telemetry
 to a remote service by default.
+
+The current Windows-first host uses an AES-GCM event ledger whose random key is
+protected with Windows DPAPI. Other platforms fail countability closed until a
+reviewed OS key protector exists. The renderer cannot assign event IDs,
+timestamps, sequences, fixture verification, build verification, or retention
+state. Its supported requests are fixed categorical records only.
 
 ## Three-wave sequence
 

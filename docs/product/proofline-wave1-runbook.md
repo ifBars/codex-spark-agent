@@ -120,6 +120,7 @@ aggregate report:
 | --- | --- | --- |
 | Source build | Full Git commit SHA and clean/dirty status. | `git rev-parse HEAD`; `git status --porcelain` must be empty except for an explicitly recorded evidence export outside source. |
 | Frontend dependency state | `desktop/proofline/bun.lock` revision and installed dependency check. | `bun --cwd desktop/proofline install --frozen-lockfile`; then `bun --cwd desktop/proofline run build`. |
+| Native measurement host | Windows Tauri build from the same clean commit. | `bun --cwd desktop/proofline tauri build --no-bundle`; launch the resulting binary and require host preflight `countable=true`. Browser/Sites mode is never valid evidence. |
 | Replay fixture | Immutable fixture ID, revision, SHA-256, and fixture manifest. | Hash the bundle; verify manifest has all five scenarios and their expected outcomes before every session. |
 | Runtime mode | `replayed` or `live-model`. | Wave 1 defaults to replayed. Any live-model use needs a separately approved run, visible provider boundary, and must not replace a replayed task result. |
 | Environment | OS family/version, CPU/RAM band, display scale, renderer/runtime version, and network state. | Record a coarse environment ID, not hostname, user name, IP, or serial number. |
@@ -323,7 +324,8 @@ confirm:
   present for every valid session;
 - five completed sessions use one pinned replay fixture and 20-minute script;
 - all startup samples and all task attempts, including incomplete, hinted, and
-  failed attempts, appear in denominators;
+  failed attempts, appear in the facilitator worksheet denominators; the host
+  aggregate does not establish this complete protocol denominator;
 - the evidence note explicitly says `VWPM = not measured` and `baseline = not
   collected`; no fixture timing is presented as a productivity result;
 - the aggregate evidence note includes counts, medians/p95s, gate decisions,
@@ -348,12 +350,22 @@ At the earlier of participant request or 30 days after the session:
 
 ## Known implementation dependency
 
-At the time of writing, the repository contains a React Proofline prototype,
-including simulated Wave 1 scenario interactions, and a read-only CLI `spark
-proofline snapshot` that explicitly reports several evidence surfaces
-unavailable. The simulated interactions are not yet sufficient by themselves
-to prove a pinned, immutable replay bundle, fixture manifest/SHA-256, 20-sample
-launch timing capture, or stored redacted event export. The Wave 1 owner must
-verify those delivery criteria against the exact test build before sessions, or
-keep issue #6 open. Do not simulate five participants or backfill the worksheet
-from agent output.
+The repository now contains a Windows-first Tauri measurement host around the
+React Proofline surface. It byte-attests the canonical five-scenario renderer
+and referenced evidence, requires a full clean embedded Git identity, keeps
+host-generated identity/order/time inside an AES-GCM ledger with a DPAPI-
+protected key, accepts only constrained categorical participant events, and
+produces an aggregate-only local export. It supports explicit early purge and,
+on the next preflight after the 30-day deadline, lazily crypto-erases expired
+artifacts before rotating the namespace. It has no timer or background purge,
+so expiry cleanup is not guaranteed without a later preflight.
+
+That foundation does **not** complete Wave 1. Production native preflight
+deliberately reports `countable=false` until a monotonic process-start boundary
+and a one-time actual-first-paint acknowledgement exist. Official cold/warm
+sampling, crash/restart ledger recovery, timer/background expiry purge, proof
+of cleanup when no later preflight occurs, a non-Windows key protector,
+privacy-owner sign-off, complete worksheet denominators, and five real
+participant sessions remain outstanding. Keep issue #6 open and do not count a
+session. Do not simulate participants or backfill the worksheet from agent
+output.
