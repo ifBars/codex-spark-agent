@@ -3,10 +3,17 @@ import test from "node:test";
 import {
   authorityModes,
   getTaskFixture,
+  hasDetailedEvidence,
   initialProoflineViewState,
   prototypeSubmissionNotice,
   reduceProoflineViewState,
 } from "../src/proofline-state.js";
+
+test("Wave 1 replay tasks can render without legacy detailed evidence", () => {
+  const replayTask = getTaskFixture("repo-brief");
+  assert.equal(replayTask.scenario, "repo-brief");
+  assert.equal(hasDetailedEvidence(replayTask), false);
+});
 
 test("non-fork tasks do not inherit simulated fork evidence", () => {
   const errors = getTaskFixture("errors");
@@ -27,7 +34,8 @@ test("non-fork tasks do not inherit simulated fork evidence", () => {
 });
 
 test("file inspector state visibly opens, focuses a fixture file, and closes", () => {
-  const opened = reduceProoflineViewState(initialProoflineViewState, { type: "toggle-files" });
+  const forkState = reduceProoflineViewState(initialProoflineViewState, { type: "select-task", id: "fork" });
+  const opened = reduceProoflineViewState(forkState, { type: "toggle-files" });
   assert.equal(opened.showFiles, true);
 
   const focused = reduceProoflineViewState(opened, { type: "select-file", path: "fixture/usage/history.rs" });
@@ -40,7 +48,8 @@ test("file inspector state visibly opens, focuses a fixture file, and closes", (
 });
 
 test("the initial detailed fixture can enter and exit review mode", () => {
-  const reviewing = reduceProoflineViewState(initialProoflineViewState, { type: "toggle-review" });
+  const forkState = reduceProoflineViewState(initialProoflineViewState, { type: "select-task", id: "fork" });
+  const reviewing = reduceProoflineViewState(forkState, { type: "toggle-review" });
   assert.equal(reviewing.reviewing, true);
 
   const closed = reduceProoflineViewState(reviewing, { type: "toggle-review" });

@@ -1,3 +1,5 @@
+import { wave1TaskGroup } from "./wave1-replay.js";
+
 const fixtureFiles = [
   ["fixture/usage/history.rs", "+182", "-10", "Simulated fork-aware history and lineage work"],
   ["fixture/usage/record.rs", "+64", "-6", "Simulated fork lineage fields on usage events"],
@@ -39,6 +41,7 @@ const simulatedForkEvidence = {
 };
 
 export const taskGroups = [
+  wave1TaskGroup,
   {
     label: "Today",
     tasks: [
@@ -72,7 +75,7 @@ export const authorityModes = {
 };
 
 export const initialProoflineViewState = {
-  selectedId: "fork",
+  selectedId: "repo-brief",
   showWork: false,
   showFiles: false,
   reviewing: false,
@@ -84,7 +87,7 @@ export function getTaskFixture(id) {
 }
 
 export function hasDetailedEvidence(task) {
-  return task.evidence.kind === "simulated";
+  return task?.evidence?.kind === "simulated";
 }
 
 export function prototypeSubmissionNotice() {

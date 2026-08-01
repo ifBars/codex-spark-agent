@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useReducer, useState } from "react";
 import {
   ArrowRight,
   CaretDown,
@@ -30,6 +30,15 @@ import {
   reduceProoflineViewState,
   taskGroups,
 } from "./proofline-state.js";
+import {
+  createRedactedWave1Export,
+  getWave1Scenario,
+  initialWave1ReplayState,
+  reduceWave1ReplayState,
+  WAVE1_FIXTURE_ID,
+  WAVE1_FIXTURE_REVISION,
+  WAVE1_FIXTURE_SHA256,
+} from "./wave1-replay.js";
 
 function ThreadItem({ thread, active, onClick }) {
   return (
@@ -111,14 +120,88 @@ function SimulatedEvidence({ task, viewState, dispatchView, setNotice }) {
   );
 }
 
+function ReplayEventNote({ eventCount }) {
+  return <p className="replay-event-note" role="status">Local fixture interactions recorded: {eventCount}. Event payloads exclude fixture content, prompts, paths, commands, diffs, raw tokens, identities, and transport.</p>;
+}
+
+function ReplayFixtureControls({ selected, replayState, dispatchReplay, setNotice }) {
+  const redacted = createRedactedWave1Export(replayState.events);
+  const act = (action, notice) => {
+    dispatchReplay({ ...action, scenario: selected.scenario });
+    setNotice(notice);
+  };
+  return <section className="replay-fixture-controls" aria-label="Local replay fixture controls">
+    <div><span>Local replay fixture</span><strong>{WAVE1_FIXTURE_ID}</strong><small>Revision {WAVE1_FIXTURE_REVISION} · SHA-256 {WAVE1_FIXTURE_SHA256.slice(0, 12)}…</small></div>
+    <p>Deterministic, local-only fixture. The manifest identity is displayed for facilitator preflight; this browser prototype does not verify an archive or collect launch samples.</p>
+    <div className="replay-actions"><button type="button" className="action-button primary" disabled={replayState.runStarted} onClick={() => act({ type: "start-replay" }, "Replay submitted; first visible fixture activity rendered after 200 ms.")}>{replayState.runStarted ? "Replay activity rendered" : "Start selected replay"} <ArrowRight size={17} /></button><button type="button" className="action-button" onClick={() => act({ type: "view-redacted-export" }, "Redacted aggregate preview prepared locally.")}>Preview redacted export <ArrowRight size={17} /></button><button type="button" className="action-button" onClick={() => act({ type: "reset-local-replay" }, "Fixture state reset locally. No external profile or repository was changed.")}>Reset fixture <ArrowRight size={17} /></button><button type="button" className="action-button" onClick={() => act({ type: "purge-local-events" }, "In-memory replay events purged. This prototype has no persistent event store.")}>Purge local events <X size={17} /></button></div>
+    {replayState.exportViewed && <div className="replay-export" role="status"><strong>Redacted aggregate preview</strong><span>Fixture {redacted.fixture.revision}; {redacted.event_count} local event categories across {redacted.event_counts_by_task.length} task(s). No event IDs, timestamps, prompts, fixture paths, commands, diffs, raw tokens, identities, or transport details are exported.</span></div>}
+    {replayState.purged && <p className="replay-event-note">Local in-memory replay events are empty after purge.</p>}
+  </section>;
+}
+
+function Wave1Replay({ selected, replayState, dispatchReplay, setNotice }) {
+  const scenario = getWave1Scenario(selected.scenario);
+  const act = (action, notice) => {
+    dispatchReplay({ ...action, scenario: selected.scenario });
+    setNotice(notice);
+  };
+
+  if (selected.scenario === "repo-brief") {
+    return <section className="replay-section" aria-label="Wave 1 Task 1 replay">
+      <div className="section-heading"><h2>Repo Brief evidence</h2><span className="fixture-label">Task 1 of 5</span></div>
+      <div className="replay-card"><p>Likely ownership boundary: <strong>{scenario.answer}</strong></p><button className="action-button primary" type="button" disabled={!replayState.runStarted} onClick={() => act({ type: "open-repo-evidence" }, "Opened the cited fixture evidence.")}>Open cited evidence <ArrowRight size={18} /></button></div>
+      {replayState.openedRepoEvidence && <div className="replay-detail"><strong>{scenario.citation.source}</strong><p>{scenario.citation.excerpt}</p><p><b>Uncertainty:</b> {scenario.uncertainty}</p><p><b>Next check:</b> {scenario.nextCheck}</p></div>}
+      <ReplayEventNote eventCount={replayState.events.length} />
+    </section>;
+  }
+
+  if (selected.scenario === "completed-change") {
+    return <section className="replay-section" aria-label="Wave 1 Task 2 replay">
+      <div className="section-heading"><h2>Completed fixture evidence</h2><span className="fixture-label">Task 2 of 5</span></div>
+      <div className="file-ledger">{scenario.files.map((file) => <button className="file-row" type="button" key={file} onClick={() => act({ type: "open-diff" }, "Opened the simulated two-file change.")}><FileCode size={15} /><code>{file}</code><span className="added">fixture</span><span className="removed">only</span><span className="file-note">Simulated changed-file record</span></button>)}</div>
+      <div className="replay-detail"><p><CheckCircle size={16} /> <b>{scenario.validation}</b></p><p>Checkpoint: <strong>{scenario.checkpoint}</strong></p>{replayState.openedDiff && <p>Simulated diff inspection is open. This fixture does not read a local repository.</p>}</div>
+      <ReplayEventNote eventCount={replayState.events.length} />
+    </section>;
+  }
+
+  if (selected.scenario === "failed-validation") {
+    return <section className="replay-section" aria-label="Wave 1 Task 3 replay">
+      <div className="section-heading"><h2>Failed fixture validation</h2><span className="fixture-label">Task 3 of 5</span></div>
+      <div className="replay-detail replay-failure"><p><b>{scenario.validation}</b></p><p>{scenario.failure}</p><p><b>Simulated command:</b> <code>{scenario.failureCommand}</code></p><p><b>Simulated result:</b> {scenario.failureOutput}</p><p>This is a failed run state, not a completed result.</p></div>
+      <div className="replay-actions">{scenario.choices.map((choice) => <button type="button" className="action-button" key={choice} onClick={() => act({ type: "recover", choice }, `${choice} selected in the simulated replay.`)}>{choice} <ArrowRight size={17} /></button>)}</div>
+      {replayState.recoveryChoice && <p className="replay-detail"><b>Recorded recovery choice:</b> {replayState.recoveryChoice}. No validation, retry, restore, or repository mutation ran.</p>}
+      <ReplayEventNote eventCount={replayState.events.length} />
+    </section>;
+  }
+
+  if (selected.scenario === "pending-approval") {
+    return <section className="replay-section" aria-label="Wave 1 Task 4 replay">
+      <div className="section-heading"><h2>Pending fixture approval</h2><span className="fixture-label">Task 4 of 5</span></div>
+      <div className="replay-detail replay-approval"><p><b>Run status: awaiting approval</b></p><p>Requested authority: fixture file change.</p><p><b>Policy card:</b> {scenario.policy}</p></div>
+      <div className="replay-actions"><button type="button" className="action-button primary" onClick={() => act({ type: "decide-approval", decision: "approve" }, "Fixture file-change approval recorded locally.")}>Approve fixture change <CheckCircle size={18} /></button><button type="button" className="action-button" onClick={() => act({ type: "decide-approval", decision: "deny" }, "Fixture approval denial recorded locally.")}>Deny request <X size={18} /></button></div>
+      {replayState.approvalDecision && <p className="replay-detail"><b>Policy outcome:</b> {replayState.approvalDecision === "approve" ? "approved fixture-only file change" : "denied request"}. No authority was granted.</p>}
+      <ReplayEventNote eventCount={replayState.events.length} />
+    </section>;
+  }
+
+  return <section className="replay-section" aria-label="Wave 1 Task 5 replay">
+    <div className="section-heading"><h2>Usage and handoff boundary</h2><span className="fixture-label">Task 5 of 5</span></div>
+    <div className="replay-detail"><p><b>Source-reported fixture tokens:</b> {scenario.sourceReportedTokens.input.toLocaleString()} input · {scenario.sourceReportedTokens.output.toLocaleString()} output.</p><p><b>Usage coverage:</b> Partial source-reported history; this is not quota.</p><p><b>Pricing:</b> Unavailable. This does not mean free or complete.</p><p>{scenario.handoff}</p></div>
+    <button type="button" className="action-button primary" onClick={() => act({ type: "view-usage" }, "Partial usage and unavailable pricing were reviewed.")}>{replayState.usageViewed ? "Usage boundary reviewed" : "Review usage boundary"} <ArrowRight size={18} /></button>
+    <ReplayEventNote eventCount={replayState.events.length} />
+  </section>;
+}
+
 export function App() {
   const [viewState, setViewState] = useState(initialProoflineViewState);
+  const [wave1State, dispatchWave1] = useReducer(reduceWave1ReplayState, undefined, initialWave1ReplayState);
   const [composer, setComposer] = useState("");
   const [notice, setNotice] = useState("");
   const [model, setModel] = useState("GPT-5.3-Codex-Spark");
   const [reasoning, setReasoning] = useState("Medium");
   const [authorityMode, setAuthorityMode] = useState("ask");
   const selected = getTaskFixture(viewState.selectedId);
+  const isWave1Replay = Boolean(selected.scenario);
   const detailed = hasDetailedEvidence(selected);
   const authority = authorityModes[authorityMode];
   const dispatchView = (event) => setViewState((state) => reduceProoflineViewState(state, event));
@@ -174,7 +257,7 @@ export function App() {
             <p className="summary">{selected.summary}</p>
             <PrototypeBoundary />
 
-            <div className="action-row">
+            {isWave1Replay ? <><ReplayFixtureControls selected={selected} replayState={wave1State} dispatchReplay={dispatchWave1} setNotice={setNotice} /><Wave1Replay selected={selected} replayState={wave1State} dispatchReplay={dispatchWave1} setNotice={setNotice} /></> : <><div className="action-row">
               <ActionButton icon={ArrowRight} primary disabled={!detailed} title={detailed ? undefined : "No detailed fixture evidence is recorded for this task."} onClick={toggleReview}>{viewState.reviewing ? "Close review" : detailed ? "Review fixture" : "Review unavailable"}</ActionButton>
               <ActionButton icon={ArrowRight} onClick={() => { setComposer(`Continue ${selected.title.toLowerCase()} with `); setNotice("Continuation prepared in the composer."); }}>Continue</ActionButton>
               <ActionButton icon={FolderSimple} disabled={!detailed} title={detailed ? undefined : "No detailed fixture files are recorded for this task."} onClick={toggleFiles}>{viewState.showFiles ? "Close files" : detailed ? "Open files" : "Files unavailable"}</ActionButton>
@@ -182,7 +265,9 @@ export function App() {
 
             {notice && <div className="action-notice" role="status"><CheckCircle size={16} />{notice}</div>}
 
-            {detailed ? <SimulatedEvidence task={selected} viewState={viewState} dispatchView={dispatchView} setNotice={setNotice} /> : <UnavailableEvidence task={selected} />}
+            {detailed ? <SimulatedEvidence task={selected} viewState={viewState} dispatchView={dispatchView} setNotice={setNotice} /> : <UnavailableEvidence task={selected} />}</>}
+
+            {isWave1Replay && notice && <div className="action-notice" role="status"><CheckCircle size={16} />{notice}</div>}
 
             <form className="composer" onSubmit={submitComposer}>
               <textarea value={composer} onChange={(event) => setComposer(event.target.value)} placeholder="What should Spark do next?" aria-label="What should Spark do next?" />
@@ -199,7 +284,7 @@ export function App() {
       </div>
 
       <footer className="status-ribbon">
-        <span><GitBranch size={17} />Fixture branch&nbsp; main</span><i /><span>{detailed ? <>Fixture checkpoint&nbsp; {selected.evidence.checkpoint}</> : "Checkpoint unavailable"}</span><i /><span><Clock size={17} />Elapsed&nbsp; {selected.elapsed}</span><i /><span><Cube size={17} />{detailed ? <>Fixture tokens&nbsp; {selected.evidence.tokens}</> : "Tokens unavailable"}</span><i /><span><Tag size={17} />Pricing&nbsp; Unavailable</span><span className="status-spacer" /><span className="local"><b />Local-first</span><span><ShieldCheck size={17} />Mode shown</span>
+        <span><GitBranch size={17} />{isWave1Replay ? "Local replay fixture" : "Fixture branch  main"}</span><i /><span>{detailed ? <>Fixture checkpoint&nbsp; {selected.evidence.checkpoint}</> : isWave1Replay ? "No repository checkpoint" : "Checkpoint unavailable"}</span><i /><span><Clock size={17} />Elapsed&nbsp; {selected.elapsed}</span><i /><span><Cube size={17} />{detailed ? <>Fixture tokens&nbsp; {selected.evidence.tokens}</> : selected.scenario === "partial-usage" ? <>Source-reported fixture tokens&nbsp; {selected.evidence?.tokens ?? "18,742 in · 4,396 out"}</> : "Tokens unavailable"}</span><i /><span><Tag size={17} />Pricing&nbsp; Unavailable</span><span className="status-spacer" /><span className="local"><b />Local-first</span><span><ShieldCheck size={17} />Mode shown</span>
       </footer>
     </main>
   );

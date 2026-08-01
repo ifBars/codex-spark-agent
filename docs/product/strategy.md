@@ -95,14 +95,16 @@ coding surface.
 ### Worker-routing observation
 
 Luna is useful as a background research lane, not an interactive default. In
-four observed delegated tasks, a focused competitive scan took 69 seconds, a
-12-candidate prospect pipeline took 252 seconds, a source-level CodexBar usage
-audit took 239 seconds, and a broad repository/product audit took 461 seconds.
-The task surface exposed no token or dollar-cost data,
-so a cheaper-Luna claim remains unverified. Keep Spark interactive; route
-bounded research, review, and planning to Luna when multi-minute latency is
-acceptable, and retain Terra for implementation until measured evidence
-supports a different policy.
+six observed delegated tasks, the four earlier research tasks took 69 to 461
+seconds. Two fresh Proofline audits took 74 and 89 seconds and reported 43,557
+and 144,745 provider tokens respectively. The narrower six-read task used less
+than one third of the broader audit's tokens, reinforcing the need for explicit
+starting files and a compact decision contract. The measured details are in
+[the Luna delegation observation](luna-delegation-observation-2026-08-01.md).
+No versioned price source was available, so a cheaper-Luna claim remains
+unverified. Keep Spark interactive; route bounded research, review, and
+planning to Luna when multi-minute latency is acceptable, and retain Terra for
+implementation until measured evidence supports a different policy.
 
 ## North-star metric
 
