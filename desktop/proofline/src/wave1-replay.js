@@ -1,6 +1,6 @@
 export const WAVE1_FIXTURE_ID = "proofline-wave1-local";
 export const WAVE1_FIXTURE_REVISION = "2026-08-01.1";
-export const WAVE1_FIXTURE_SHA256 = "7829776e9aea00a0d182d00cddc3337f07659d728fbea9b31b30fdc05f36b3bf";
+export const WAVE1_FIXTURE_SHA256 = "29415e0ce8f7659093e01032ce52365197c59d0010bad7aa4361048fdb86abe5";
 
 const replayTasks = [
   { id: "repo-brief", title: "Read a Repo Brief", summary: "Identify the likely ownership boundary and inspect its cited evidence.", time: "Replay", elapsed: "Ready", complete: false, scenario: "repo-brief" },

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createWave1Adapter, isParticipantId, validateAggregate, validateEvent, validateHostAcknowledgement, validateHostPreflight, validateHostSession, validatePurge } from "../src/wave1-bridge.js";
 import { initialWave1MeasurementState, reduceWave1MeasurementState } from "../src/wave1-ledger.js";
-import { getWave1Scenario, initialWave1ReplayViewState, reduceWave1ReplayViewState, wave1FixtureRequest, wave1TaskGroup } from "../src/wave1-replay.js";
+import { getWave1Scenario, initialWave1ReplayViewState, reduceWave1ReplayViewState, WAVE1_FIXTURE_ID, WAVE1_FIXTURE_REVISION, WAVE1_FIXTURE_SHA256, wave1FixtureRequest, wave1TaskGroup } from "../src/wave1-replay.js";
 
 const fixtureRequest = wave1FixtureRequest();
 const fixture = { ...fixtureRequest, verified: true, build_verified: true };
@@ -35,7 +37,7 @@ const aggregate = {
   outcome_counts: [{ outcome: "success", count: 3 }],
   hint_count: 1,
   abandonment_count: 1,
-  first_activity_ms: 67,
+  first_activity_ms: null,
   retention,
   download_ready: true,
 };
@@ -65,6 +67,19 @@ test("all five rich rehearsal task states remain accessible", () => {
   assert.match(approval.policy, /Approve fixture-only/i);
   assert.deepEqual(usage.sourceReportedTokens, { input: 18742, output: 4396 });
   assert.equal(usage.pricingState, "unavailable");
+});
+
+test("renderer and native fixture identity share the exact manifest-byte SHA and aggregate schema", () => {
+  const nativeManifestBytes = readFileSync(new URL("../src-tauri/fixtures/wave1-manifest.json", import.meta.url));
+  const nativeTypesSource = readFileSync(new URL("../src-tauri/src/wave1/types.rs", import.meta.url), "utf8");
+  assert.equal(createHash("sha256").update(nativeManifestBytes).digest("hex"), WAVE1_FIXTURE_SHA256);
+  assert.deepEqual(fixtureRequest, {
+    id: WAVE1_FIXTURE_ID,
+    revision: WAVE1_FIXTURE_REVISION,
+    sha256: "29415e0ce8f7659093e01032ce52365197c59d0010bad7aa4361048fdb86abe5",
+  });
+  assert.equal(aggregate.schema, "spark.proofline.validation.aggregate.v1");
+  assert.match(nativeTypesSource, /AGGREGATE_SCHEMA: &str = "spark\.proofline\.validation\.aggregate\.v1"/);
 });
 
 test("visible replay state remains display-only and creates no telemetry identity", () => {
@@ -196,9 +211,8 @@ test("host validators accept exact reports and reject unallowlisted response fie
     validateHostAcknowledgement({
       acknowledged: true,
       event_type: "activity_rendered",
-      latency_ms: 67,
     }),
-    { acknowledged: true, event_type: "activity_rendered", latency_ms: 67 },
+    { acknowledged: true, event_type: "activity_rendered" },
   );
   assert.deepEqual(validateAggregate(aggregate), aggregate);
   assert.deepEqual(validatePurge(purge), purge);
@@ -210,6 +224,10 @@ test("host validators accept exact reports and reject unallowlisted response fie
         event_type: "run_submitted",
         event_id: "native-only",
       }),
+    /invalid/i,
+  );
+  assert.throws(
+    () => validateHostAcknowledgement({ acknowledged: true, event_type: "activity_rendered", latency_ms: 67 }),
     /invalid/i,
   );
   assert.throws(() => validateAggregate({ ...aggregate, thread_id: "native-only" }), /aggregate-only/i);
@@ -246,6 +264,7 @@ test("renderer events reject identity, time, sequence, and freeform fields", () 
   assert.equal(isParticipantId("P01"), true);
   assert.equal(isParticipantId("P00"), false);
   assert.deepEqual(validateEvent(event), event);
+  assert.throws(() => validateEvent({ ...event, event_type: "app_ready" }), /allowlisted/i);
   assert.throws(() => validateEvent({ ...event, event_type: "recovery_selected" }), /allowlisted/i);
   for (const extra of [{ prompt: "fixture evidence" }, { thread_id: "renderer-owned" }, { event_id: "renderer-owned" }, { occurred_at: "2026-08-01T00:00:00Z" }, { timestamp_ms: 1 }, { sequence: 1 }, { content: "freeform" }]) assert.throws(() => validateEvent({ ...event, ...extra }), /allowlisted/i);
 });
@@ -270,11 +289,11 @@ test("measurement reducer receives validated host reports without inventing auth
     acknowledgement: {
       acknowledged: true,
       event_type: "activity_rendered",
-      latency_ms: 67,
     },
   });
   assert.equal(state.sessionNamespace, session.session_namespace);
-  assert.equal(state.acknowledgements["activity_rendered:success"].latency_ms, 67);
+  assert.equal(state.acknowledgements["activity_rendered:success"].acknowledged, true);
+  assert.equal(state.acknowledgements["activity_rendered:success"].latency_ms, undefined);
   const afterPurge = reduceWave1MeasurementState(state, {
     type: "purged",
     capture: { ...preflight, retention: purge.retention },

@@ -48,12 +48,12 @@ function CaptureState({ measurement }) {
     </section>
   );
 }
-function LifecycleEvidence({ acknowledgements }) {
+function RendererReceipt({ acknowledgements }) {
   const acknowledgement = acknowledgements["activity_rendered:success"];
   if (!acknowledgement) return null;
   return (
     <div className="replay-event-note" role="status">
-      Host accepted the renderer lifecycle acknowledgement {acknowledgement.latency_ms !== undefined ? `at ${acknowledgement.latency_ms} ms after session start` : ""}. This is not an official cold/warm startup or first-visible-activity sample.
+      Host accepted a non-authoritative renderer receipt. It is not a process-start boundary, actual first paint, or official lifecycle timing.
     </div>
   );
 }
@@ -340,7 +340,7 @@ function Wave1Measurement({ selected, measurement, dispatch, setNotice }) {
       }
       await append("run_submitted", "success", true);
       await append("activity_rendered", "success", true);
-      setNotice("Host accepted constrained lifecycle events. Official startup and first-visible sampling remain separate protocol work.");
+      setNotice("Host accepted a constrained submission event and non-authoritative renderer receipt. Official lifecycle timing remains separate protocol work.");
     } catch (error) {
       dispatch({ type: "error", error: error.message });
     }
@@ -393,7 +393,7 @@ function Wave1Measurement({ selected, measurement, dispatch, setNotice }) {
           <strong>Host-authoritative only after preflight</strong>
           <small>The renderer displays fixture evidence but sends only supported categorical event DTOs.</small>
         </div>
-        <p>Enter a pseudonymous participant ID. The native host owns authoritative event identity, ordering, and time.</p>
+        <p>Enter a pseudonymous participant ID. The native host owns ledger event identity, ordering, and receipt timestamps.</p>
         <CaptureState measurement={measurement} />
         {nativeBlocked && <p className="replay-event-note">Native capture is installed but not participant-countable. Process-start and actual first-paint instrumentation remain outstanding.</p>}
         <div className="measurement-start">
@@ -450,7 +450,7 @@ function Wave1Measurement({ selected, measurement, dispatch, setNotice }) {
           </div>
         )}
         {measurement.sessionNamespace && <p className="replay-event-note">{measurement.capture?.countable ? "A host-owned measurement namespace is active. Its authoritative event IDs, timestamps, and sequence stay inside the protected native ledger." : "Browser rehearsal state is volatile and non-countable; its aggregate remains zero and reload retains no measurement state."}</p>}
-        <LifecycleEvidence acknowledgements={measurement.acknowledgements} />
+        <RendererReceipt acknowledgements={measurement.acknowledgements} />
         {measurement.purged && <p className="replay-event-note">Host confirmed explicit purge. A new session is required before any countable interaction.</p>}
         {measurement.error && (
           <p className="measurement-error" role="alert">

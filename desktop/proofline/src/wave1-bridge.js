@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke, isTauri } from "@tauri-apps/api/core";
 
-const EVENT_TYPES = new Set(["app_ready", "run_submitted", "activity_rendered", "task_outcome"]);
+const EVENT_TYPES = new Set(["run_submitted", "activity_rendered", "task_outcome"]);
 const OUTCOMES = new Set(["success", "failure", "hinted", "abandoned"]);
 const OUTBOUND_FORBIDDEN_KEYS = new Set(["prompt", "path", "paths", "command", "commands", "diff", "raw_tokens", "tokens", "content", "text", "thread_id", "parent_thread_id", "session_id", "event_id", "occurred_at", "timestamp", "timestamp_ms", "sequence"]);
 
@@ -79,11 +79,8 @@ export function validateEvent(event) {
 }
 
 export function validateHostAcknowledgement(value) {
-  if (!hasOnlyKeys(value, ["acknowledged", "event_type"], ["latency_ms"]) || value.acknowledged !== true || !EVENT_TYPES.has(value.event_type) || (value.latency_ms !== undefined && !isNonNegativeInteger(value.latency_ms))) {
+  if (!hasOnlyKeys(value, ["acknowledged", "event_type"]) || value.acknowledged !== true || !EVENT_TYPES.has(value.event_type)) {
     throw new Error("Wave 1 host acknowledgement is invalid");
-  }
-  if ((value.event_type === "app_ready" || value.event_type === "activity_rendered") && value.latency_ms === undefined) {
-    throw new Error("Wave 1 lifecycle acknowledgement lacks host timing");
   }
   return value;
 }
@@ -98,7 +95,7 @@ function validOutcomeCount(value) {
 
 export function validateAggregate(value) {
   const allowed = ["schema", "event_count", "invalid_preflight_attempt_count", "task_counts", "outcome_counts", "hint_count", "abandonment_count", "first_activity_ms", "retention", "download_ready"];
-  if (!hasOnlyKeys(value, allowed) || value.schema !== "spark.proofline.validation.aggregate.v1" || !isNonNegativeInteger(value.event_count) || !isNonNegativeInteger(value.invalid_preflight_attempt_count) || !Array.isArray(value.task_counts) || !value.task_counts.every(validTaskCount) || !Array.isArray(value.outcome_counts) || !value.outcome_counts.every(validOutcomeCount) || !isNonNegativeInteger(value.hint_count) || !isNonNegativeInteger(value.abandonment_count) || (value.first_activity_ms !== null && !isNonNegativeInteger(value.first_activity_ms)) || !validRetention(value.retention) || typeof value.download_ready !== "boolean") {
+  if (!hasOnlyKeys(value, allowed) || value.schema !== "spark.proofline.validation.aggregate.v1" || !isNonNegativeInteger(value.event_count) || !isNonNegativeInteger(value.invalid_preflight_attempt_count) || !Array.isArray(value.task_counts) || !value.task_counts.every(validTaskCount) || !Array.isArray(value.outcome_counts) || !value.outcome_counts.every(validOutcomeCount) || !isNonNegativeInteger(value.hint_count) || !isNonNegativeInteger(value.abandonment_count) || value.first_activity_ms !== null || !validRetention(value.retention) || typeof value.download_ready !== "boolean") {
     throw new Error("Wave 1 aggregate is not aggregate-only");
   }
   return value;
