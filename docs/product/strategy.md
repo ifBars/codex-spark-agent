@@ -171,9 +171,11 @@ it does not earn priority merely by looking like a complete agent application.
 The desktop investment advances only through these gates:
 
 1. a privacy-minimized, read-only Spark snapshot contract;
-2. a native measurement host that makes fixture identity, ordered local
-   telemetry, launch timing, retention, purge, and aggregate export
-   participant-countable;
+2. a native measurement host with fixture/build attestation, host-owned event
+   identity and ordering, protected local storage, retention metadata,
+   explicit purge, and aggregate-only export; production preflight remains
+   non-countable until native process-start and actual first-paint boundaries
+   are implemented and tested;
 3. five real internal participant sessions using the fixed protocol in
    [proofline-validation.md](proofline-validation.md);
 4. an external design-partner usability wave only if the internal safety,

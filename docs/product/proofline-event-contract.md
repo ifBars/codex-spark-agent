@@ -165,8 +165,16 @@ timestamp, and source command/tool; generic message text is not review evidence.
 ## Explicit unknowns and non-goals
 
 - The Tauri host currently supports only the deterministic Wave 1 fixture,
-  protected categorical measurement, aggregate export, and purge. It has no
-  live Spark session/run stream, process supervision, or snapshot recovery API.
+  byte-attested fixture evidence, protected categorical measurement, aggregate
+  export, retention deadline metadata, and explicit purge. Host-generated event
+  identity, timestamp, and sequence remain inside the encrypted ledger; the
+  renderer cannot submit or retrieve them. Production preflight deliberately
+  remains non-countable until native process-start and actual first-paint
+  instrumentation exists. The host has no live Spark session/run stream,
+  process supervision, restart reconstruction, or snapshot recovery API.
+- The aggregate's invalid-preflight counter covers fixture request/byte
+  failures only. It is not a complete readiness, startup, task-attempt, or
+  participant denominator.
 - No source-backed changed-file/diff/checkpoint/validation/approval model
   exists. The mock is direction, not evidence that those controls work.
 - `AgentSnapshot.input` is provider conversation state, not a privacy-minimized

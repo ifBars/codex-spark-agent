@@ -324,7 +324,8 @@ confirm:
   present for every valid session;
 - five completed sessions use one pinned replay fixture and 20-minute script;
 - all startup samples and all task attempts, including incomplete, hinted, and
-  failed attempts, appear in denominators;
+  failed attempts, appear in the facilitator worksheet denominators; the host
+  aggregate does not establish this complete protocol denominator;
 - the evidence note explicitly says `VWPM = not measured` and `baseline = not
   collected`; no fixture timing is presented as a productivity result;
 - the aggregate evidence note includes counts, medians/p95s, gate decisions,
@@ -350,15 +351,19 @@ At the earlier of participant request or 30 days after the session:
 ## Known implementation dependency
 
 The repository now contains a Windows-first Tauri measurement host around the
-React Proofline surface. It verifies the canonical five-scenario fixture,
-requires a full clean embedded Git identity, writes an AES-GCM ledger with a
-DPAPI-protected key, accepts only constrained categorical participant events,
-produces an aggregate-only local export, applies a 30-day retention deadline,
-and requires explicit confirmation before purge and namespace rotation.
+React Proofline surface. It byte-attests the canonical five-scenario renderer
+and referenced evidence, requires a full clean embedded Git identity, keeps
+host-generated identity/order/time inside an AES-GCM ledger with a DPAPI-
+protected key, accepts only constrained categorical participant events, and
+produces an aggregate-only local export. It records 30-day deadline metadata
+and blocks expired-session writes; purge and namespace rotation still require
+explicit confirmation rather than occurring automatically.
 
-That foundation does **not** complete Wave 1. Official cold/warm process-start
-sampling, crash/restart ledger recovery, a non-Windows key protector, privacy-
-owner sign-off, and five real participant sessions remain outstanding. Until
-the recorded native build has 10 cold and 10 warm samples and passes the full
-preflight above, keep issue #6 open and do not count a session. Do not simulate
-participants or backfill the worksheet from agent output.
+That foundation does **not** complete Wave 1. Production native preflight
+deliberately reports `countable=false` until a monotonic process-start boundary
+and a one-time actual-first-paint acknowledgement exist. Official cold/warm
+sampling, crash/restart ledger recovery, automatic expiry purge, a non-Windows
+key protector, privacy-owner sign-off, complete worksheet denominators, and
+five real participant sessions remain outstanding. Keep issue #6 open and do
+not count a session. Do not simulate participants or backfill the worksheet
+from agent output.

@@ -66,12 +66,15 @@ repository.
   the test machine for 30 days unless the participant asks for earlier purge.
   The repository receives only aggregated, redacted findings.
 
-The native host's `countable=true` is necessary but not sufficient for a valid
-Wave 1 row. It proves only that the exact bundled fixture matched the renderer
-request, the embedded Git identity was a full clean commit, OS-protected local
-encryption was available, and a constrained session could start. The wave must
-still complete the 10 cold and 10 warm launch samples, privacy-owner review,
-moderator protocol, and participant/task gates below.
+The current production native host deliberately reports `countable=false`
+until native process-start and actual first-paint boundaries are implemented
+and tested. Its lifecycle receipt timing is not an official cold/warm startup
+or first-visible-activity sample. A future native `countable=true` would be
+necessary but still not sufficient for a valid Wave 1 row: the wave must also
+complete the 10 cold and 10 warm launch samples, privacy-owner review,
+moderator protocol, and participant/task gates below. The aggregate's rejected-
+preflight counter covers fixture mismatches only and is not a complete
+participant or task denominator.
 
 ## Five realistic prototype tasks
 
