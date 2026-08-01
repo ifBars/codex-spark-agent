@@ -68,13 +68,18 @@ ungated implementation batch. The execution sequence is:
 1. **Prototype and contract:** preserve the selected hierarchy, remove
    misleading mock evidence, and expose a privacy-minimized read-only snapshot
    from the Rust harness.
-2. **Internal Wave 1:** run five real participants through evidence inspection,
-   failed validation, approval, and partial-usage tasks. Fix and repeat when a
-   gate misses.
-3. **Read-only Tauri shell:** only after Wave 1 passes, stream ordered Repo Brief
+2. **Native measurement host:** wrap the selected renderer in a narrow Tauri 2
+   host that owns fixture verification, build identity, ordered events,
+   encrypted local capture, launch timing, retention, purge, and aggregate-only
+   export. Browser and Sites builds remain rehearsal-only and cannot count a
+   participant session.
+3. **Internal Wave 1:** run five real participants through evidence inspection,
+   failed validation, approval, and partial-usage tasks on one pinned native
+   build. Fix and repeat when a gate misses.
+4. **Read-only live stream:** only after Wave 1 passes, stream ordered Repo Brief
    and validation evidence through a Rust-owned Channel with a fresh snapshot
    as the recovery boundary.
-4. **Controlled actions:** add approvals, checkpoints, and mutation only after
+5. **Controlled actions:** add approvals, checkpoints, and mutation only after
    typed backend records, explicit authority, cancellation, and restore paths
    exist and pass the next validation wave.
 

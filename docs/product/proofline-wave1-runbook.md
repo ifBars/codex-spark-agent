@@ -120,6 +120,7 @@ aggregate report:
 | --- | --- | --- |
 | Source build | Full Git commit SHA and clean/dirty status. | `git rev-parse HEAD`; `git status --porcelain` must be empty except for an explicitly recorded evidence export outside source. |
 | Frontend dependency state | `desktop/proofline/bun.lock` revision and installed dependency check. | `bun --cwd desktop/proofline install --frozen-lockfile`; then `bun --cwd desktop/proofline run build`. |
+| Native measurement host | Windows Tauri build from the same clean commit. | `bun --cwd desktop/proofline tauri build --no-bundle`; launch the resulting binary and require host preflight `countable=true`. Browser/Sites mode is never valid evidence. |
 | Replay fixture | Immutable fixture ID, revision, SHA-256, and fixture manifest. | Hash the bundle; verify manifest has all five scenarios and their expected outcomes before every session. |
 | Runtime mode | `replayed` or `live-model`. | Wave 1 defaults to replayed. Any live-model use needs a separately approved run, visible provider boundary, and must not replace a replayed task result. |
 | Environment | OS family/version, CPU/RAM band, display scale, renderer/runtime version, and network state. | Record a coarse environment ID, not hostname, user name, IP, or serial number. |
@@ -348,12 +349,16 @@ At the earlier of participant request or 30 days after the session:
 
 ## Known implementation dependency
 
-At the time of writing, the repository contains a React Proofline prototype,
-including simulated Wave 1 scenario interactions, and a read-only CLI `spark
-proofline snapshot` that explicitly reports several evidence surfaces
-unavailable. The simulated interactions are not yet sufficient by themselves
-to prove a pinned, immutable replay bundle, fixture manifest/SHA-256, 20-sample
-launch timing capture, or stored redacted event export. The Wave 1 owner must
-verify those delivery criteria against the exact test build before sessions, or
-keep issue #6 open. Do not simulate five participants or backfill the worksheet
-from agent output.
+The repository now contains a Windows-first Tauri measurement host around the
+React Proofline surface. It verifies the canonical five-scenario fixture,
+requires a full clean embedded Git identity, writes an AES-GCM ledger with a
+DPAPI-protected key, accepts only constrained categorical participant events,
+produces an aggregate-only local export, applies a 30-day retention deadline,
+and requires explicit confirmation before purge and namespace rotation.
+
+That foundation does **not** complete Wave 1. Official cold/warm process-start
+sampling, crash/restart ledger recovery, a non-Windows key protector, privacy-
+owner sign-off, and five real participant sessions remain outstanding. Until
+the recorded native build has 10 cold and 10 warm samples and passes the full
+preflight above, keep issue #6 open and do not count a session. Do not simulate
+participants or backfill the worksheet from agent output.
