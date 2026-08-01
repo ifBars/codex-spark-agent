@@ -17,6 +17,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; -webkit-font-smoothing: a
 
 .window-bar { display: flex; align-items: center; justify-content: space-between; padding: 0 13px 0 17px; color: #202226; border-bottom: 1px solid #dededa; background: #fcfcfb; font-size: 15px; font-weight: 560; }
 .window-product, .window-controls, .outcome-meta, .action-row, .section-heading, .all-passed, .output-link, .how-worked-toggle, .composer-footer, .status-ribbon, .status-ribbon span, .rail-brand, .rail-footer { display: flex; align-items: center; }
+.mini-mark { width: 18px; height: 18px; object-fit: contain; }.brand-image { width: 42px; height: 42px; object-fit: contain; }
 .window-product { gap: 8px; }
 .mini-mark { display: grid; width: 19px; height: 19px; place-items: center; color: #fff; background: #fd6427; border-radius: 5px; }
 .window-controls { gap: 15px; }

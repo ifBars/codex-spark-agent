@@ -6,7 +6,7 @@ export function reduceWave1MeasurementState(state, action) {
     case "session": return { ...state, phase: action.capture.countable ? "active" : "rehearsal", capture: action.capture, fixture: action.fixture ?? state.fixture, retention: action.retention, sessionNamespace: action.sessionNamespace, purged: false, error: null };
     case "ack": return { ...state, acknowledgements: { ...state.acknowledgements, [action.eventType]: action.acknowledgement }, error: null };
     case "aggregate": return { ...state, aggregate: action.aggregate, error: null };
-    case "purged": return { ...state, phase: "preflight", capture: action.capture, fixture: action.capture, retention: null, sessionNamespace: null, acknowledgements: {}, aggregate: null, purged: true, error: null };
+    case "purged": return { ...state, phase: "preflight", capture: action.capture, fixture: action.capture?.fixture ?? state.fixture, retention: action.retention, sessionNamespace: null, acknowledgements: {}, aggregate: null, purged: true, error: null };
     case "error": return { ...state, error: action.error };
     default: return state;
   }
