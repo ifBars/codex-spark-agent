@@ -485,6 +485,8 @@ fn visit_source_files(dir: &Path, visit: &mut impl FnMut(&Path)) -> Result<()> {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if path.is_dir() {
+            // Spark artifact directory names are reserved at every depth, matching the
+            // benchmark read-root deny-list and trace-mirroring exclusions.
             if matches!(
                 name.as_ref(),
                 "node_modules"
@@ -600,6 +602,13 @@ mod tests {
             )
             .expect("write artifact");
         }
+        let nested_artifact_dir = workspace.path().join("nested/.spark-runs");
+        std::fs::create_dir_all(&nested_artifact_dir).expect("create nested artifact directory");
+        std::fs::write(
+            nested_artifact_dir.join("nested-response.json"),
+            "x".repeat(100_000),
+        )
+        .expect("write nested artifact");
 
         let footprint = source_footprint(workspace.path()).expect("measure source footprint");
 
