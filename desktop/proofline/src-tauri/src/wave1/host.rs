@@ -1,5 +1,5 @@
 use super::{
-    crypto::{new_key, seal},
+    crypto::{new_key, open, seal},
     fixture::{BundleFixture, VerifiedFixture},
     protector::{KeyProtector, WindowsDpapiProtector},
     types::{
@@ -8,8 +8,9 @@ use super::{
         RetentionStatus, StartSessionReport, TaskCount, CAPTURE_MODE, EVENT_SCHEMA,
     },
 };
+use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::BTreeMap,
     fs::{self, OpenOptions},
     io::Write,
     path::PathBuf,
@@ -18,22 +19,30 @@ use std::{
 };
 use uuid::Uuid;
 
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct HostMetadata {
+    retention_deadline_ms: Option<u128>,
+    invalid_preflight_attempt_count: usize,
+}
+
 pub(crate) struct Wave1Host {
     data_dir: PathBuf,
     fixture: BundleFixture,
     protector: Arc<dyn KeyProtector>,
     key: Option<[u8; 32]>,
     session_id: Option<String>,
+    thread_id: Option<String>,
     participant_id: Option<String>,
     namespace: String,
     sequence: u64,
-    seen: HashSet<String>,
     events: Vec<LedgerEvent>,
     rotated: bool,
     started_at_ms: Option<u128>,
     first_activity_ms: Option<u128>,
     retention_deadline_ms: Option<u128>,
+    metadata: HostMetadata,
     build: BuildIdentity,
+    lifecycle_contract_verified: bool,
 }
 
 impl Wave1Host {
@@ -59,22 +68,34 @@ impl Wave1Host {
         protector: Arc<dyn KeyProtector>,
         build: BuildIdentity,
     ) -> Self {
+        Self::new_with_build_identity_and_lifecycle(data_dir, fixture, protector, build, false)
+    }
+
+    pub(crate) fn new_with_build_identity_and_lifecycle(
+        data_dir: PathBuf,
+        fixture: BundleFixture,
+        protector: Arc<dyn KeyProtector>,
+        build: BuildIdentity,
+        lifecycle_contract_verified: bool,
+    ) -> Self {
         Self {
             data_dir,
             fixture,
             protector,
             key: None,
             session_id: None,
+            thread_id: None,
             participant_id: None,
             namespace: new_namespace(),
             sequence: 0,
-            seen: HashSet::new(),
             events: Vec::new(),
             rotated: false,
             started_at_ms: None,
             first_activity_ms: None,
             retention_deadline_ms: None,
+            metadata: HostMetadata::default(),
             build,
+            lifecycle_contract_verified,
         }
     }
 
@@ -82,11 +103,28 @@ impl Wave1Host {
         &mut self,
         requested: FixtureRequest,
     ) -> Result<PreflightReport, String> {
+        if let Err(reason) = self.load_or_create_key() {
+            return Ok(self.report(false, None, false, Some(reason)));
+        }
+        if self.erase_expired_storage_if_needed()? {
+            return Ok(self.report(
+                false,
+                None,
+                false,
+                Some(
+                    "retention window expired; encrypted local artifacts were crypto-erased".into(),
+                ),
+            ));
+        }
         let verified = match self.fixture.preflight() {
             Ok(value) => value,
-            Err(reason) => return Ok(self.report(false, None, false, Some(reason))),
+            Err(reason) => {
+                self.record_invalid_preflight_attempt()?;
+                return Ok(self.report(false, None, false, Some(reason)));
+            }
         };
         if !fixture_matches(&requested, &verified) {
+            self.record_invalid_preflight_attempt()?;
             return Ok(self.report(
                 false,
                 Some(verified),
@@ -102,10 +140,18 @@ impl Wave1Host {
                 Some("embedded build identity is unavailable or dirty".into()),
             ));
         }
-        match self.load_or_create_key() {
-            Ok(()) => Ok(self.report(true, Some(verified), true, None)),
-            Err(reason) => Ok(self.report(false, Some(verified), true, Some(reason))),
+        if !self.lifecycle_contract_verified {
+            return Ok(self.report(
+                false,
+                Some(verified),
+                true,
+                Some(
+                    "native lifecycle boundary is not verified; countability remains fail-closed"
+                        .into(),
+                ),
+            ));
         }
+        Ok(self.report(true, Some(verified), true, None))
     }
 
     pub(crate) fn start_session(
@@ -121,15 +167,17 @@ impl Wave1Host {
                 .unwrap_or_else(|| "Wave 1 preflight failed closed".into()));
         }
         self.session_id = Some(Uuid::new_v4().to_string());
+        self.thread_id = Some(Uuid::new_v4().to_string());
         self.participant_id = Some(participant_id.clone());
         self.namespace = new_namespace();
         self.sequence = 0;
-        self.seen.clear();
         self.events.clear();
         self.rotated = false;
         self.started_at_ms = Some(now_ms());
         self.first_activity_ms = None;
         self.retention_deadline_ms = self.started_at_ms.map(retention_deadline);
+        self.metadata.retention_deadline_ms = self.retention_deadline_ms;
+        self.persist_metadata()?;
         Ok(StartSessionReport {
             capture_mode: CAPTURE_MODE.into(),
             countable: true,
@@ -158,22 +206,19 @@ impl Wave1Host {
         let key = self
             .key
             .ok_or_else(|| "protected ledger key is unavailable".to_owned())?;
-        let fingerprint = interaction.fingerprint();
         let latency_ms = session_lifecycle_latency(
             &interaction.event_type,
             self.started_at_ms,
             &mut self.first_activity_ms,
         );
-        if self.seen.contains(&fingerprint) {
-            return Ok(AppendEventReport {
-                acknowledged: true,
-                event_type: interaction.event_type,
-                latency_ms,
-            });
-        }
         self.sequence += 1;
         let event = LedgerEvent {
             schema: EVENT_SCHEMA.into(),
+            thread_id: self
+                .thread_id
+                .clone()
+                .ok_or_else(|| "host thread identity is unavailable".to_owned())?,
+            event_id: Uuid::new_v4().to_string(),
             namespace: self.namespace.clone(),
             sequence: self.sequence,
             timestamp_ms: now_ms(),
@@ -196,7 +241,6 @@ impl Wave1Host {
             .map_err(|error| format!("could not open encrypted ledger: {error}"))?;
         writeln!(ledger, "{ciphertext}")
             .map_err(|error| format!("could not append encrypted ledger: {error}"))?;
-        self.seen.insert(fingerprint);
         self.events.push(event);
         Ok(AppendEventReport {
             acknowledged: true,
@@ -217,6 +261,7 @@ impl Wave1Host {
         let mut aggregate = AggregatePreview {
             schema: EVENT_SCHEMA.into(),
             event_count: self.events.len(),
+            invalid_preflight_attempt_count: self.metadata.invalid_preflight_attempt_count,
             task_counts: task_counts
                 .into_iter()
                 .map(|(task_id, count)| TaskCount { task_id, count })
@@ -261,22 +306,18 @@ impl Wave1Host {
             return Err("purge requires explicit confirmation".into());
         }
         self.key = None;
-        for path in [self.ledger_path(), self.key_path(), self.aggregate_path()] {
-            if path.exists() {
-                fs::remove_file(path)
-                    .map_err(|error| format!("could not crypto-erase Wave 1 ledger: {error}"))?;
-            }
-        }
+        self.crypto_erase_artifacts()?;
         self.session_id = None;
+        self.thread_id = None;
         self.participant_id = None;
         self.sequence = 0;
-        self.seen.clear();
         self.events.clear();
         self.namespace = new_namespace();
         self.rotated = true;
         self.started_at_ms = None;
         self.first_activity_ms = None;
         self.retention_deadline_ms = None;
+        self.metadata = HostMetadata::default();
         Ok(PurgeReport {
             purged: true,
             next_session_namespace: self.namespace.clone(),
@@ -360,6 +401,77 @@ impl Wave1Host {
                 .try_into()
                 .map_err(|_| "protected ledger key has invalid length".to_owned())?,
         );
+        self.load_metadata()?;
+        Ok(())
+    }
+    fn load_metadata(&mut self) -> Result<(), String> {
+        let path = self.metadata_path();
+        if !path.exists() {
+            self.metadata = HostMetadata::default();
+            self.retention_deadline_ms = None;
+            return Ok(());
+        }
+        let key = self
+            .key
+            .ok_or_else(|| "protected ledger key is unavailable".to_owned())?;
+        let plaintext = open(
+            &key,
+            &fs::read(path)
+                .map_err(|error| format!("could not read retention metadata: {error}"))?,
+        )?;
+        self.metadata = serde_json::from_slice(&plaintext)
+            .map_err(|_| "retention metadata is malformed".to_owned())?;
+        self.retention_deadline_ms = self.metadata.retention_deadline_ms;
+        Ok(())
+    }
+    fn persist_metadata(&self) -> Result<(), String> {
+        let key = self
+            .key
+            .ok_or_else(|| "protected ledger key is unavailable".to_owned())?;
+        let bytes = serde_json::to_vec(&self.metadata)
+            .map_err(|_| "could not serialize retention metadata".to_owned())?;
+        let ciphertext = seal(&key, &bytes)?;
+        fs::write(self.metadata_path(), ciphertext)
+            .map_err(|error| format!("could not write retention metadata: {error}"))
+    }
+    fn record_invalid_preflight_attempt(&mut self) -> Result<(), String> {
+        self.metadata.invalid_preflight_attempt_count = self
+            .metadata
+            .invalid_preflight_attempt_count
+            .saturating_add(1);
+        self.persist_metadata()
+    }
+    fn erase_expired_storage_if_needed(&mut self) -> Result<bool, String> {
+        if !self
+            .retention_deadline_ms
+            .is_some_and(|deadline| now_ms() >= deadline)
+        {
+            return Ok(false);
+        }
+        self.crypto_erase_artifacts()?;
+        self.key = None;
+        self.session_id = None;
+        self.thread_id = None;
+        self.participant_id = None;
+        self.events.clear();
+        self.retention_deadline_ms = None;
+        self.metadata = HostMetadata::default();
+        self.rotated = true;
+        Ok(true)
+    }
+    fn crypto_erase_artifacts(&self) -> Result<(), String> {
+        for path in [
+            self.ledger_path(),
+            self.key_path(),
+            self.aggregate_path(),
+            self.metadata_path(),
+        ] {
+            if path.exists() {
+                fs::remove_file(path).map_err(|error| {
+                    format!("could not crypto-erase Wave 1 local artifact: {error}")
+                })?;
+            }
+        }
         Ok(())
     }
     fn key_path(&self) -> PathBuf {
@@ -370,6 +482,9 @@ impl Wave1Host {
     }
     fn aggregate_path(&self) -> PathBuf {
         self.data_dir.join("wave1-aggregate.json")
+    }
+    fn metadata_path(&self) -> PathBuf {
+        self.data_dir.join("wave1-retention.metadata.enc")
     }
 
     fn retention_eligible_at(&self, now: u128) -> bool {
@@ -424,6 +539,15 @@ impl Wave1Host {
     pub(crate) fn aggregate_path_for_test(&self) -> PathBuf {
         self.aggregate_path()
     }
+    pub(crate) fn key_path_for_test(&self) -> PathBuf {
+        self.key_path()
+    }
+    pub(crate) fn metadata_path_for_test(&self) -> PathBuf {
+        self.metadata_path()
+    }
+    pub(crate) fn events_for_test(&self) -> &[LedgerEvent] {
+        &self.events
+    }
     pub(crate) fn retention_eligible_at_for_test(&self, now: u128) -> bool {
         self.retention_eligible_at(now)
     }
@@ -432,5 +556,8 @@ impl Wave1Host {
     }
     pub(crate) fn set_retention_deadline_for_test(&mut self, deadline: u128) {
         self.retention_deadline_ms = Some(deadline);
+        self.metadata.retention_deadline_ms = Some(deadline);
+        self.persist_metadata()
+            .expect("persist test retention deadline");
     }
 }

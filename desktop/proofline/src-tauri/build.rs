@@ -24,7 +24,15 @@ fn main() {
     tauri_build::build();
     println!("cargo:rerun-if-changed=../../../.git");
     println!("cargo:rerun-if-changed=src");
-    println!("cargo:rerun-if-changed=fixtures/ownership-map.lf.md");
+    println!("cargo:rerun-if-changed=../fixtures/ownership-map.md");
+    println!("cargo:rerun-if-changed=../src");
+    println!("cargo:rerun-if-changed=../assets");
+    println!("cargo:rerun-if-changed=../scripts");
+    println!("cargo:rerun-if-changed=../worker");
+    println!("cargo:rerun-if-changed=../index.html");
+    println!("cargo:rerun-if-changed=../package.json");
+    println!("cargo:rerun-if-changed=../bun.lock");
+    println!("cargo:rerun-if-changed=../vite.config.mjs");
     println!("cargo:rerun-if-changed=fixtures/wave1-manifest.json");
     track_git_path("HEAD");
     track_git_path("index");

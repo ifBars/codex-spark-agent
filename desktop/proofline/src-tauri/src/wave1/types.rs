@@ -114,12 +114,6 @@ impl RendererInteraction {
         }
         Ok(())
     }
-    pub fn fingerprint(&self) -> String {
-        format!(
-            "{}:{}:{}:{}",
-            self.participant_id, self.task_id, self.event_type, self.outcome
-        )
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -134,6 +128,7 @@ pub struct AppendEventReport {
 pub struct AggregatePreview {
     pub schema: String,
     pub event_count: usize,
+    pub invalid_preflight_attempt_count: usize,
     pub task_counts: Vec<TaskCount>,
     pub outcome_counts: Vec<CategoryCount>,
     pub hint_count: usize,
@@ -163,6 +158,8 @@ pub struct PurgeReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LedgerEvent {
     pub(crate) schema: String,
+    pub(crate) thread_id: String,
+    pub(crate) event_id: String,
     pub(crate) namespace: String,
     pub(crate) sequence: u64,
     pub(crate) timestamp_ms: u128,

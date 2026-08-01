@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 
 const CANONICAL_MANIFEST_SHA: &str =
     "7829776e9aea00a0d182d00cddc3337f07659d728fbea9b31b30fdc05f36b3bf";
+const RENDERER_FIXTURE_SOURCE_SHA: &str =
+    "8da206c2b06afde354b32235d8fcb2f2b2766182ae63381e67b08b0a24c04f55";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Manifest {
@@ -30,13 +32,15 @@ struct Scenario {
 pub(crate) struct BundleFixture {
     manifest_bytes: Vec<u8>,
     evidence_bytes: Vec<u8>,
+    renderer_source_bytes: Vec<u8>,
 }
 
 impl BundleFixture {
     pub(crate) fn bundled() -> Self {
         Self {
             manifest_bytes: include_bytes!("../../fixtures/wave1-manifest.json").to_vec(),
-            evidence_bytes: include_bytes!("../../fixtures/ownership-map.lf.md").to_vec(),
+            evidence_bytes: include_bytes!("../../../fixtures/ownership-map.md").to_vec(),
+            renderer_source_bytes: include_bytes!("../../../src/wave1-replay.js").to_vec(),
         }
     }
 
@@ -78,6 +82,7 @@ impl BundleFixture {
         if actual != expected.sha256 {
             return Err("bundled fixture evidence does not match its manifest".into());
         }
+        self.verify_renderer_fixture_source(&manifest, expected)?;
         let canonical = serde_json::to_vec(&manifest)
             .map_err(|_| "bundled fixture manifest cannot be canonicalized".to_owned())?;
         let manifest_sha = hex_sha256(&canonical);
@@ -96,6 +101,57 @@ impl BundleFixture {
         let mut fixture = Self::bundled();
         fixture.evidence_bytes.push(b'!');
         fixture
+    }
+
+    #[cfg(test)]
+    pub(crate) fn renderer_source_tampered() -> Self {
+        let mut fixture = Self::bundled();
+        fixture.renderer_source_bytes.push(b'!');
+        fixture
+    }
+
+    fn verify_renderer_fixture_source(
+        &self,
+        manifest: &Manifest,
+        evidence: &EvidenceFile,
+    ) -> Result<(), String> {
+        if hex_sha256(&self.renderer_source_bytes) != RENDERER_FIXTURE_SOURCE_SHA {
+            return Err(
+                "displayed renderer fixture source bytes do not match the native bundle".into(),
+            );
+        }
+        let source = std::str::from_utf8(&self.renderer_source_bytes)
+            .map_err(|_| "displayed renderer fixture source is not UTF-8".to_owned())?;
+        let expected_id = format!(
+            "export const WAVE1_FIXTURE_ID = \"{}\"",
+            manifest.fixture_id
+        );
+        let expected_revision = format!(
+            "export const WAVE1_FIXTURE_REVISION = \"{}\"",
+            manifest.revision
+        );
+        let expected_manifest_sha = format!(
+            "export const WAVE1_FIXTURE_SHA256 = \"{}\"",
+            CANONICAL_MANIFEST_SHA
+        );
+        let expected_evidence = format!(
+            "path: \"{}\", sha256: \"{}\"",
+            evidence.path, evidence.sha256
+        );
+        if [
+            expected_id,
+            expected_revision,
+            expected_manifest_sha,
+            expected_evidence,
+        ]
+        .iter()
+        .any(|needle| !source.contains(needle))
+        {
+            return Err(
+                "displayed renderer fixture identity does not match the native bundle".into(),
+            );
+        }
+        Ok(())
     }
 }
 

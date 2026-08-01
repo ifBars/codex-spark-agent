@@ -23,3 +23,18 @@ pub(crate) fn seal(key: &[u8; 32], plaintext: &[u8]) -> Result<String, String> {
     packed.extend(ciphertext);
     Ok(STANDARD_NO_PAD.encode(packed))
 }
+
+pub(crate) fn open(key: &[u8; 32], encoded: &[u8]) -> Result<Vec<u8>, String> {
+    let cipher =
+        Aes256Gcm::new_from_slice(key).map_err(|_| "ledger key has invalid length".to_owned())?;
+    let packed = STANDARD_NO_PAD
+        .decode(encoded)
+        .map_err(|_| "encrypted metadata is malformed".to_owned())?;
+    if packed.len() < 12 {
+        return Err("encrypted metadata is malformed".into());
+    }
+    let (nonce, ciphertext) = packed.split_at(12);
+    cipher
+        .decrypt(Nonce::from_slice(nonce), ciphertext)
+        .map_err(|_| "encrypted metadata could not be opened".to_owned())
+}

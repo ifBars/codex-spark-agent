@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{"title": "Proofline for Spark", "width": 1280, "height": 860, "minWidth": 960, "minHeight": 640}],
-    "security": {"csp": "default-src 'self'; connect-src 'self' http://localhost:5173; img-src 'self' data: asset:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"}
+    "security": {"csp": "default-src 'self'; connect-src 'self'; img-src 'self' data: asset:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"}
   },
   "bundle": {"active": false}
 }
