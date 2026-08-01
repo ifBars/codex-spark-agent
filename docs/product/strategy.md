@@ -173,9 +173,11 @@ The desktop investment advances only through these gates:
 1. a privacy-minimized, read-only Spark snapshot contract;
 2. a native measurement host with fixture/build attestation, host-owned event
    identity and ordering, protected local storage, retention metadata,
-   explicit purge, and aggregate-only export; production preflight remains
+   explicit early purge, lazy crypto-erasure of expired artifacts on the next
+   preflight, and aggregate-only export; production preflight remains
    non-countable until native process-start and actual first-paint boundaries
-   are implemented and tested;
+   are implemented and tested, and timer/background expiry purge remains
+   outstanding;
 3. five real internal participant sessions using the fixed protocol in
    [proofline-validation.md](proofline-validation.md);
 4. an external design-partner usability wave only if the internal safety,

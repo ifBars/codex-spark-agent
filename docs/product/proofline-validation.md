@@ -64,7 +64,10 @@ repository.
   was live or replayed.
 - Start every session with a fresh local profile. Retain raw event logs only on
   the test machine for 30 days unless the participant asks for earlier purge.
-  The repository receives only aggregated, redacted findings.
+  The native host supports explicit early purge and lazily crypto-erases
+  expired artifacts on the next preflight. It has no timer/background purge,
+  so the facilitator must still verify the retention checklist. The repository
+  receives only aggregated, redacted findings.
 
 The current production native host deliberately reports `countable=false`
 until native process-start and actual first-paint boundaries are implemented

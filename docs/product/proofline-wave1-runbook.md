@@ -355,15 +355,17 @@ React Proofline surface. It byte-attests the canonical five-scenario renderer
 and referenced evidence, requires a full clean embedded Git identity, keeps
 host-generated identity/order/time inside an AES-GCM ledger with a DPAPI-
 protected key, accepts only constrained categorical participant events, and
-produces an aggregate-only local export. It records 30-day deadline metadata
-and blocks expired-session writes; purge and namespace rotation still require
-explicit confirmation rather than occurring automatically.
+produces an aggregate-only local export. It supports explicit early purge and,
+on the next preflight after the 30-day deadline, lazily crypto-erases expired
+artifacts before rotating the namespace. It has no timer or background purge,
+so expiry cleanup is not guaranteed without a later preflight.
 
 That foundation does **not** complete Wave 1. Production native preflight
 deliberately reports `countable=false` until a monotonic process-start boundary
 and a one-time actual-first-paint acknowledgement exist. Official cold/warm
-sampling, crash/restart ledger recovery, automatic expiry purge, a non-Windows
-key protector, privacy-owner sign-off, complete worksheet denominators, and
-five real participant sessions remain outstanding. Keep issue #6 open and do
-not count a session. Do not simulate participants or backfill the worksheet
-from agent output.
+sampling, crash/restart ledger recovery, timer/background expiry purge, proof
+of cleanup when no later preflight occurs, a non-Windows key protector,
+privacy-owner sign-off, complete worksheet denominators, and five real
+participant sessions remain outstanding. Keep issue #6 open and do not count a
+session. Do not simulate participants or backfill the worksheet from agent
+output.

@@ -70,12 +70,13 @@ ungated implementation batch. The execution sequence is:
    from the Rust harness.
 2. **Native measurement host:** wrap the selected renderer in a narrow Tauri 2
    host that owns fixture verification, build identity, event identity and
-   ordering, encrypted local capture, retention metadata, explicit purge, and
+   ordering, encrypted local capture, retention metadata, explicit early purge,
+   lazy crypto-erasure of expired artifacts on the next preflight, and
    aggregate-only export. Browser and Sites builds remain rehearsal-only. The
    current native preflight is also deliberately non-countable until native
    process-start and actual first-paint boundaries are implemented and tested;
-   it does not yet prove restart recovery, automatic expiry purge, or complete
-   participant denominators.
+   it does not yet prove restart recovery, timer/background expiry purge, or
+   complete participant denominators.
 3. **Internal Wave 1:** run five real participants through evidence inspection,
    failed validation, approval, and partial-usage tasks on one pinned native
    build. Fix and repeat when a gate misses.

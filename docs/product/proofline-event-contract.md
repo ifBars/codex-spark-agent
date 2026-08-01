@@ -166,8 +166,10 @@ timestamp, and source command/tool; generic message text is not review evidence.
 
 - The Tauri host currently supports only the deterministic Wave 1 fixture,
   byte-attested fixture evidence, protected categorical measurement, aggregate
-  export, retention deadline metadata, and explicit purge. Host-generated event
-  identity, timestamp, and sequence remain inside the encrypted ledger; the
+  export, retention deadline metadata, explicit early purge, and lazy automatic
+  crypto-erasure of expired artifacts at the next preflight. It has no timer or
+  background expiry purge. Host-generated event identity, timestamp, and
+  sequence remain inside the encrypted ledger; the
   renderer cannot submit or retrieve them. Production preflight deliberately
   remains non-countable until native process-start and actual first-paint
   instrumentation exists. The host has no live Spark session/run stream,
