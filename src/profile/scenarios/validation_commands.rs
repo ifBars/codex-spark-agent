@@ -313,7 +313,7 @@ pub(crate) fn profile_scenario_validation_checks(
 pub(crate) fn profile_scenario_validation_command(
     scenario: ProfileScenarioKind,
 ) -> Option<ProfileScenarioValidationCommand> {
-    match scenario {
+    let command = match scenario {
         ProfileScenarioKind::ReactCalculatorScaffold => Some(ProfileScenarioValidationCommand {
             workdir: ".",
             program: "bun",
@@ -547,5 +547,26 @@ pub(crate) fn profile_scenario_validation_command(
             ],
         }),
         _ => None,
+    };
+    command.map(|mut command| {
+        if command.program == "powershell" && !cfg!(windows) {
+            command.program = "pwsh";
+        }
+        command
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn powershell_validators_use_the_platform_executable_name() {
+        let command = profile_scenario_validation_command(ProfileScenarioKind::TerminalRepair)
+            .expect("terminal repair validation");
+        assert_eq!(
+            command.program,
+            if cfg!(windows) { "powershell" } else { "pwsh" }
+        );
     }
 }
