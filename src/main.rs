@@ -113,10 +113,13 @@ async fn run_command(command: Command) -> Result<()> {
                 })?;
                 let rendered_json = serde_json::to_string_pretty(&report)?;
                 if let Some(output) = output {
-                    if let Some(parent) = output.parent().filter(|path| !path.as_os_str().is_empty())
+                    if let Some(parent) =
+                        output.parent().filter(|path| !path.as_os_str().is_empty())
                     {
                         std::fs::create_dir_all(parent).map_err(|error| {
-                            anyhow::anyhow!("could not create usage history output directory: {error}")
+                            anyhow::anyhow!(
+                                "could not create usage history output directory: {error}"
+                            )
                         })?;
                     }
                     std::fs::write(&output, format!("{rendered_json}\n")).map_err(|error| {
