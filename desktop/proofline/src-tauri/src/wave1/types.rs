@@ -9,6 +9,23 @@ pub struct BuildIdentity {
     pub dirty: bool,
 }
 
+impl BuildIdentity {
+    pub(crate) fn embedded() -> Self {
+        Self {
+            git_sha: option_env!("PROOFLINE_BUILD_GIT_SHA")
+                .unwrap_or("unknown")
+                .into(),
+            dirty: option_env!("PROOFLINE_BUILD_GIT_DIRTY") == Some("true"),
+        }
+    }
+
+    pub(crate) fn is_verified(&self) -> bool {
+        self.git_sha.len() == 40
+            && self.git_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+            && !self.dirty
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FixtureVerification {
     pub id: String,
@@ -30,6 +47,8 @@ pub struct FixtureRequest {
 pub struct RetentionStatus {
     pub status: String,
     pub purge_status: String,
+    pub retention_deadline_days: u8,
+    pub retention_deadline_status: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

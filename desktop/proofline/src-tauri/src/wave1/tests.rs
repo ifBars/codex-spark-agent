@@ -2,7 +2,7 @@ use super::{
     fixture::BundleFixture,
     host::Wave1Host,
     protector::{TestProtector, UnavailableProtector},
-    types::{FixtureRequest, RendererInteraction},
+    types::{BuildIdentity, FixtureRequest, RendererInteraction},
 };
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -16,11 +16,21 @@ fn request() -> FixtureRequest {
     }
 }
 fn host() -> (TempDir, Wave1Host) {
+    host_with_build(verified_build())
+}
+fn verified_build() -> BuildIdentity {
+    BuildIdentity {
+        git_sha: "a".repeat(40),
+        dirty: false,
+    }
+}
+fn host_with_build(build: BuildIdentity) -> (TempDir, Wave1Host) {
     let directory = TempDir::new().expect("temporary app data directory");
-    let host = Wave1Host::new(
+    let host = Wave1Host::new_with_build_identity(
         directory.path().to_path_buf(),
         BundleFixture::bundled(),
         Arc::new(TestProtector),
+        build,
     );
     (directory, host)
 }
@@ -53,15 +63,35 @@ fn privacy_allowlist_rejects_freeform_renderer_content() {
 #[test]
 fn tampered_bundled_evidence_rejects_countability() {
     let directory = TempDir::new().expect("temporary app data directory");
-    let mut host = Wave1Host::new(
+    let mut host = Wave1Host::new_with_build_identity(
         directory.path().to_path_buf(),
         BundleFixture::tampered(),
         Arc::new(TestProtector),
+        verified_build(),
     );
     let report = host.preflight(request()).expect("preflight report");
     assert!(!report.countable);
     assert!(!report.fixture.verified);
     assert!(report.reason.unwrap_or_default().contains("does not match"));
+}
+#[test]
+fn dirty_or_unknown_build_identity_fails_countability_closed() {
+    for build in [
+        BuildIdentity {
+            git_sha: "unknown".into(),
+            dirty: false,
+        },
+        BuildIdentity {
+            git_sha: "b".repeat(40),
+            dirty: true,
+        },
+    ] {
+        let (_directory, mut host) = host_with_build(build);
+        let report = host.preflight(request()).expect("preflight report");
+        assert!(!report.countable);
+        assert!(!report.fixture.build_verified);
+        assert!(report.reason.unwrap_or_default().contains("build identity"));
+    }
 }
 #[test]
 fn fixture_request_must_match_actual_bundled_bytes() {
@@ -85,6 +115,8 @@ fn bridge_contract_uses_snake_case_aggregate_only_dtos() {
         .start_session("P01".into(), request())
         .expect("session starts");
     assert_eq!(session.participant_id, "P01");
+    assert_eq!(session.retention.retention_deadline_days, 30);
+    assert_eq!(session.retention.retention_deadline_status, "active");
     let acknowledgement = host
         .append_event(event("activity_rendered", "success"))
         .expect("event writes");
@@ -107,6 +139,12 @@ fn bridge_contract_uses_snake_case_aggregate_only_dtos() {
         .expect("aggregate object")
         .keys()
         .all(|key| allowed.contains(&key.as_str())));
+    assert_eq!(aggregate["download_ready"], true);
+    assert!(host.aggregate_path_for_test().is_file());
+    let artifact =
+        std::fs::read_to_string(host.aggregate_path_for_test()).expect("aggregate artifact");
+    assert!(!artifact.contains("P01"));
+    assert!(!artifact.contains("timestamp"));
 }
 #[test]
 fn events_are_monotonic_and_deduplicated() {
@@ -143,14 +181,31 @@ fn encrypted_ledger_does_not_contain_event_plaintext() {
 #[test]
 fn unavailable_protected_storage_fails_countability_closed() {
     let directory = TempDir::new().expect("temporary app data directory");
-    let mut host = Wave1Host::new(
+    let mut host = Wave1Host::new_with_build_identity(
         directory.path().to_path_buf(),
         BundleFixture::bundled(),
         Arc::new(UnavailableProtector),
+        verified_build(),
     );
     let report = host.preflight(request()).expect("preflight report");
     assert!(!report.countable);
     assert!(report.reason.unwrap_or_default().contains("unavailable"));
+}
+#[test]
+fn retention_expiry_rejects_new_events_without_deleting_ledger() {
+    let (_directory, mut host) = host();
+    host.start_session("P01".into(), request())
+        .expect("session starts");
+    host.append_event(event("run_submitted", "success"))
+        .expect("event writes");
+    let deadline = host.retention_deadline_for_test().expect("deadline set");
+    assert!(host.retention_eligible_at_for_test(deadline.saturating_sub(1)));
+    assert!(!host.retention_eligible_at_for_test(deadline));
+    host.set_retention_deadline_for_test(0);
+    assert!(host
+        .append_event(event("activity_rendered", "success"))
+        .is_err());
+    assert!(host.ledger_path_for_test().is_file());
 }
 #[test]
 fn aggregate_preview_has_counts_but_no_session_or_event_identifiers() {
@@ -175,10 +230,13 @@ fn confirmed_purge_crypto_erases_key_and_rotates_namespace() {
         .expect("session starts");
     host.append_event(event("task_outcome", "failure"))
         .expect("event writes");
+    host.preview_aggregate(true).expect("aggregate export");
+    assert!(host.aggregate_path_for_test().is_file());
     assert!(host.purge_session(false).is_err());
     let purge = host.purge_session(true).expect("confirmed purge");
     assert_ne!(started.session_namespace, purge.next_session_namespace);
     assert!(purge.purged);
+    assert!(!host.aggregate_path_for_test().exists());
     assert_eq!(
         host.preview_aggregate(false).expect("preview").event_count,
         0

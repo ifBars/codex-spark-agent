@@ -32,6 +32,8 @@ pub(crate) struct Wave1Host {
     rotated: bool,
     started_at_ms: Option<u128>,
     first_activity_ms: Option<u128>,
+    retention_deadline_ms: Option<u128>,
+    build: BuildIdentity,
 }
 
 impl Wave1Host {
@@ -48,6 +50,15 @@ impl Wave1Host {
         fixture: BundleFixture,
         protector: Arc<dyn KeyProtector>,
     ) -> Self {
+        Self::new_with_build_identity(data_dir, fixture, protector, BuildIdentity::embedded())
+    }
+
+    pub(crate) fn new_with_build_identity(
+        data_dir: PathBuf,
+        fixture: BundleFixture,
+        protector: Arc<dyn KeyProtector>,
+        build: BuildIdentity,
+    ) -> Self {
         Self {
             data_dir,
             fixture,
@@ -62,6 +73,8 @@ impl Wave1Host {
             rotated: false,
             started_at_ms: None,
             first_activity_ms: None,
+            retention_deadline_ms: None,
+            build,
         }
     }
 
@@ -79,6 +92,14 @@ impl Wave1Host {
                 Some(verified),
                 true,
                 Some("renderer fixture identity does not match bundled verified bytes".into()),
+            ));
+        }
+        if !self.build.is_verified() {
+            return Ok(self.report(
+                false,
+                Some(verified),
+                true,
+                Some("embedded build identity is unavailable or dirty".into()),
             ));
         }
         match self.load_or_create_key() {
@@ -108,13 +129,14 @@ impl Wave1Host {
         self.rotated = false;
         self.started_at_ms = Some(now_ms());
         self.first_activity_ms = None;
+        self.retention_deadline_ms = self.started_at_ms.map(retention_deadline);
         Ok(StartSessionReport {
             capture_mode: CAPTURE_MODE.into(),
             countable: true,
             participant_id,
             session_namespace: self.namespace.clone(),
             fixture: preflight.fixture,
-            retention: preflight.retention,
+            retention: self.retention(),
         })
     }
 
@@ -128,11 +150,16 @@ impl Wave1Host {
         {
             return Err("event participant does not match an active countable session".into());
         }
+        if !self.retention_eligible_at(now_ms()) {
+            return Err(
+                "retention window expired; explicitly purge before starting a new session".into(),
+            );
+        }
         let key = self
             .key
             .ok_or_else(|| "protected ledger key is unavailable".to_owned())?;
         let fingerprint = interaction.fingerprint();
-        let latency_ms = lifecycle_latency(
+        let latency_ms = session_lifecycle_latency(
             &interaction.event_type,
             self.started_at_ms,
             &mut self.first_activity_ms,
@@ -178,7 +205,7 @@ impl Wave1Host {
         })
     }
 
-    pub(crate) fn preview_aggregate(&self, download: bool) -> Result<AggregatePreview, String> {
+    pub(crate) fn preview_aggregate(&mut self, download: bool) -> Result<AggregatePreview, String> {
         let mut task_counts = BTreeMap::new();
         let mut outcome_counts = BTreeMap::new();
         for event in &self.events {
@@ -187,7 +214,7 @@ impl Wave1Host {
                 *outcome_counts.entry(event.outcome.clone()).or_insert(0) += 1;
             }
         }
-        Ok(AggregatePreview {
+        let mut aggregate = AggregatePreview {
             schema: EVENT_SCHEMA.into(),
             event_count: self.events.len(),
             task_counts: task_counts
@@ -210,8 +237,23 @@ impl Wave1Host {
                 .count(),
             first_activity_ms: self.first_activity_ms,
             retention: self.retention(),
-            download_ready: download && self.session_id.is_some() && self.key.is_some(),
-        })
+            download_ready: false,
+        };
+        if download
+            && self.session_id.is_some()
+            && self.key.is_some()
+            && self.retention_eligible_at(now_ms())
+        {
+            aggregate.download_ready = true;
+            let bytes = serde_json::to_vec(&aggregate)
+                .map_err(|_| "could not serialize aggregate-only export".to_owned())?;
+            fs::write(self.aggregate_path(), bytes)
+                .map_err(|error| format!("could not write aggregate-only export: {error}"))?;
+            if !self.aggregate_path().is_file() {
+                return Err("aggregate-only export could not be confirmed".into());
+            }
+        }
+        Ok(aggregate)
     }
 
     pub(crate) fn purge_session(&mut self, confirm: bool) -> Result<PurgeReport, String> {
@@ -219,7 +261,7 @@ impl Wave1Host {
             return Err("purge requires explicit confirmation".into());
         }
         self.key = None;
-        for path in [self.ledger_path(), self.key_path()] {
+        for path in [self.ledger_path(), self.key_path(), self.aggregate_path()] {
             if path.exists() {
                 fs::remove_file(path)
                     .map_err(|error| format!("could not crypto-erase Wave 1 ledger: {error}"))?;
@@ -234,6 +276,7 @@ impl Wave1Host {
         self.rotated = true;
         self.started_at_ms = None;
         self.first_activity_ms = None;
+        self.retention_deadline_ms = None;
         Ok(PurgeReport {
             purged: true,
             next_session_namespace: self.namespace.clone(),
@@ -248,13 +291,14 @@ impl Wave1Host {
         evidence_verified: bool,
         reason: Option<String>,
     ) -> PreflightReport {
+        let build_verified = self.build.is_verified();
         let fixture = verified
             .map(|fixture| FixtureVerification {
                 id: fixture.id,
                 revision: fixture.revision,
                 sha256: fixture.sha256,
                 verified: evidence_verified,
-                build_verified: true,
+                build_verified,
             })
             .unwrap_or(FixtureVerification {
                 id: "unavailable".into(),
@@ -265,15 +309,10 @@ impl Wave1Host {
             });
         PreflightReport {
             capture_mode: CAPTURE_MODE.into(),
-            countable,
+            countable: countable && build_verified,
             fixture,
             retention: self.retention(),
-            build: BuildIdentity {
-                git_sha: option_env!("PROOFLINE_BUILD_GIT_SHA")
-                    .unwrap_or("unknown")
-                    .into(),
-                dirty: option_env!("PROOFLINE_BUILD_GIT_DIRTY") == Some("true"),
-            },
+            build: self.build.clone(),
             reason,
         }
     }
@@ -288,6 +327,12 @@ impl Wave1Host {
                 "crypto_erased".into()
             } else {
                 "ready".into()
+            },
+            retention_deadline_days: 30,
+            retention_deadline_status: match self.retention_deadline_ms {
+                Some(deadline) if now_ms() >= deadline => "expired".into(),
+                Some(_) => "active".into(),
+                None => "not_started".into(),
             },
         }
     }
@@ -323,6 +368,14 @@ impl Wave1Host {
     fn ledger_path(&self) -> PathBuf {
         self.data_dir.join("wave1-ledger.events.enc")
     }
+    fn aggregate_path(&self) -> PathBuf {
+        self.data_dir.join("wave1-aggregate.json")
+    }
+
+    fn retention_eligible_at(&self, now: u128) -> bool {
+        self.retention_deadline_ms
+            .is_some_and(|deadline| now < deadline)
+    }
 }
 
 fn fixture_matches(requested: &FixtureRequest, verified: &VerifiedFixture) -> bool {
@@ -337,7 +390,7 @@ fn validate_participant(value: &str) -> Result<(), String> {
         Err("participant_id must be a pseudonymous P01 through P99 identifier".into())
     }
 }
-fn lifecycle_latency(
+fn session_lifecycle_latency(
     event_type: &str,
     started_at: Option<u128>,
     first_activity: &mut Option<u128>,
@@ -360,9 +413,24 @@ fn now_ms() -> u128 {
 fn new_namespace() -> String {
     format!("wave1-{}", Uuid::new_v4())
 }
+fn retention_deadline(started_at: u128) -> u128 {
+    started_at.saturating_add(30 * 24 * 60 * 60 * 1_000)
+}
 #[cfg(test)]
 impl Wave1Host {
     pub(crate) fn ledger_path_for_test(&self) -> PathBuf {
         self.ledger_path()
+    }
+    pub(crate) fn aggregate_path_for_test(&self) -> PathBuf {
+        self.aggregate_path()
+    }
+    pub(crate) fn retention_eligible_at_for_test(&self, now: u128) -> bool {
+        self.retention_eligible_at(now)
+    }
+    pub(crate) fn retention_deadline_for_test(&self) -> Option<u128> {
+        self.retention_deadline_ms
+    }
+    pub(crate) fn set_retention_deadline_for_test(&mut self, deadline: u128) {
+        self.retention_deadline_ms = Some(deadline);
     }
 }
