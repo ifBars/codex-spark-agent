@@ -10,6 +10,10 @@ use crate::profile::scenarios::{
 use crate::{APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS};
 use serde_json::json;
 
+fn expected_powershell_program() -> &'static str {
+    if cfg!(windows) { "powershell" } else { "pwsh" }
+}
+
 #[test]
 fn compaction_pressure_scenario_targets_prompt_size() {
     let prompts = profile_scenario_prompts(ProfileScenarioKind::CompactionPressure, 45_000)
@@ -645,7 +649,7 @@ fn rust_log_analyzer_scaffold_declares_project_file_expectations() {
     assert!(benchmark_prompt.contains("Do not run cargo run manually"));
     assert!(prompt.contains("cargo test"));
     assert_eq!(validation.workdir, ".");
-    assert_eq!(validation.program, "powershell");
+    assert_eq!(validation.program, expected_powershell_program());
     assert!(validation.args.join(" ").contains("cargo test"));
     assert!(validation.args.join(" ").contains("cargo run"));
     assert!(validation.args.join(" ").contains("Top error code"));
@@ -748,7 +752,7 @@ fn rust_notes_tui_scaffold_declares_project_file_expectations() {
     );
     assert!(benchmark_prompt.contains("Do not set CARGO_TARGET_DIR"));
     assert_eq!(validation.workdir, ".");
-    assert_eq!(validation.program, "powershell");
+    assert_eq!(validation.program, expected_powershell_program());
     assert_eq!(
         validation.args,
         &["-NoProfile", "-File", "validate-notes.ps1"]
@@ -916,7 +920,7 @@ fn merge_conflict_resolution_declares_conflict_and_validation_expectations() {
     assert!(benchmark_prompt.contains("Preserve dashboard-v2"));
     assert!(benchmark_prompt.contains("Run bun test"));
     assert_eq!(validation.workdir, ".");
-    assert_eq!(validation.program, "powershell");
+    assert_eq!(validation.program, expected_powershell_program());
     assert!(command.contains("unresolved conflict marker"));
     assert!(command.contains("dashboard-v2"));
     assert!(command.contains("data-residency"));
@@ -1028,7 +1032,7 @@ fn config_migration_declares_ordered_mutation_and_validation_expectations() {
         benchmark_task_prompt(ProfileScenarioKind::ConfigMigration)
             .contains("use paths like config/app.json, src/config.ts, and docs/config.md")
     );
-    assert_eq!(validation.program, "powershell");
+    assert_eq!(validation.program, expected_powershell_program());
     assert_eq!(
         groups,
         vec![
@@ -1392,7 +1396,7 @@ fn ci_failure_triage_declares_log_source_and_validation_expectations() {
     assert!(benchmark_prompt.contains("SAVE20 path in applyDiscount"));
     assert!(benchmark_prompt.contains("Expected 80 / Received 100 evidence"));
     assert_eq!(validation.workdir, ".");
-    assert_eq!(validation.program, "powershell");
+    assert_eq!(validation.program, expected_powershell_program());
     assert!(command.contains("bun test"));
     assert!(command.contains("\\bExpected\\b[^\\r\\n]*\\b80\\b"));
     assert!(command.contains("\\bReceived\\b[^\\r\\n]*\\b100\\b"));
@@ -1493,7 +1497,7 @@ fn pull_request_review_declares_diff_source_and_validation_expectations() {
     assert!(benchmark_prompt.contains("role.includes('admin')"));
     assert!(benchmark_prompt.contains("read-only-admin users"));
     assert_eq!(validation.workdir, ".");
-    assert_eq!(validation.program, "powershell");
+    assert_eq!(validation.program, expected_powershell_program());
     assert!(command.contains("read-only-admin"));
     assert!(command.contains("includes\\s*\\("));
     assert!(command.contains("strict equality"));
@@ -1565,7 +1569,7 @@ fn dependency_upgrade_triage_declares_migration_source_and_validation_expectatio
     assert!(benchmark_prompt.contains("@acme/time-utils 2.0.0"));
     assert!(benchmark_prompt.contains("date-only defaults from UTC to local time"));
     assert_eq!(validation.workdir, ".");
-    assert_eq!(validation.program, "powershell");
+    assert_eq!(validation.program, expected_powershell_program());
     assert!(command.contains("@acme/time-utils"));
     assert!(command.contains("zone\\s*:\\s*"));
     assert!(command.contains("missing test gap recommendation"));
