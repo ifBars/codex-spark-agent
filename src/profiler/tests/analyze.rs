@@ -16,7 +16,13 @@ fn analyze_trace_reconstructs_tool_calls_from_stream_events() {
         serde_json::to_vec_pretty(&json!({
             "duration_ms": 1234,
             "raw": {
-                "response": {"output": []},
+                "response": {"output": [], "usage": {
+                    "input_tokens": 120,
+                    "input_tokens_details": {"cached_tokens": 20},
+                    "output_tokens": 42,
+                    "output_tokens_details": {"reasoning_tokens": 12},
+                    "total_tokens": 162
+                }},
                 "events": [
                     {
                         "type": "response.output_item.done",
@@ -50,6 +56,22 @@ fn analyze_trace_reconstructs_tool_calls_from_stream_events() {
     assert_eq!(summary["response_text_chars"], 4);
     assert_eq!(summary["request_duration_ms_by_request"], json!([1234]));
     assert_eq!(summary["max_request_duration_ms"], 1234);
+    assert_eq!(summary["response_usage"]["completed_responses"], 1);
+    assert_eq!(summary["response_usage"]["input_tokens"]["total"], 120);
+    assert_eq!(
+        summary["response_usage"]["cached_input_tokens"]["total"],
+        20
+    );
+    assert_eq!(summary["response_usage"]["output_tokens"]["total"], 42);
+    assert_eq!(
+        summary["response_usage"]["reasoning_output_tokens"]["total"],
+        12
+    );
+    assert_eq!(summary["response_usage"]["total_tokens"]["total"], 162);
+    assert_eq!(
+        summary["timeline"][0]["provider_response_usage"]["output_tokens"],
+        42
+    );
     assert_eq!(summary["timeline"][0]["turn"], 1);
     assert!(
         summary["timeline"][0]["request_input_chars"]

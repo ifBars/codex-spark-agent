@@ -1,7 +1,7 @@
 import { formatMetric, metricRange, sentenceCase } from "../lib/format.js";
 import { xMetrics, yMetrics } from "../data/benchmarks.js";
 
-export function RankingLedger({ rows, xMetric, yMetric }) {
+export function RankingLedger({ rows, xMetric, yMetric, hasIntervals = true }) {
   const ranked = [...rows].sort(
     (left, right) => right[yMetrics[yMetric].key] - left[yMetrics[yMetric].key],
   );
@@ -52,7 +52,7 @@ export function RankingLedger({ rows, xMetric, yMetric }) {
         <span>Measured task runs</span>
         <span>Scenario-balanced means</span>
         <span>Failed attempts excluded</span>
-        <span>95% confidence ranges</span>
+        <span>{hasIntervals ? "95% confidence ranges" : "No interval published"}</span>
       </div>
     </aside>
   );

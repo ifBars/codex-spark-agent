@@ -6,8 +6,8 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use super::{
-    AgentProfiler, approx_token_count_from_chars, context_window_pct, created_parent_dirs,
-    tool_result_is_truncated, tool_result_timed_out, tool_signature,
+    AgentProfiler, ResponseUsage, approx_token_count_from_chars, context_window_pct,
+    created_parent_dirs, tool_result_is_truncated, tool_result_timed_out, tool_signature,
 };
 
 #[path = "analyze/actions.rs"]
@@ -141,6 +141,21 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 timeline_turn(&mut timeline, turn)
                     .insert("request_duration_ms".to_string(), json!(duration_ms));
             }
+            let response_raw = value.get("raw").unwrap_or(&value);
+            if let Some(usage) = ResponseUsage::from_response_raw(response_raw) {
+                timeline_turn(&mut timeline, turn).insert(
+                    "provider_response_usage".to_string(),
+                    json!({
+                        "source": "provider_responses",
+                        "input_tokens": usage.input_tokens,
+                        "cached_input_tokens": usage.cached_input_tokens,
+                        "output_tokens": usage.output_tokens,
+                        "reasoning_output_tokens": usage.reasoning_output_tokens,
+                        "total_tokens": usage.total_tokens,
+                    }),
+                );
+            }
+            profiler.record_response_usage(response_raw);
             for call in function_calls_from_trace_response(&value) {
                 let tool_name = call.tool_name;
                 let args = call.args;

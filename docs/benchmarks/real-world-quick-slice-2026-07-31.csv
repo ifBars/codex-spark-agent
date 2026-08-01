@@ -1,0 +1,9 @@
+runner,reasoning_effort,scenario,runs,failed_runs_excluded,successful_runs,average_quality,average_total_tokens,average_duration_seconds
+Codex CLI 0.146.0,medium,manifest-contract-write,1,0,1,85.00,365877,78.43
+Codex CLI 0.146.0,medium,multi-hop-analysis,1,0,1,84.00,96568,55.00
+Codex CLI 0.146.0,medium,multi-module-bugfix,1,0,1,85.00,98587,67.61
+Codex CLI 0.146.0,medium,scoped-policy-patch,1,0,1,85.00,343890,82.83
+Spark harness,medium,manifest-contract-write,1,0,1,82.00,49572,17.56
+Spark harness,medium,multi-hop-analysis,1,0,1,82.00,49751,15.99
+Spark harness,medium,multi-module-bugfix,1,0,1,82.00,66680,23.34
+Spark harness,medium,scoped-policy-patch,1,0,1,82.00,48928,16.63

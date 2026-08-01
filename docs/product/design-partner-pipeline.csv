@@ -1,0 +1,13 @@
+candidate,partner_type,stage,pain_score,measurability_score,access_score,data_boundary_score,public_channel,first_workflow,next_action,main_disqualifier
+PlanetScale,economic_buyer,research_complete,9,9,7,8,https://planetscale.com/contact,pr_verification,request_outreach_authorization,Existing review automation may already be sufficient
+Amplitude,economic_buyer,research_complete,9,9,6,7,https://www.amplitude.com/contact,agent_run_evidence_ledger,request_outreach_authorization,Strong internal platform may build this itself
+Money Forward,economic_buyer,research_complete,8,9,6,8,https://corp.moneyforward.com/en/contact/,module_and_test_evidence,request_outreach_authorization,Enterprise procurement and internal evaluation capability
+Notion,economic_buyer,research_complete,8,8,6,7,https://www.notion.com/en-GB/contact-sales,issue_context_repo_brief,hold_for_second_wave,Existing integration may make Spark redundant
+Coinbase,economic_buyer,research_complete,9,9,4,6,https://www.coinbase.com/press,agent_pr_evidence_audit,hold_for_warm_intro,Regulated boundary and weak engineering inbound route
+Virgin Atlantic,economic_buyer,research_complete,6,8,4,8,https://www.virginatlantic.com/corporate/media,ci_test_evidence,hold_for_second_wave,Only one coding-agent family is publicly confirmed
+Dropbox,economic_buyer,research_complete,8,8,5,6,https://www.dropbox.com/contact-sales?fallback=true,monorepo_affected_surface_brief,hold_for_second_wave,Much larger than the initial customer band
+OpenHands,instrumentation_partner,research_complete,9,10,9,9,https://github.com/OpenHands/software-agent-sdk/issues,benchmark_evidence_packet,request_outreach_authorization,Validates workflow but not willingness to pay
+Aider,instrumentation_partner,research_complete,8,10,9,9,https://github.com/Aider-AI/aider/issues,benchmark_trace_and_gate_evidence,request_outreach_authorization,Small team with an existing benchmark
+Continue,instrumentation_partner,research_complete,9,9,9,9,https://github.com/continuedev/continue/issues,agentic_ci_triage,request_outreach_authorization,Directly adjacent product surface
+Cline,instrumentation_partner,research_complete,8,8,9,8,https://github.com/cline/cline/issues,background_agent_evidence_summary,hold_for_second_wave,Owns its agent loop and may not want an external worker
+SWE-bench,instrumentation_partner,research_complete,9,10,9,10,https://github.com/SWE-bench/SWE-bench/issues,benchmark_provenance_and_failure_brief,hold_for_second_wave,Research infrastructure rather than a conventional buyer

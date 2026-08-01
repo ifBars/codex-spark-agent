@@ -8,6 +8,7 @@ mod policy;
 
 pub use descriptors::{ToolDescriptor, builtin_tools};
 pub use policy::AgentMode;
+pub(crate) use policy::is_local_filesystem_tool;
 pub(crate) use policy::is_readonly_tool;
 pub(crate) use policy::tools_for_mode;
 

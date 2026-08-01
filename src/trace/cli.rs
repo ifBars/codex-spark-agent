@@ -4,7 +4,10 @@ use anyhow::Result;
 use serde_json::json;
 
 use crate::cli::TraceSort;
-use crate::{profiler, trace::commands};
+use crate::{
+    profiler,
+    trace::{commands, retention},
+};
 
 pub(crate) fn handle_traces(
     limit: usize,
@@ -105,6 +108,46 @@ pub(crate) fn handle_traces(
         json_records,
         &matching_summaries,
     )
+}
+
+pub(crate) fn handle_trace_retention(
+    cwd: PathBuf,
+    older_than_days: u64,
+    purge: bool,
+    confirm: bool,
+) -> Result<()> {
+    retention::validate_purge_request(purge, confirm)?;
+    let plan = retention::inspect_trace_retention(&cwd, older_than_days)?;
+    println!("Trace retention inspection");
+    println!("Workspace: {}", plan.workspace.display());
+    println!("Trace root: {}", plan.runs_root.display());
+    println!("Policy: older than {} days", plan.older_than_days);
+    println!("Cutoff unix ms: {}", plan.cutoff_unix_ms);
+    println!("Recognized trace runs: {}", plan.total_runs);
+    println!("Eligible trace runs: {}", plan.candidates.len());
+    if purge {
+        for candidate in &plan.candidates {
+            println!(
+                "  {} (started_at_unix_ms={})",
+                candidate.path.display(),
+                candidate.started_at_unix_ms
+            );
+        }
+    }
+
+    if purge && confirm {
+        let purged = retention::purge_trace_retention(&plan, true)?;
+        println!("Purged {purged} eligible local trace run(s).");
+    } else if purge {
+        println!(
+            "Dry run: no trace directories were deleted. Add --confirm to purge the listed paths."
+        );
+    } else {
+        println!(
+            "Inspection only: no trace directories were deleted. Add --purge to review candidates, then --confirm to delete them."
+        );
+    }
+    Ok(())
 }
 
 fn print_trace_records(

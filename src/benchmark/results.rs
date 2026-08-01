@@ -85,6 +85,8 @@ struct BenchmarkRunRow {
     requests: u64,
     tool_calls: u64,
     max_approx_input_tokens: u64,
+    #[serde(default)]
+    response_usage: Value,
     max_context_window_pct: f64,
     max_request_duration_ms: u64,
     total_duration_ms: u64,
@@ -189,8 +191,14 @@ struct ComparisonRow {
     validation_timed_out: bool,
     duration_ms: u128,
     tool_or_item_calls: u64,
-    input_tokens: u64,
-    output_tokens: u64,
+    usage_source: String,
+    input_tokens: Option<u64>,
+    cached_input_tokens: Option<u64>,
+    cache_write_input_tokens: Option<u64>,
+    uncached_input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    reasoning_output_tokens: Option<u64>,
+    total_tokens: Option<u64>,
     source_files: u64,
     source_bytes: u64,
     failure_points: String,
@@ -1091,6 +1099,10 @@ fn row_from_summary(cwd: &Path, run: &Path, summary: &Value) -> BenchmarkRunRow 
         requests: value_u64(summary, "/requests"),
         tool_calls: value_u64(summary, "/tool_calls"),
         max_approx_input_tokens: value_u64(summary, "/max_approx_input_tokens"),
+        response_usage: summary
+            .get("response_usage")
+            .cloned()
+            .unwrap_or(Value::Null),
         max_context_window_pct: value_f64(summary, "/max_context_window_pct"),
         max_request_duration_ms: value_u64(summary, "/max_request_duration_ms"),
         total_duration_ms: value_u64(summary, "/total_request_duration_ms")
@@ -1281,7 +1293,7 @@ fn failure_points(
 
 fn rows_to_csv(rows: &[BenchmarkRunRow]) -> String {
     let mut csv = String::from(
-        "run_id,trace_dir,suite,scenario,model,reasoning_effort,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_present,validation_exit_code,validation_timed_out,browser_validation_present,browser_validation_exit_code,browser_validation_timed_out,browser_screenshot,requests,tool_calls,max_approx_input_tokens,max_context_window_pct,max_request_duration_ms,total_duration_ms,source_files,source_bytes,compactions,tool_failures,recovered_tool_failures,unrecovered_tool_failures,truncated_tool_results,repeated_tool_calls,tool_only_turns,max_tool_only_streak,expected_tool_groups,satisfied_tool_groups,expected_tool_calls,satisfied_tool_calls,extra_calls_after_satisfied,extra_turns_after_satisfied,context_growth_after_satisfied_chars,diagnostics,failure_points,completion_score,quality_score,process_score,efficiency_index,benchmark_index,validation_score\n",
+        "run_id,trace_dir,suite,scenario,model,reasoning_effort,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_present,validation_exit_code,validation_timed_out,browser_validation_present,browser_validation_exit_code,browser_validation_timed_out,browser_screenshot,requests,tool_calls,max_approx_input_tokens,response_usage,max_context_window_pct,max_request_duration_ms,total_duration_ms,source_files,source_bytes,compactions,tool_failures,recovered_tool_failures,unrecovered_tool_failures,truncated_tool_results,repeated_tool_calls,tool_only_turns,max_tool_only_streak,expected_tool_groups,satisfied_tool_groups,expected_tool_calls,satisfied_tool_calls,extra_calls_after_satisfied,extra_turns_after_satisfied,context_growth_after_satisfied_chars,diagnostics,failure_points,completion_score,quality_score,process_score,efficiency_index,benchmark_index,validation_score\n",
     );
     for row in rows {
         let values = [
@@ -1310,6 +1322,7 @@ fn rows_to_csv(rows: &[BenchmarkRunRow]) -> String {
             row.requests.to_string(),
             row.tool_calls.to_string(),
             row.max_approx_input_tokens.to_string(),
+            response_usage_csv_value(&row.response_usage),
             round1(row.max_context_window_pct).to_string(),
             row.max_request_duration_ms.to_string(),
             row.total_duration_ms.to_string(),
@@ -1674,8 +1687,20 @@ fn comparison_row_from_harness(row: &BenchmarkRunRow) -> ComparisonRow {
         validation_timed_out: row.validation_timed_out,
         duration_ms: row.total_duration_ms as u128,
         tool_or_item_calls: row.tool_calls,
-        input_tokens: row.max_approx_input_tokens,
-        output_tokens: 0,
+        usage_source: response_usage_source(&row.response_usage).to_string(),
+        input_tokens: complete_usage_total(&row.response_usage, "input_tokens"),
+        cached_input_tokens: complete_usage_total(&row.response_usage, "cached_input_tokens"),
+        cache_write_input_tokens: complete_usage_total(
+            &row.response_usage,
+            "cache_write_input_tokens",
+        ),
+        uncached_input_tokens: complete_usage_total(&row.response_usage, "uncached_input_tokens"),
+        output_tokens: complete_usage_total(&row.response_usage, "output_tokens"),
+        reasoning_output_tokens: complete_usage_total(
+            &row.response_usage,
+            "reasoning_output_tokens",
+        ),
+        total_tokens: complete_usage_total(&row.response_usage, "total_tokens"),
         source_files: row.source_files,
         source_bytes: row.source_bytes,
         failure_points: row.failure_points.clone(),
@@ -1722,8 +1747,14 @@ fn comparison_row_from_external_agent(row: &CodexCliBenchmarkRow) -> ComparisonR
         validation_timed_out: row.validation_timed_out,
         duration_ms: row.duration_ms,
         tool_or_item_calls: row.completed_items,
-        input_tokens: row.input_tokens,
-        output_tokens: row.output_tokens,
+        usage_source: "external_agent_report".to_string(),
+        input_tokens: Some(row.input_tokens),
+        cached_input_tokens: Some(row.cached_input_tokens),
+        cache_write_input_tokens: None,
+        uncached_input_tokens: None,
+        output_tokens: Some(row.output_tokens),
+        reasoning_output_tokens: Some(row.reasoning_output_tokens),
+        total_tokens: None,
         source_files: row.source_files,
         source_bytes: row.source_bytes,
         failure_points: row.failure_points.clone(),
@@ -1786,8 +1817,14 @@ fn average_comparison_group(rows: Vec<ComparisonRow>) -> ComparisonRow {
     row.validation_timed_out = rows.iter().any(|row| row.validation_timed_out);
     row.duration_ms = average_u128(rows.iter().map(|row| row.duration_ms));
     row.tool_or_item_calls = average_u64(rows.iter().map(|row| row.tool_or_item_calls));
-    row.input_tokens = average_u64(rows.iter().map(|row| row.input_tokens));
-    row.output_tokens = average_u64(rows.iter().map(|row| row.output_tokens));
+    row.usage_source = grouped_usage_source(&rows);
+    row.input_tokens = complete_average_u64(&rows, |row| row.input_tokens);
+    row.cached_input_tokens = complete_average_u64(&rows, |row| row.cached_input_tokens);
+    row.cache_write_input_tokens = complete_average_u64(&rows, |row| row.cache_write_input_tokens);
+    row.uncached_input_tokens = complete_average_u64(&rows, |row| row.uncached_input_tokens);
+    row.output_tokens = complete_average_u64(&rows, |row| row.output_tokens);
+    row.reasoning_output_tokens = complete_average_u64(&rows, |row| row.reasoning_output_tokens);
+    row.total_tokens = complete_average_u64(&rows, |row| row.total_tokens);
     row.source_files = average_u64(rows.iter().map(|row| row.source_files));
     row.source_bytes = average_u64(rows.iter().map(|row| row.source_bytes));
     row.failure_points = joined_failure_points(&rows, successful_attempts, attempts);
@@ -1878,7 +1915,7 @@ fn joined_failure_points(
 #[derive(Debug, Clone, Copy)]
 struct EfficiencyComponents {
     duration_ms: f64,
-    input_tokens: f64,
+    input_tokens: Option<f64>,
     tool_or_item_calls: f64,
 }
 
@@ -2017,7 +2054,9 @@ fn resource_efficiency_multiplier(
 
     let resource_ratio = positive_ratio(baseline.duration_ms, value.duration_ms)
         .powf(DURATION_WEIGHT)
-        * positive_ratio(baseline.input_tokens, value.input_tokens).powf(INPUT_TOKEN_WEIGHT)
+        * optional_positive_ratio(baseline.input_tokens, value.input_tokens)
+            .map(|ratio| ratio.powf(INPUT_TOKEN_WEIGHT))
+            .unwrap_or(1.0)
         * positive_ratio(baseline.tool_or_item_calls, value.tool_or_item_calls)
             .powf(TOOL_CALL_WEIGHT);
     resource_ratio.powf(OUTLIER_DAMPING)
@@ -2026,13 +2065,19 @@ fn resource_efficiency_multiplier(
 fn efficiency_components(row: &ComparisonRow) -> EfficiencyComponents {
     EfficiencyComponents {
         duration_ms: row.duration_ms.max(1) as f64,
-        input_tokens: row.input_tokens.max(1) as f64,
+        input_tokens: row.input_tokens.map(|tokens| tokens.max(1) as f64),
         tool_or_item_calls: row.tool_or_item_calls.max(1) as f64,
     }
 }
 
 fn positive_ratio(baseline: f64, value: f64) -> f64 {
     baseline.max(1.0) / value.max(1.0)
+}
+
+fn optional_positive_ratio(baseline: Option<f64>, value: Option<f64>) -> Option<f64> {
+    baseline
+        .zip(value)
+        .map(|(baseline, value)| positive_ratio(baseline, value))
 }
 
 trait AverageIterator: Iterator<Item = f64> + Sized {
@@ -2123,10 +2168,12 @@ fn aggregate_comparison_with_diagnostics(
             .entry(row.runner.clone())
             .or_default()
             .push(row.tool_or_item_calls as f64);
-        runner_input_token_scores
-            .entry(row.runner.clone())
-            .or_default()
-            .push(row.input_tokens as f64);
+        if let Some(input_tokens) = row.input_tokens {
+            runner_input_token_scores
+                .entry(row.runner.clone())
+                .or_default()
+                .push(input_tokens as f64);
+        }
         runner_source_file_scores
             .entry(row.runner.clone())
             .or_default()
@@ -2201,7 +2248,7 @@ fn aggregate_comparison_with_diagnostics(
                 "average_harness_pressure_score": average_comparison_field(rows, |row| row.harness_pressure_score),
                 "average_duration_ms": average_comparison_field(rows, |row| row.duration_ms as f64),
                 "average_tool_or_item_calls": average_comparison_field(rows, |row| row.tool_or_item_calls as f64),
-                "average_input_tokens": average_comparison_field(rows, |row| row.input_tokens as f64),
+                "average_input_tokens": average_optional_comparison_field(rows, |row| row.input_tokens.map(|value| value as f64)),
                 "average_source_files": average_comparison_field(rows, |row| row.source_files as f64),
                 "average_source_bytes": average_comparison_field(rows, |row| row.source_bytes as f64),
             })
@@ -2259,7 +2306,7 @@ fn aggregate_comparison_with_diagnostics(
         "matched_runner_harness_pressure_averages": comparison_average_map(&matched_rows_by_runner, |row| row.harness_pressure_score),
         "matched_runner_duration_ms_averages": comparison_average_map(&matched_rows_by_runner, |row| row.duration_ms as f64),
         "matched_runner_tool_or_item_call_averages": comparison_average_map(&matched_rows_by_runner, |row| row.tool_or_item_calls as f64),
-        "matched_runner_input_token_averages": comparison_average_map(&matched_rows_by_runner, |row| row.input_tokens as f64),
+        "matched_runner_input_token_averages": comparison_optional_average_map(&matched_rows_by_runner, |row| row.input_tokens.map(|value| value as f64)),
         "matched_runner_source_file_averages": comparison_average_map(&matched_rows_by_runner, |row| row.source_files as f64),
         "matched_runner_source_byte_averages": comparison_average_map(&matched_rows_by_runner, |row| row.source_bytes as f64),
         "headline": headline,
@@ -2394,8 +2441,15 @@ fn compare_runner_rows(left: &[&ComparisonRow], right: &[&ComparisonRow]) -> Ord
             )
         })
         .then_with(|| {
-            average_comparison_field(right, |row| row.input_tokens as f64).total_cmp(
-                &average_comparison_field(left, |row| row.input_tokens as f64),
+            average_optional_comparison_field(right, |row| {
+                row.input_tokens.map(|value| value as f64)
+            })
+            .unwrap_or(f64::INFINITY)
+            .total_cmp(
+                &average_optional_comparison_field(left, |row| {
+                    row.input_tokens.map(|value| value as f64)
+                })
+                .unwrap_or(f64::INFINITY),
             )
         })
         .then_with(|| {
@@ -2467,7 +2521,14 @@ fn comparison_scenario_winners(rows: &[ComparisonRow]) -> Vec<Value> {
                     "harness_pressure_score": row.harness_pressure_score,
                     "duration_ms": row.duration_ms,
                     "tool_or_item_calls": row.tool_or_item_calls,
+                    "usage_source": row.usage_source,
                     "input_tokens": row.input_tokens,
+                    "cached_input_tokens": row.cached_input_tokens,
+                    "cache_write_input_tokens": row.cache_write_input_tokens,
+                    "uncached_input_tokens": row.uncached_input_tokens,
+                    "output_tokens": row.output_tokens,
+                    "reasoning_output_tokens": row.reasoning_output_tokens,
+                    "total_tokens": row.total_tokens,
                     "source_files": row.source_files,
                     "source_bytes": row.source_bytes,
                     "success": row.success,
@@ -2482,7 +2543,7 @@ fn scenario_delta(rows: &[&ComparisonRow]) -> Option<Value> {
     let codex = rows.iter().find(|row| row.runner == "codex-cli")?;
     Some(json!({
         "duration_ms_delta": spark.duration_ms as i128 - codex.duration_ms as i128,
-        "token_ratio": ratio_or_zero(spark.input_tokens as f64, codex.input_tokens as f64),
+        "token_ratio": optional_ratio(spark.input_tokens, codex.input_tokens),
         "tool_ratio": ratio_or_zero(spark.tool_or_item_calls as f64, codex.tool_or_item_calls as f64),
         "benchmark_index_delta": spark.benchmark_index.unwrap_or(0.0) - codex.benchmark_index.unwrap_or(0.0),
     }))
@@ -2494,6 +2555,92 @@ fn ratio_or_zero(denominator: f64, numerator: f64) -> f64 {
     } else {
         round1(numerator / denominator)
     }
+}
+
+fn optional_ratio(denominator: Option<u64>, numerator: Option<u64>) -> Option<f64> {
+    denominator
+        .zip(numerator)
+        .map(|(denominator, numerator)| ratio_or_zero(denominator as f64, numerator as f64))
+}
+
+fn response_usage_source(response_usage: &Value) -> &str {
+    let source = response_usage
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("unavailable");
+    if source != "provider_responses" {
+        return source;
+    }
+    if response_usage
+        .get("responses_with_usage")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        == 0
+    {
+        return "unavailable";
+    }
+    if response_usage.get("complete").and_then(Value::as_bool) == Some(true) {
+        "provider_responses"
+    } else {
+        "provider_responses_partial"
+    }
+}
+
+fn complete_usage_total(response_usage: &Value, metric: &str) -> Option<u64> {
+    response_usage
+        .get(metric)
+        .filter(|metric| metric.get("complete").and_then(Value::as_bool) == Some(true))
+        .and_then(|metric| metric.get("total"))
+        .and_then(Value::as_u64)
+}
+
+fn response_usage_csv_value(response_usage: &Value) -> String {
+    serde_json::to_string(response_usage).unwrap_or_default()
+}
+
+fn option_u64_csv_value(value: Option<u64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn complete_average_u64(
+    rows: &[ComparisonRow],
+    metric: impl Fn(&ComparisonRow) -> Option<u64>,
+) -> Option<u64> {
+    let values = rows.iter().map(metric).collect::<Option<Vec<_>>>()?;
+    (!values.is_empty()).then(|| average_u64(values.into_iter()))
+}
+
+fn grouped_usage_source(rows: &[ComparisonRow]) -> String {
+    let has_partial_metric = metric_is_partial(rows, |row| row.input_tokens)
+        || metric_is_partial(rows, |row| row.cached_input_tokens)
+        || metric_is_partial(rows, |row| row.cache_write_input_tokens)
+        || metric_is_partial(rows, |row| row.uncached_input_tokens)
+        || metric_is_partial(rows, |row| row.output_tokens)
+        || metric_is_partial(rows, |row| row.reasoning_output_tokens)
+        || metric_is_partial(rows, |row| row.total_tokens);
+    if has_partial_metric {
+        return "partial".to_string();
+    }
+    let sources = rows
+        .iter()
+        .map(|row| row.usage_source.as_str())
+        .collect::<BTreeSet<_>>();
+    if sources.len() == 1 {
+        sources
+            .into_iter()
+            .next()
+            .unwrap_or("unavailable")
+            .to_string()
+    } else {
+        "mixed".to_string()
+    }
+}
+
+fn metric_is_partial(
+    rows: &[ComparisonRow],
+    metric: impl Fn(&ComparisonRow) -> Option<u64>,
+) -> bool {
+    rows.iter().any(|row| metric(row).is_some()) && rows.iter().any(|row| metric(row).is_none())
 }
 
 fn compare_comparison_rows(left: &ComparisonRow, right: &ComparisonRow) -> Ordering {
@@ -2517,7 +2664,7 @@ fn compare_comparison_rows(left: &ComparisonRow, right: &ComparisonRow) -> Order
 
 fn comparison_rows_to_csv(rows: &[ComparisonRow]) -> String {
     let mut csv = String::from(
-        "runner,suite,scenario,model,reasoning_effort,command_path,command_version,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_exit_code,validation_timed_out,duration_ms,tool_or_item_calls,input_tokens,output_tokens,source_files,source_bytes,failure_points,source,completion_score,quality_score,process_score,llm_solution_score,llm_process_score,llm_confidence,llm_notes,efficiency_index,benchmark_index\n",
+        "runner,suite,scenario,model,reasoning_effort,command_path,command_version,score,task_quality_score,efficiency_score,harness_pressure_score,success,validation_exit_code,validation_timed_out,duration_ms,tool_or_item_calls,usage_source,input_tokens,cached_input_tokens,cache_write_input_tokens,uncached_input_tokens,output_tokens,reasoning_output_tokens,total_tokens,source_files,source_bytes,failure_points,source,completion_score,quality_score,process_score,llm_solution_score,llm_process_score,llm_confidence,llm_notes,efficiency_index,benchmark_index\n",
     );
     for row in rows {
         let values = [
@@ -2539,8 +2686,14 @@ fn comparison_rows_to_csv(rows: &[ComparisonRow]) -> String {
             row.validation_timed_out.to_string(),
             row.duration_ms.to_string(),
             row.tool_or_item_calls.to_string(),
-            row.input_tokens.to_string(),
-            row.output_tokens.to_string(),
+            row.usage_source.clone(),
+            option_u64_csv_value(row.input_tokens),
+            option_u64_csv_value(row.cached_input_tokens),
+            option_u64_csv_value(row.cache_write_input_tokens),
+            option_u64_csv_value(row.uncached_input_tokens),
+            option_u64_csv_value(row.output_tokens),
+            option_u64_csv_value(row.reasoning_output_tokens),
+            option_u64_csv_value(row.total_tokens),
             row.source_files.to_string(),
             row.source_bytes.to_string(),
             row.failure_points.clone(),

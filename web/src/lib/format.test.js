@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartDomain, formatMetric } from "./format.js";
+import { chartDomain, formatMetric, metricRange } from "./format.js";
 
 describe("formatMetric", () => {
   it("formats tokens, duration, and percentages", () => {
@@ -47,5 +47,13 @@ describe("chartDomain", () => {
     expect(min).toBeLessThan(88);
     expect(max).toBeGreaterThan(97);
     expect(max).toBeLessThanOrEqual(100);
+  });
+});
+
+describe("metricRange", () => {
+  it("omits ranges when interval endpoints are not published", () => {
+    expect(metricRange({ quality: 82 }, "quality", {
+      quality: { minKey: "qualityMin", maxKey: "qualityMax" },
+    })).toBeNull();
   });
 });

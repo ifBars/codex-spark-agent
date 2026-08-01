@@ -51,8 +51,14 @@ fn comparison_row(runner: &str, scenario: &str) -> ComparisonRow {
         validation_timed_out: false,
         duration_ms: 10_000,
         tool_or_item_calls: 10,
-        input_tokens: 10_000,
-        output_tokens: 0,
+        usage_source: "test".to_string(),
+        input_tokens: Some(10_000),
+        cached_input_tokens: Some(0),
+        cache_write_input_tokens: Some(0),
+        uncached_input_tokens: Some(10_000),
+        output_tokens: Some(0),
+        reasoning_output_tokens: Some(0),
+        total_tokens: Some(10_000),
         source_files: 2,
         source_bytes: 2_000,
         failure_points: String::new(),
@@ -138,6 +144,7 @@ fn benchmark_row() -> BenchmarkRunRow {
         requests: 4,
         tool_calls: 4,
         max_approx_input_tokens: 1000,
+        response_usage: Value::Null,
         max_context_window_pct: 1.0,
         max_request_duration_ms: 1000,
         total_duration_ms: 1500,
@@ -183,7 +190,7 @@ fn benchmark_index_separates_successful_completion_ties() {
     let codex = comparison_row("codex-cli", "matched");
     let mut spark = comparison_row("spark-harness", "matched");
     spark.duration_ms = 2_500;
-    spark.input_tokens = 2_500;
+    spark.input_tokens = Some(2_500);
     spark.tool_or_item_calls = 5;
 
     let rows = indexed(vec![codex, spark]);
@@ -197,6 +204,59 @@ fn benchmark_index_separates_successful_completion_ties() {
     assert_eq!(codex.completion_score, 100.0);
     assert_eq!(codex.benchmark_index, Some(100.0));
     assert!(spark.benchmark_index.unwrap() > 100.0);
+}
+
+#[test]
+fn harness_usage_requires_complete_provider_response_coverage() {
+    let legacy = benchmark_row();
+    let legacy_comparison = comparison_row_from_harness(&legacy);
+    assert_eq!(legacy_comparison.usage_source, "unavailable");
+    assert_eq!(legacy_comparison.input_tokens, None);
+    assert_eq!(legacy_comparison.output_tokens, None);
+
+    let mut measured = benchmark_row();
+    measured.response_usage = json!({
+        "source": "provider_responses",
+        "completed_responses": 2,
+        "responses_with_usage": 2,
+        "complete": true,
+        "input_tokens": {"total": 120, "reported_responses": 2, "complete": true},
+        "cached_input_tokens": {"total": 20, "reported_responses": 2, "complete": true},
+        "cache_write_input_tokens": {"total": 10, "reported_responses": 2, "complete": true},
+        "uncached_input_tokens": {"total": 90, "reported_responses": 2, "complete": true},
+        "output_tokens": {"total": 42, "reported_responses": 2, "complete": true},
+        "reasoning_output_tokens": {"total": 12, "reported_responses": 2, "complete": true},
+        "total_tokens": {"total": 162, "reported_responses": 2, "complete": true}
+    });
+    let measured_comparison = comparison_row_from_harness(&measured);
+    assert_eq!(measured_comparison.input_tokens, Some(120));
+    assert_eq!(measured_comparison.cached_input_tokens, Some(20));
+    assert_eq!(measured_comparison.cache_write_input_tokens, Some(10));
+    assert_eq!(measured_comparison.uncached_input_tokens, Some(90));
+    assert_eq!(measured_comparison.output_tokens, Some(42));
+    assert_eq!(measured_comparison.reasoning_output_tokens, Some(12));
+    assert_eq!(measured_comparison.total_tokens, Some(162));
+}
+
+#[test]
+fn grouped_usage_is_explicit_for_partial_or_mixed_rows() {
+    let mut reported = comparison_row("spark-harness", "matched");
+    reported.usage_source = "provider_responses".to_string();
+    let mut legacy = reported.clone();
+    legacy.input_tokens = None;
+    legacy.output_tokens = None;
+    legacy.usage_source = "unavailable".to_string();
+
+    let partial = average_comparison_group(vec![reported.clone(), legacy]);
+    assert_eq!(partial.usage_source, "partial");
+    assert_eq!(partial.input_tokens, None);
+    assert_eq!(partial.output_tokens, None);
+
+    let mut external = reported.clone();
+    external.usage_source = "external_agent_report".to_string();
+    let mixed = average_comparison_group(vec![reported, external]);
+    assert_eq!(mixed.usage_source, "mixed");
+    assert_eq!(mixed.input_tokens, Some(10_000));
 }
 
 #[test]
@@ -1198,7 +1258,7 @@ fn spark_can_exceed_100_when_quality_matches_and_efficiency_wins() {
     let codex = comparison_row("codex-cli", "one");
     let mut spark = comparison_row("spark-harness", "one");
     spark.duration_ms = 5_000;
-    spark.input_tokens = 4_000;
+    spark.input_tokens = Some(4_000);
     spark.tool_or_item_calls = 4;
     spark.source_bytes = 1_000;
 
@@ -1229,7 +1289,7 @@ fn benchmark_index_rewards_faster_equal_quality_even_with_process_pressure() {
     let codex = comparison_row("codex-cli", "one");
     let mut spark = comparison_row("spark-harness", "one");
     spark.duration_ms = 2_500;
-    spark.input_tokens = 4_000;
+    spark.input_tokens = Some(4_000);
     spark.tool_or_item_calls = 6;
     spark.process_score = 70.0;
     spark.harness_pressure_score = 70.0;
@@ -1248,7 +1308,7 @@ fn benchmark_index_reflects_quality_gated_throughput() {
     let codex = comparison_row("codex-cli", "one");
     let mut spark = comparison_row("spark-harness", "one");
     spark.duration_ms = 1_000;
-    spark.input_tokens = 1_000;
+    spark.input_tokens = Some(1_000);
     spark.tool_or_item_calls = 2;
 
     let rows = indexed(vec![spark, codex]);
@@ -1264,7 +1324,7 @@ fn benchmark_index_reflects_quality_gated_throughput() {
 fn comparison_aggregate_uses_matched_rows_for_winner() {
     let mut matched_spark = comparison_row("spark-harness", "matched");
     matched_spark.duration_ms = 20_000;
-    matched_spark.input_tokens = 20_000;
+    matched_spark.input_tokens = Some(20_000);
     matched_spark.tool_or_item_calls = 20;
     let rows = indexed(vec![
         matched_spark,
@@ -1291,7 +1351,7 @@ fn failed_validation_caps_benchmark_index_below_successful_runs() {
     spark.quality_score = 50.0;
     spark.validation_exit_code = Some(1);
     spark.duration_ms = 100;
-    spark.input_tokens = 100;
+    spark.input_tokens = Some(100);
     spark.tool_or_item_calls = 1;
 
     let rows = indexed(vec![spark, codex]);
@@ -1418,6 +1478,7 @@ fn comparison_csv_keeps_legacy_prefix_and_appends_index_columns() {
     assert!(csv.starts_with(
         "runner,suite,scenario,model,reasoning_effort,command_path,command_version,score,task_quality_score,efficiency_score,harness_pressure_score"
     ));
+    assert!(csv.contains("cache_write_input_tokens,uncached_input_tokens"));
     assert!(csv.contains(
         ",failure_points,source,completion_score,quality_score,process_score,llm_solution_score,llm_process_score,llm_confidence,llm_notes,efficiency_index,benchmark_index\n"
     ));
@@ -1489,7 +1550,7 @@ fn benchmark_index_uses_process_as_quality_gate() {
     let codex = comparison_row("codex-cli", "one");
     let mut clean = comparison_row("spark-clean", "one");
     clean.duration_ms = 2_500;
-    clean.input_tokens = 4_000;
+    clean.input_tokens = Some(4_000);
     clean.tool_or_item_calls = 6;
 
     let mut pressured = clean.clone();

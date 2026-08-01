@@ -7,7 +7,10 @@ export function formatMetric(metric, value, compact = false) {
 export function metricRange(row, metric, definitions) {
   const definition = definitions[metric];
   if (!definition.minKey || !definition.maxKey) return null;
-  return [row[definition.minKey], row[definition.maxKey]];
+  const min = row[definition.minKey];
+  const max = row[definition.maxKey];
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return null;
+  return [min, max];
 }
 
 export function sentenceCase(value) {

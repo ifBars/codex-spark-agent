@@ -1,11 +1,12 @@
 import benchmarkEvidenceData from "./benchmark-evidence.json";
 import expandedReasoningData from "./expanded-reasoning-views.json";
+import recentBenchmarksData from "./recent-benchmarks.json";
 
 const repositoryBlobRoot = "https://github.com/ifBars/codex-spark-agent/blob/main";
 
 const runnerMeta = {
   spark: { id: "spark", name: "Spark harness", shortName: "Spark", color: "#1769d2" },
-  codex: { id: "codex", name: "Codex CLI 0.145.0", shortName: "Codex CLI", color: "#e34a18" },
+  codex: { id: "codex", name: "Codex CLI", shortName: "Codex CLI", color: "#e34a18" },
 };
 
 function artifactUrl(path) {
@@ -29,13 +30,14 @@ function evidenceFor(datasetId) {
 }
 
 function point(runner, reasoning, values) {
+  const { runnerLabel, runnerName, runnerShortName, ...metrics } = values;
   return {
     runner,
-    runnerName: runnerMeta[runner].name,
-    runnerShortName: runnerMeta[runner].shortName,
+    runnerName: runnerName ?? runnerLabel ?? runnerMeta[runner].name,
+    runnerShortName: runnerShortName ?? runnerMeta[runner].shortName,
     color: runnerMeta[runner].color,
     reasoning,
-    ...values,
+    ...metrics,
   };
 }
 
@@ -141,7 +143,46 @@ const datasetDefinitions = [
   },
 ];
 
-export const datasets = datasetDefinitions.map((dataset) => ({
+const developmentDatasetDefinitions = recentBenchmarksData.datasets.map((definition) => {
+  const evidence = evidenceFor(definition.sourceEvidenceId);
+  const rows = definition.rows.map(({ runner, reasoning, ...values }) =>
+    point(runner, reasoning, {
+      ...values,
+      runnerName: definition.runnerNames?.[runner],
+    }),
+  );
+  const scenarioViews = definition.scenarioViews.map((view) => ({
+    ...view,
+    scenarioCount: 1,
+    runCount: null,
+    sample: "One successful run per configuration; no interval published",
+    rows: view.rows.map(({ runner, reasoning, ...values }) =>
+      point(runner, reasoning, {
+        ...values,
+        runnerName: definition.runnerNames?.[runner],
+      }),
+    ),
+  }));
+
+  return {
+    ...definition,
+    evidence,
+    source: evidence.sources[0].url,
+    rows,
+    views: [{
+      id: "overall",
+      label: "Overall",
+      description: definition.description,
+      sample: definition.sample,
+      scenarioCount: evidence.scenarioCount,
+      runCount: definition.rows[0]?.runs ?? null,
+      rows,
+    }],
+    scenarioViews,
+  };
+});
+
+export const datasets = [...datasetDefinitions, ...developmentDatasetDefinitions].map((dataset) => ({
   ...dataset,
   views:
     dataset.views ??

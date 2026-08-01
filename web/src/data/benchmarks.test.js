@@ -144,4 +144,27 @@ describe("expanded reasoning dataset", () => {
     expect(coverageLabel(9)).toBe("Broad coverage");
     expect(coverageLabel(null)).toBe("Historical");
   });
+
+  it("publishes recent development slices without inventing intervals", () => {
+    const paired = datasets.find((dataset) => dataset.id === "real-world-quick-slice");
+    const sparkOnly = datasets.find((dataset) => dataset.id === "real-world-spark-extension");
+
+    expect(paired.hasIntervals).toBe(false);
+    expect(paired.evidence.taskRuns).toBe(8);
+    expect(paired.rows).toHaveLength(2);
+    expect(new Set(paired.rows.map((row) => row.runner))).toEqual(new Set(["spark", "codex"]));
+    expect(paired.rows.find((row) => row.runner === "codex")?.runnerName)
+      .toBe("Codex CLI 0.146.0");
+    expect(paired.rows.every((row) => row.reasoning === "medium" && row.successfulRuns === row.runs))
+      .toBe(true);
+    expect(paired.scenarioViews).toHaveLength(4);
+    expect(paired.scenarioViews.every((view) => view.rows.length === 2)).toBe(true);
+
+    expect(sparkOnly.hasIntervals).toBe(false);
+    expect(sparkOnly.evidence.taskRuns).toBe(8);
+    expect(sparkOnly.rows).toHaveLength(1);
+    expect(sparkOnly.rows[0].runner).toBe("spark");
+    expect(sparkOnly.scenarioViews).toHaveLength(8);
+    expect(sparkOnly.scenarioViews.every((view) => view.rows.length === 1)).toBe(true);
+  });
 });

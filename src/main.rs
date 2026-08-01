@@ -1,3 +1,4 @@
+mod account_usage;
 mod agent;
 mod auth;
 mod benchmark;
@@ -12,6 +13,7 @@ mod memory;
 mod profile;
 mod profiler;
 mod prompt_commands;
+mod repo_brief;
 mod session;
 mod setup;
 mod skill;
@@ -20,6 +22,7 @@ mod spinners;
 mod telemetry;
 mod tools;
 mod trace;
+mod usage_history;
 
 #[cfg(test)]
 mod tests;
@@ -27,9 +30,7 @@ mod tests;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::Parser;
-
-use cli::{Cli, Command};
+use cli::Command;
 
 const DEFAULT_MODEL: &str = "gpt-5.3-codex-spark";
 const DEFAULT_COMPACT_AFTER_CHARS: usize = 160_000;
@@ -42,7 +43,7 @@ const MAX_SCENARIO_REPEAT: usize = 50;
 
 fn main() -> Result<()> {
     telemetry::init();
-    let cli = Cli::parse();
+    let cli = cli::parse_with_stack()?;
 
     if matches!(&cli.command, Command::SpinnerPreview) {
         return spinner_preview::run();
@@ -95,6 +96,50 @@ async fn run_command(command: Command) -> Result<()> {
                 tokens.account_id.as_deref().unwrap_or("unknown"),
                 tokens.expires_at
             );
+        }
+        Command::Usage {
+            json,
+            history,
+            codex_home,
+            since_days,
+            max_files,
+            output,
+        } => {
+            if history {
+                let report = usage_history::scan_history(usage_history::HistoryOptions {
+                    codex_home,
+                    since_days,
+                    max_files,
+                })?;
+                let rendered_json = serde_json::to_string_pretty(&report)?;
+                if let Some(output) = output {
+                    if let Some(parent) =
+                        output.parent().filter(|path| !path.as_os_str().is_empty())
+                    {
+                        std::fs::create_dir_all(parent).map_err(|error| {
+                            anyhow::anyhow!(
+                                "could not create usage history output directory: {error}"
+                            )
+                        })?;
+                    }
+                    std::fs::write(&output, format!("{rendered_json}\n")).map_err(|error| {
+                        anyhow::anyhow!("could not write usage history output: {error}")
+                    })?;
+                }
+                if json {
+                    println!("{rendered_json}");
+                } else {
+                    print!("{}", usage_history::render_human(&report));
+                }
+            } else {
+                let auth = config::load_auth()?;
+                let usage = account_usage::fetch_usage(&auth).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&usage)?);
+                } else {
+                    print!("{}", account_usage::render_human(&usage));
+                }
+            }
         }
         Command::Chat {
             prompt,
@@ -225,6 +270,43 @@ async fn run_command(command: Command) -> Result<()> {
         Command::McpServer => {
             mcp_server::run().await?;
         }
+        Command::Brief {
+            question,
+            cwd,
+            paths,
+            format,
+            reasoning_effort,
+            trace,
+            timeout_seconds,
+        } => {
+            let request = repo_brief::RepoBriefRequest {
+                question,
+                cwd: Some(cwd),
+                paths,
+                context: None,
+                reasoning_effort: Some(reasoning_effort),
+                trace,
+            };
+            let report = match repo_brief::run_standalone(request.clone(), timeout_seconds).await {
+                Ok(report) => report,
+                Err(error) => repo_brief::standalone_error_report(&request, &error),
+            };
+            match format {
+                cli::RepoBriefFormat::Text => print!("{}", report.answer_markdown),
+                cli::RepoBriefFormat::Json => println!("{}", serde_json::to_string(&report)?),
+            }
+            if report.status != repo_brief::RepoBriefStatus::Completed {
+                if let Some(error) = &report.error {
+                    eprintln!(
+                        "repo brief {}: {error}",
+                        serde_json::to_string(&report.status)?
+                    );
+                } else {
+                    eprintln!("repo brief contract incomplete; see contract_diagnostic");
+                }
+                anyhow::bail!("repo brief completed with exit code {}", report.exit_code());
+            }
+        }
         Command::Sessions => {
             session::prepare_default_session_store(None)?;
             for session in session::store::SessionStore::open_default()?.list_names()? {
@@ -328,6 +410,14 @@ async fn run_command(command: Command) -> Result<()> {
                 json,
                 jsonl,
             )?;
+        }
+        Command::TraceRetention {
+            cwd,
+            older_than_days,
+            purge,
+            confirm,
+        } => {
+            trace::cli::handle_trace_retention(cwd, older_than_days, purge, confirm)?;
         }
         Command::AnalyzeTrace {
             dir,

@@ -1,0 +1,9 @@
+runner,reasoning_effort,scenario,runs,failed_runs_excluded,successful_runs,average_quality,average_total_tokens,average_duration_seconds
+Spark harness,medium,precise-patch,1,0,1,82.00,33634,13.47
+Spark harness,medium,multi-file-patch,1,0,1,82.00,55364,12.31
+Spark harness,medium,manifest-contract-write,1,0,1,82.00,28538,5.94
+Spark harness,medium,scoped-policy-patch,1,0,1,82.00,30001,5.78
+Spark harness,medium,github-issue-bugfix,1,0,1,82.00,38188,10.01
+Spark harness,medium,rust-failing-test-bugfix,1,0,1,82.00,41471,10.89
+Spark harness,medium,multi-module-bugfix,1,0,1,82.00,66241,14.80
+Spark harness,medium,multi-hop-analysis,1,0,1,82.00,27990,4.46

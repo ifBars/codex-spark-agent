@@ -44,6 +44,45 @@ fn chat_cli_accepts_reasoning_effort_flag() {
 }
 
 #[test]
+fn trace_retention_cli_keeps_confirmation_separate_from_purge_intent() {
+    let confirmation_without_purge =
+        <Cli as clap::Parser>::try_parse_from(["spark", "trace-retention", "--confirm"])
+            .expect("parse trace retention confirmation");
+    assert!(matches!(
+        confirmation_without_purge.command,
+        Command::TraceRetention {
+            purge: false,
+            confirm: true,
+            ..
+        }
+    ));
+
+    let cli = <Cli as clap::Parser>::try_parse_from([
+        "spark",
+        "trace-retention",
+        "--older-than-days",
+        "14",
+        "--purge",
+        "--confirm",
+    ])
+    .expect("parse confirmed trace retention purge");
+
+    let Command::TraceRetention {
+        older_than_days,
+        purge,
+        confirm,
+        ..
+    } = cli.command
+    else {
+        panic!("expected trace retention command");
+    };
+
+    assert_eq!(older_than_days, 14);
+    assert!(purge);
+    assert!(confirm);
+}
+
+#[test]
 fn chat_cli_accepts_custom_system_prompt_flag() {
     let cli = <Cli as clap::Parser>::try_parse_from([
         "spark",

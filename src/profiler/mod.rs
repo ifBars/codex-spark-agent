@@ -32,6 +32,8 @@ pub struct AgentProfiler {
     max_input_chars: usize,
     total_input_chars: usize,
     input_chars_by_request: Vec<usize>,
+    #[serde(default)]
+    response_usage: usage::ResponseUsageTotals,
     total_request_duration_ms: u64,
     max_request_duration_ms: u64,
     request_duration_ms_by_request: Vec<u64>,
@@ -71,6 +73,11 @@ impl AgentProfiler {
                 "duration_ms": duration_ms,
             }));
         }
+    }
+
+    pub(crate) fn record_response_usage(&mut self, raw: &Value) {
+        self.response_usage
+            .record(usage::ResponseUsage::from_response_raw(raw));
     }
 
     pub fn record_response_text(&mut self, text: &str) {
@@ -284,6 +291,7 @@ impl AgentProfiler {
             "average_input_chars": if self.requests == 0 { 0 } else { self.total_input_chars / self.requests },
             "input_chars_by_request": self.input_chars_by_request,
             "approx_input_tokens_by_request": self.input_chars_by_request.iter().copied().map(approx_token_count_from_chars).collect::<Vec<_>>(),
+            "response_usage": self.response_usage.to_json(),
             "total_request_duration_ms": self.total_request_duration_ms,
             "max_request_duration_ms": self.max_request_duration_ms,
             "average_request_duration_ms": if self.request_duration_ms_by_request.is_empty() { 0 } else { self.total_request_duration_ms / self.request_duration_ms_by_request.len() as u64 },
@@ -335,6 +343,7 @@ impl AgentProfiler {
 mod analyze;
 mod diagnostics;
 mod format;
+mod usage;
 mod util;
 
 pub use analyze::analyze_trace;
@@ -342,6 +351,7 @@ pub use format::{
     format_trace_aggregate_row, format_trace_summary_row, format_trace_timeline,
     trace_aggregate_json, trace_profile_scenario_name,
 };
+pub(crate) use usage::ResponseUsage;
 pub use util::{approx_token_count_from_chars, context_window_pct, tool_signature};
 
 use analyze::summarize_compaction_report;

@@ -10,9 +10,21 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(name = "spark")]
 #[command(about = "A small GPT-5.3 Codex Spark agent harness")]
+#[command(version)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Command,
+}
+
+/// Parse on a dedicated stack so the growing clap command tree remains usable from the Windows main thread.
+pub(crate) fn parse_with_stack() -> anyhow::Result<Cli> {
+    std::thread::Builder::new()
+        .name("spark-cli-parse".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(Cli::parse)
+        .map_err(|error| anyhow::anyhow!("failed to start CLI parser: {error}"))?
+        .join()
+        .map_err(|_| anyhow::anyhow!("CLI parser thread panicked"))
 }
 
 #[derive(Debug, Subcommand)]
@@ -52,6 +64,27 @@ pub(crate) enum Command {
     },
     /// Show saved auth status.
     AuthStatus,
+    /// Show source-reported ChatGPT Codex quota and credits (no token or dollar estimates).
+    Usage {
+        /// Print normalized account usage JSON.
+        #[arg(long)]
+        json: bool,
+        /// Scan local Codex session history instead of calling the account-quota service.
+        #[arg(long)]
+        history: bool,
+        /// Codex home to scan. Defaults to CODEX_HOME, then ~/.codex.
+        #[arg(long, requires = "history")]
+        codex_home: Option<PathBuf>,
+        /// Include observations whose event day is within this many calendar days.
+        #[arg(long, requires = "history", value_parser = clap::value_parser!(u64).range(1..))]
+        since_days: Option<u64>,
+        /// Bound the number of local history files scanned; a bounded scan is reported as incomplete.
+        #[arg(long, requires = "history", default_value_t = 10_000, value_parser = parse_positive_usize)]
+        max_files: usize,
+        /// Write the stable normalized history JSON to this file for Spark Bench ingestion.
+        #[arg(long, requires = "history")]
+        output: Option<PathBuf>,
+    },
     /// Send one instruction to the Spark agent loop.
     Chat {
         prompt: Vec<String>,
@@ -114,6 +147,29 @@ pub(crate) enum Command {
     Tools,
     /// Serve the Spark repository explorer over MCP stdio for native Codex.
     McpServer,
+    /// Produce a compact, read-only local repository brief.
+    Brief {
+        /// Concrete repository question to answer.
+        question: String,
+        /// Workspace root for local filesystem inspection.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Repository-relative file or directory to inspect first. May be repeated.
+        #[arg(long = "path")]
+        paths: Vec<String>,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = RepoBriefFormat::Text)]
+        format: RepoBriefFormat,
+        /// Reasoning effort to request from the model.
+        #[arg(long, value_parser = ["low", "medium", "high", "xhigh"], default_value = "medium")]
+        reasoning_effort: String,
+        /// Save the run trace under the workspace's .spark-runs directory.
+        #[arg(long)]
+        trace: bool,
+        /// Stop the standalone request after this many seconds.
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3_600), default_value_t = crate::repo_brief::DEFAULT_TIMEOUT_SECONDS)]
+        timeout_seconds: u64,
+    },
     /// List saved chat sessions.
     Sessions,
     /// List or refresh repo-local Spark skill cache.
@@ -175,6 +231,21 @@ pub(crate) enum Command {
         /// Print matching analyzed traces as one JSON object per line.
         #[arg(long)]
         jsonl: bool,
+    },
+    /// Inspect local trace retention or safely purge old trace runs.
+    TraceRetention {
+        /// Workspace root containing .spark-runs/.
+        #[arg(long, default_value = ".")]
+        cwd: PathBuf,
+        /// Only consider trace runs older than this many days.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..))]
+        older_than_days: u64,
+        /// Prepare a purge. This remains a dry run until --confirm is also passed.
+        #[arg(long)]
+        purge: bool,
+        /// Explicitly delete the exact eligible trace directories. Requires --purge.
+        #[arg(long)]
+        confirm: bool,
     },
     /// Summarize a .spark-runs/run-* trace for repeated tool calls and compaction behavior.
     AnalyzeTrace {
@@ -441,6 +512,32 @@ pub(crate) enum RunMode {
     Ask,
     /// Full workspace tools, including edits and command execution.
     Work,
+}
+
+fn parse_positive_usize(value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| "must be a positive whole number".to_string())?;
+    if parsed == 0 {
+        Err("must be at least 1".to_string())
+    } else {
+        Ok(parsed)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum RepoBriefFormat {
+    Text,
+    Json,
+}
+
+impl std::fmt::Display for RepoBriefFormat {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Text => "text",
+            Self::Json => "json",
+        })
+    }
 }
 
 impl From<RunMode> for tools::AgentMode {
@@ -981,11 +1078,20 @@ mod benchmark_suite_tests {
 
         assert_eq!(evidence["schemaVersion"].as_u64(), Some(1));
         let datasets = evidence["datasets"].as_array().expect("datasets array");
-        assert_eq!(datasets.len(), 3);
         let ids = datasets
             .iter()
             .map(|dataset| dataset["id"].as_str().expect("dataset id"))
             .collect::<HashSet<_>>();
+        assert_eq!(
+            ids,
+            HashSet::from([
+                "expanded-reasoning-suite",
+                "granular-pilot",
+                "success-baseline",
+                "real-world-quick-slice",
+                "real-world-spark-extension",
+            ])
+        );
         assert_eq!(ids.len(), datasets.len());
 
         let expanded = datasets
@@ -1045,6 +1151,28 @@ mod benchmark_suite_tests {
                     )
                     .is_file(),
                 "{id} evidence file is missing"
+            );
+        }
+
+        for (id, expected_scenario_count) in [
+            ("real-world-quick-slice", 4),
+            ("real-world-spark-extension", 8),
+        ] {
+            let dataset = datasets
+                .iter()
+                .find(|dataset| dataset["id"].as_str() == Some(id))
+                .expect("development dataset");
+            assert_eq!(
+                dataset["expectedScenarioCount"].as_u64(),
+                Some(expected_scenario_count),
+                "{id} scenario coverage"
+            );
+            assert_eq!(dataset["taskFailuresRetained"].as_bool(), Some(false));
+            assert!(
+                dataset["pendingScenarios"]
+                    .as_array()
+                    .is_some_and(Vec::is_empty),
+                "{id} should not inherit expanded-suite pending scenarios"
             );
         }
 
