@@ -3,6 +3,11 @@
 Status: planned validation; no participant sessions, interviews, or acceptance
 results have been recorded as of 2026-08-01.
 
+Facilitators must execute Wave 1 through the operational
+[proofline-wave1-runbook.md](proofline-wave1-runbook.md). The runbook does not
+replace this plan's gates or make a mock, test run, or agent simulation human
+evidence.
+
 ## Purpose and decision
 
 Proofline is the selected desktop direction: a local-first, evidence-review
