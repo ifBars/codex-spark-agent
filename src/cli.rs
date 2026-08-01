@@ -29,6 +29,11 @@ pub(crate) fn parse_with_stack() -> anyhow::Result<Cli> {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
+    /// Inspect a privacy-minimized local projection for the Proofline desktop surface.
+    Proofline {
+        #[command(subcommand)]
+        command: ProoflineCommand,
+    },
     /// Sign in with ChatGPT/Codex OAuth and save tokens locally.
     Login {
         /// Do not open the browser automatically.
@@ -503,6 +508,16 @@ pub(crate) enum Command {
         /// Maximum matched scenarios to judge. Omit to judge every matched scenario.
         #[arg(long)]
         limit: Option<usize>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum ProoflineCommand {
+    /// Print a read-only Proofline session snapshot as JSON.
+    Snapshot {
+        /// Select this saved session instead of the most recently updated session.
+        #[arg(long)]
+        session: Option<String>,
     },
 }
 

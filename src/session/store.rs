@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::agent::AgentSnapshot;
 use crate::config;
@@ -16,6 +16,13 @@ const DEFAULT_MIN_SESSIONS_TO_KEEP: usize = 50;
 pub(crate) struct SessionStore {
     db_path: PathBuf,
     legacy_dir: PathBuf,
+    access: SessionStoreAccess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionStoreAccess {
+    ReadWrite,
+    ReadOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,10 +71,29 @@ impl SessionStore {
         Self::open_at(config::sessions_db_path()?, config::sessions_dir()?)
     }
 
+    /// Open an existing default store without creating the database or running
+    /// maintenance. Read-only consumers use this so inspection does not turn
+    /// an absent store into persisted application state.
+    pub(crate) fn open_existing_default() -> Result<Option<Self>> {
+        Self::open_existing_at(config::sessions_db_path()?, config::sessions_dir()?)
+    }
+
+    fn open_existing_at(db_path: PathBuf, legacy_dir: PathBuf) -> Result<Option<Self>> {
+        if !db_path.exists() {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            db_path,
+            legacy_dir,
+            access: SessionStoreAccess::ReadOnly,
+        }))
+    }
+
     pub(crate) fn open_at(db_path: PathBuf, legacy_dir: PathBuf) -> Result<Self> {
         let store = Self {
             db_path,
             legacy_dir,
+            access: SessionStoreAccess::ReadWrite,
         };
         store.ensure_schema()?;
         Ok(store)
@@ -314,6 +340,28 @@ impl SessionStore {
         Ok(Some(snapshot))
     }
 
+    /// Read a saved snapshot without updating `last_opened_at`.
+    ///
+    /// This is intentionally separate from [`Self::load`], whose open-time
+    /// accounting remains part of its existing behavior.
+    pub(crate) fn peek(&self, name: &str) -> Result<Option<AgentSnapshot>> {
+        validate_session_name(name)?;
+        let conn = self.connection()?;
+        let snapshot_json = conn
+            .query_row(
+                "SELECT snapshot_json FROM sessions WHERE name = ?1",
+                [name],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        let Some(snapshot_json) = snapshot_json else {
+            return Ok(None);
+        };
+        let snapshot = serde_json::from_str::<AgentSnapshot>(&snapshot_json)
+            .with_context(|| format!("failed to parse stored session `{name}`"))?;
+        Ok(Some(snapshot))
+    }
+
     pub(crate) fn save(&self, name: &str, snapshot: &AgentSnapshot) -> Result<()> {
         self.save_with_source(name, snapshot, None)
     }
@@ -399,9 +447,16 @@ impl SessionStore {
     }
 
     fn connection(&self) -> Result<Connection> {
-        let conn = Connection::open(&self.db_path)
-            .with_context(|| format!("failed to open {}", self.db_path.display()))?;
-        conn.pragma_update(None, "foreign_keys", true)?;
+        let conn = match self.access {
+            SessionStoreAccess::ReadWrite => Connection::open(&self.db_path),
+            SessionStoreAccess::ReadOnly => {
+                Connection::open_with_flags(&self.db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            }
+        }
+        .with_context(|| format!("failed to open {}", self.db_path.display()))?;
+        if self.access == SessionStoreAccess::ReadWrite {
+            conn.pragma_update(None, "foreign_keys", true)?;
+        }
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if version > SESSION_STORE_SCHEMA_VERSION {
             anyhow::bail!(
@@ -519,6 +574,61 @@ mod tests {
 
         store.delete("renamed").expect("delete");
         assert!(store.list_names().expect("list empty").is_empty());
+    }
+
+    #[test]
+    fn peek_reads_a_session_without_updating_last_opened_at() {
+        let (dir, store) = temp_store();
+        store
+            .save("demo", &snapshot_with_input("hello"))
+            .expect("save");
+        let db_path = dir.path().join("sessions.sqlite3");
+        let conn = Connection::open(&db_path).expect("open database");
+        conn.execute(
+            "UPDATE sessions SET last_opened_at = 123 WHERE name = 'demo'",
+            [],
+        )
+        .expect("seed last opened timestamp");
+        drop(conn);
+
+        let peeked = store.peek("demo").expect("peek").expect("session");
+
+        assert_eq!(peeked.request_seq, 7);
+        let conn = Connection::open(&db_path).expect("open database");
+        let last_opened_at: Option<i64> = conn
+            .query_row(
+                "SELECT last_opened_at FROM sessions WHERE name = 'demo'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read last opened timestamp");
+        assert_eq!(last_opened_at, Some(123));
+    }
+
+    #[test]
+    fn existing_store_view_reads_without_writable_database_access() {
+        let (dir, store) = temp_store();
+        let snapshot = snapshot_with_input("hello");
+        store.save("demo", &snapshot).expect("save");
+
+        let inspector = SessionStore::open_existing_at(
+            dir.path().join("sessions.sqlite3"),
+            dir.path().join("sessions"),
+        )
+        .expect("open existing")
+        .expect("existing store");
+
+        assert_eq!(inspector.list_names().expect("list"), vec!["demo"]);
+        assert_eq!(
+            inspector
+                .peek("demo")
+                .expect("peek")
+                .expect("session")
+                .request_seq,
+            7
+        );
+        assert!(inspector.save("blocked", &snapshot).is_err());
+        assert!(!store.exists("blocked").expect("verify no write"));
     }
 
     #[test]

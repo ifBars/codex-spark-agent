@@ -62,6 +62,25 @@ runtime. It is not part of the first release.
 
 ## MVP
 
+The list below is the destination for the first usable desktop release, not one
+ungated implementation batch. The execution sequence is:
+
+1. **Prototype and contract:** preserve the selected hierarchy, remove
+   misleading mock evidence, and expose a privacy-minimized read-only snapshot
+   from the Rust harness.
+2. **Internal Wave 1:** run five real participants through evidence inspection,
+   failed validation, approval, and partial-usage tasks. Fix and repeat when a
+   gate misses.
+3. **Read-only Tauri shell:** only after Wave 1 passes, stream ordered Repo Brief
+   and validation evidence through a Rust-owned Channel with a fresh snapshot
+   as the recovery boundary.
+4. **Controlled actions:** add approvals, checkpoints, and mutation only after
+   typed backend records, explicit authority, cancellation, and restore paths
+   exist and pass the next validation wave.
+
+This sequence prevents a polished chat shell from outrunning the worker-plane
+evidence that differentiates Spark.
+
 The first usable desktop slice includes:
 
 - local project selection and project-scoped thread history;

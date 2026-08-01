@@ -20,6 +20,25 @@ use serde_json::json;
 use std::path::PathBuf;
 
 #[test]
+fn proofline_snapshot_cli_accepts_an_optional_session() {
+    let cli = <Cli as clap::Parser>::try_parse_from([
+        "spark",
+        "proofline",
+        "snapshot",
+        "--session",
+        "review-42",
+    ])
+    .expect("parse proofline snapshot");
+
+    assert!(matches!(
+        cli.command,
+        Command::Proofline {
+            command: crate::cli::ProoflineCommand::Snapshot { session }
+        } if session.as_deref() == Some("review-42")
+    ));
+}
+
+#[test]
 fn chat_cli_accepts_reasoning_effort_flag() {
     let cli = <Cli as clap::Parser>::try_parse_from([
         "spark",

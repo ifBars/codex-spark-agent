@@ -163,6 +163,19 @@ than fabricate zero.
 
 ## 30/60/90-day sequence
 
+Proofline is the review and measurement surface for this sequence, not a second
+entry wedge. It must make Repo Brief and later worker outcomes easier to verify;
+it does not earn priority merely by looking like a complete agent application.
+The desktop investment advances only through these gates:
+
+1. a privacy-minimized, read-only Spark snapshot contract;
+2. five real internal participant sessions using the fixed protocol in
+   [proofline-validation.md](proofline-validation.md);
+3. an external design-partner usability wave only if the internal safety,
+   evidence-comprehension, and authority-discoverability gates pass; and
+4. a live Tauri run stream only for workflows that already have typed,
+   source-backed evidence and a measured user need.
+
 ### Days 0-30: safe local worker beta
 
 - Ship Repo Brief as a standalone CLI and Codex MCP workflow.
@@ -173,6 +186,12 @@ than fabricate zero.
   partial, and estimated states.
 - Complete five customer interviews and recruit a measured beta cohort.
 - Repair benchmark provenance and authoritative response-usage accounting.
+- Ship the selected Proofline prototype plus a read-only `spark proofline
+  snapshot` contract; keep transcripts, raw traces, and unsupported evidence
+  out of the renderer boundary.
+- Run the five-person Proofline internal dogfood wave tracked in
+  [issue #6](https://github.com/ifBars/codex-spark-agent/issues/6); a green build
+  or simulated agent review does not satisfy this gate.
 
 ### Days 31-60: controlled worker plane
 
@@ -181,6 +200,9 @@ than fabricate zero.
 - Isolate concurrent workspaces and surface ownership or conflict state.
 - Standardize compact handoffs and deterministic workflow validators.
 - Run a two-week beta with three to five design partners.
+- If the internal Proofline wave passes, connect a Tauri 2 shell to ordered
+  snapshot and Channel events for Repo Brief and failed-validation review;
+  otherwise fix and repeat the wave before expanding the desktop surface.
 
 ### Days 61-90: evidence platform
 
@@ -189,6 +211,9 @@ than fabricate zero.
 - Add team policy, retention, budget, and audit controls.
 - Extend Spark Bench into a private team evidence view.
 - Test paid hosted governance and analytics around the open local runner.
+- Add desktop change, validation, checkpoint, approval, and fork views only
+  when each state has a typed backend record with provenance and recovery
+  behavior; never derive review evidence from generic transcript text.
 
 ## Explicit non-goals
 
