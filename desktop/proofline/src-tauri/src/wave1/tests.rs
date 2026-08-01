@@ -7,7 +7,7 @@ use super::{
 use std::sync::Arc;
 use tempfile::TempDir;
 
-const FIXTURE_SHA: &str = "7829776e9aea00a0d182d00cddc3337f07659d728fbea9b31b30fdc05f36b3bf";
+const FIXTURE_SHA: &str = "29415e0ce8f7659093e01032ce52365197c59d0010bad7aa4361048fdb86abe5";
 fn request() -> FixtureRequest {
     FixtureRequest {
         id: "proofline-wave1-local".into(),
@@ -54,6 +54,7 @@ fn privacy_allowlist_rejects_freeform_renderer_content() {
     }
     .validate()
     .is_err());
+    assert!(event("app_ready", "success").validate().is_err());
     assert!(RendererInteraction {
         participant_id: "P01 note".into(),
         ..event("run_submitted", "success")
@@ -124,6 +125,21 @@ fn changed_renderer_fixture_source_rejects_countability() {
 }
 
 #[test]
+fn manifest_identity_is_the_exact_embedded_byte_hash() {
+    let directory = TempDir::new().expect("temporary app data directory");
+    let mut host = Wave1Host::new_with_build_identity_and_lifecycle(
+        directory.path().to_path_buf(),
+        BundleFixture::manifest_bytes_changed(),
+        Arc::new(TestProtector),
+        verified_build(),
+        true,
+    );
+    let report = host.preflight(request()).expect("preflight report");
+    assert!(!report.countable);
+    assert!(report.reason.unwrap_or_default().contains("byte identity"));
+}
+
+#[test]
 fn bridge_contract_uses_snake_case_aggregate_only_dtos() {
     let (_directory, mut host) = host();
     let preflight = serde_json::to_value(host.preflight(request()).expect("preflight"))
@@ -140,7 +156,7 @@ fn bridge_contract_uses_snake_case_aggregate_only_dtos() {
     let acknowledgement = host
         .append_event(event("activity_rendered", "success"))
         .expect("event writes");
-    assert!(acknowledgement.acknowledged && acknowledgement.latency_ms.is_some());
+    assert!(acknowledgement.acknowledged && acknowledgement.latency_ms.is_none());
     let aggregate = serde_json::to_value(host.preview_aggregate(true).expect("aggregate"))
         .expect("serialize aggregate");
     let allowed = [
@@ -166,6 +182,29 @@ fn bridge_contract_uses_snake_case_aggregate_only_dtos() {
         std::fs::read_to_string(host.aggregate_path_for_test()).expect("aggregate artifact");
     assert!(!artifact.contains("P01"));
     assert!(!artifact.contains("timestamp"));
+}
+
+#[test]
+fn aggregate_preview_and_export_use_the_distinct_aggregate_schema() {
+    let (_directory, mut host) = host();
+    host.start_session("P01".into(), request())
+        .expect("session starts");
+    host.append_event(event("run_submitted", "success"))
+        .expect("event writes");
+    let aggregate = host.preview_aggregate(true).expect("aggregate export");
+    assert_eq!(aggregate.schema, "spark.proofline.validation.aggregate.v1");
+    assert_eq!(
+        host.events_for_test()[0].schema,
+        "spark.proofline.validation.v1"
+    );
+    let artifact: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(host.aggregate_path_for_test()).expect("aggregate bytes"),
+    )
+    .expect("aggregate json");
+    assert_eq!(
+        artifact["schema"],
+        "spark.proofline.validation.aggregate.v1"
+    );
 }
 #[test]
 fn distinct_same_category_actions_are_durable_and_get_host_identifiers() {

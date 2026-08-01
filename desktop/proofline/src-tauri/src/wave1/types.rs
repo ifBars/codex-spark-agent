@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub const EVENT_SCHEMA: &str = "spark.proofline.validation.v1";
+pub const AGGREGATE_SCHEMA: &str = "spark.proofline.validation.aggregate.v1";
 pub const CAPTURE_MODE: &str = "host_authoritative";
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,7 +87,7 @@ impl RendererInteraction {
     pub fn validate(&self) -> Result<(), String> {
         if !matches!(
             self.event_type.as_str(),
-            "app_ready" | "run_submitted" | "activity_rendered" | "task_outcome"
+            "run_submitted" | "activity_rendered" | "task_outcome"
         ) {
             return Err("event_type is not a Wave 1 category".into());
         }

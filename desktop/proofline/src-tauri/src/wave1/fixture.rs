@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 const CANONICAL_MANIFEST_SHA: &str =
-    "7829776e9aea00a0d182d00cddc3337f07659d728fbea9b31b30fdc05f36b3bf";
+    "29415e0ce8f7659093e01032ce52365197c59d0010bad7aa4361048fdb86abe5";
 const RENDERER_FIXTURE_SOURCE_SHA: &str =
-    "8da206c2b06afde354b32235d8fcb2f2b2766182ae63381e67b08b0a24c04f55";
+    "0a43f614e844798079b5244c16dffff694afd89c9f6328501117db5da1573a1d";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Manifest {
@@ -45,6 +45,10 @@ impl BundleFixture {
     }
 
     pub(crate) fn preflight(&self) -> Result<VerifiedFixture, String> {
+        let manifest_sha = hex_sha256(&self.manifest_bytes);
+        if manifest_sha != CANONICAL_MANIFEST_SHA {
+            return Err("bundled fixture manifest byte identity is invalid".into());
+        }
         let manifest: Manifest = serde_json::from_slice(&self.manifest_bytes)
             .map_err(|_| "bundled fixture manifest is malformed".to_owned())?;
         if manifest.schema != "spark.proofline.fixture.v1"
@@ -83,12 +87,6 @@ impl BundleFixture {
             return Err("bundled fixture evidence does not match its manifest".into());
         }
         self.verify_renderer_fixture_source(&manifest, expected)?;
-        let canonical = serde_json::to_vec(&manifest)
-            .map_err(|_| "bundled fixture manifest cannot be canonicalized".to_owned())?;
-        let manifest_sha = hex_sha256(&canonical);
-        if manifest_sha != CANONICAL_MANIFEST_SHA {
-            return Err("bundled fixture manifest canonical identity is invalid".into());
-        }
         Ok(VerifiedFixture {
             id: manifest.fixture_id,
             revision: manifest.revision,
@@ -107,6 +105,13 @@ impl BundleFixture {
     pub(crate) fn renderer_source_tampered() -> Self {
         let mut fixture = Self::bundled();
         fixture.renderer_source_bytes.push(b'!');
+        fixture
+    }
+
+    #[cfg(test)]
+    pub(crate) fn manifest_bytes_changed() -> Self {
+        let mut fixture = Self::bundled();
+        fixture.manifest_bytes.push(b' ');
         fixture
     }
 

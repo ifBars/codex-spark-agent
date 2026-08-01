@@ -5,7 +5,8 @@ use super::{
     types::{
         AggregatePreview, AppendEventReport, BuildIdentity, CategoryCount, FixtureRequest,
         FixtureVerification, LedgerEvent, PreflightReport, PurgeReport, RendererInteraction,
-        RetentionStatus, StartSessionReport, TaskCount, CAPTURE_MODE, EVENT_SCHEMA,
+        RetentionStatus, StartSessionReport, TaskCount, AGGREGATE_SCHEMA, CAPTURE_MODE,
+        EVENT_SCHEMA,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,6 @@ pub(crate) struct Wave1Host {
     events: Vec<LedgerEvent>,
     rotated: bool,
     started_at_ms: Option<u128>,
-    first_activity_ms: Option<u128>,
     retention_deadline_ms: Option<u128>,
     metadata: HostMetadata,
     build: BuildIdentity,
@@ -91,7 +91,6 @@ impl Wave1Host {
             events: Vec::new(),
             rotated: false,
             started_at_ms: None,
-            first_activity_ms: None,
             retention_deadline_ms: None,
             metadata: HostMetadata::default(),
             build,
@@ -174,7 +173,6 @@ impl Wave1Host {
         self.events.clear();
         self.rotated = false;
         self.started_at_ms = Some(now_ms());
-        self.first_activity_ms = None;
         self.retention_deadline_ms = self.started_at_ms.map(retention_deadline);
         self.metadata.retention_deadline_ms = self.retention_deadline_ms;
         self.persist_metadata()?;
@@ -206,11 +204,9 @@ impl Wave1Host {
         let key = self
             .key
             .ok_or_else(|| "protected ledger key is unavailable".to_owned())?;
-        let latency_ms = session_lifecycle_latency(
-            &interaction.event_type,
-            self.started_at_ms,
-            &mut self.first_activity_ms,
-        );
+        // `activity_rendered` is a renderer receipt category, not an authoritative
+        // native first-visible boundary. Do not derive timing from renderer input.
+        let latency_ms = None;
         self.sequence += 1;
         let event = LedgerEvent {
             schema: EVENT_SCHEMA.into(),
@@ -259,7 +255,7 @@ impl Wave1Host {
             }
         }
         let mut aggregate = AggregatePreview {
-            schema: EVENT_SCHEMA.into(),
+            schema: AGGREGATE_SCHEMA.into(),
             event_count: self.events.len(),
             invalid_preflight_attempt_count: self.metadata.invalid_preflight_attempt_count,
             task_counts: task_counts
@@ -280,7 +276,7 @@ impl Wave1Host {
                 .iter()
                 .filter(|event| event.event_type == "task_outcome" && event.outcome == "abandoned")
                 .count(),
-            first_activity_ms: self.first_activity_ms,
+            first_activity_ms: None,
             retention: self.retention(),
             download_ready: false,
         };
@@ -315,7 +311,6 @@ impl Wave1Host {
         self.namespace = new_namespace();
         self.rotated = true;
         self.started_at_ms = None;
-        self.first_activity_ms = None;
         self.retention_deadline_ms = None;
         self.metadata = HostMetadata::default();
         Ok(PurgeReport {
@@ -504,20 +499,6 @@ fn validate_participant(value: &str) -> Result<(), String> {
     } else {
         Err("participant_id must be a pseudonymous P01 through P99 identifier".into())
     }
-}
-fn session_lifecycle_latency(
-    event_type: &str,
-    started_at: Option<u128>,
-    first_activity: &mut Option<u128>,
-) -> Option<u128> {
-    if !matches!(event_type, "app_ready" | "activity_rendered") {
-        return None;
-    }
-    let latency = started_at.map(|started| now_ms().saturating_sub(started));
-    if event_type == "activity_rendered" && first_activity.is_none() {
-        *first_activity = latency;
-    }
-    latency
 }
 fn now_ms() -> u128 {
     SystemTime::now()
