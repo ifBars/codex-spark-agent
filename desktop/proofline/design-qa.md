@@ -1,6 +1,6 @@
 # Proofline design QA
 
-Status: passed on 2026-08-01. No open P0, P1, or P2 visual or interaction defects.
+Status: passed after truth-boundary and responsive remediation on 2026-08-01. No open P0, P1, or P2 visual or core-interaction defects.
 
 ## Target and capture conditions
 
@@ -14,17 +14,17 @@ Status: passed on 2026-08-01. No open P0, P1, or P2 visual or interaction defect
 | Gate | Result | Evidence |
 | --- | --- | --- |
 | Outcome-first hierarchy | Pass | Completion, title, summary, review action, file ledger, validation, work trace, composer, and status ribbon follow the selected concept in the same order. |
-| Desktop geometry | Pass | Shared top-fold comparison aligns the 294 px rail seam, main content origin, title baseline, file ledger width, validation stack, work-trace row, and composer. |
-| Core interactions | Pass | Review open/close, continue-to-composer, file drawer toggle, work-trace expansion, model/reasoning/workspace selection, prompt submission, and task switching were exercised through accessible controls. |
-| Responsive behavior | Pass | Checked at 1024, 800, and approximately 451 CSS px. The mobile rail remains horizontally scrollable inside its own region and the document no longer overflows horizontally. |
-| Content integrity | Pass | Usage copy is limited to source-reported tokens. Pricing is explicitly unavailable rather than estimated or invented. |
-| Build and site tests | Pass | `bun run build` and `bun run test:sites` pass. |
+| Desktop geometry | Pass | The fresh shared top-fold comparison aligns the rail seam, main content origin, title baseline, file ledger width, validation stack, work-trace row, and composer while preserving the visible prototype boundary. |
+| Core interactions | Pass | Browser replay and focused state tests cover task switching, unavailable evidence, file-inspector open/focus/close, authority labels, and the prototype-only composer submission notice. |
+| Responsive behavior | Pass | Rechecked at 1024, 800, and approximately 451 CSS px. The document and task surface stay horizontally contained; the narrow task rail and composer controls scroll within their own regions. |
+| Content integrity | Pass | The renderer visibly labels simulated data, does not reuse the fork fixture for other tasks, keeps unavailable evidence explicit, and never estimates price or claims a sandbox. |
+| Build and site tests | Pass | `bun run test:app`, `bun run build`, and `bun run test:sites` pass. |
 
 ## Accepted low-priority differences
 
 - P3: the Spark mark uses the closest matching Phosphor icon because the concept did not include a reusable brand asset.
-- P3: the completion summary includes the pricing-unavailable boundary; this is an intentional product-truth correction to the mock copy.
-- P3: the status ribbon says `Permissions shown` instead of `Private`; the renderer cannot make a security promise that the harness and provider path do not yet prove.
+- P3: the completion summary and status ribbon explicitly identify the rich state as a simulated fixture; this is an intentional product-truth correction to the mock copy.
+- P3: the mode selector says `Ask (read-only tools)` or `Work (OS-user access)` and gives a visible no-sandbox/no-privacy-guarantee note instead of a private or full-access promise.
 
 ## Artifacts
 
@@ -33,3 +33,8 @@ Status: passed on 2026-08-01. No open P0, P1, or P2 visual or interaction defect
 - `reference-qa-1600x900.png`: deterministic analysis canvas for the source top fold.
 - `design-qa-comparison.png`: final side-by-side comparison.
 - `qa-comparison.html`: reproducible comparison page.
+- `audit-01-initial.png`: canonical completed-task state.
+- `audit-02-file-inspector.png`: simulated file-inspector interaction.
+- `audit-03-unavailable-evidence.png`: non-fork task with no inherited evidence.
+- `audit-04-authority-and-submit.png`: Work-mode authority and prototype-only submission notice.
+- `audit-05-mobile.png`: narrow responsive state.
