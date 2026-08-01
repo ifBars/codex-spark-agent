@@ -19,9 +19,14 @@ Download the [latest release](https://github.com/ifBars/codex-spark-agent/releas
 Extract the archive, put `spark` on your `PATH`, then run:
 
 ```text
+spark --version
 spark setup
 spark chat
 ```
+
+Confirm that `spark --version` matches the downloaded release before relying on
+new commands. If it reports an older version, another `spark` binary appears
+earlier on `PATH`; replace or reorder that installation first.
 
 You need a ChatGPT account that can use Codex OAuth. Windows may ask you to unblock the downloaded archive before extraction.
 
