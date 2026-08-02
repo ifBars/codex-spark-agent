@@ -36,11 +36,17 @@ and cost comparisons that treat unlike token sources as equivalent.
 
 ## Architecture
 
-Use a Tauri 2 shell with a web renderer over a Rust-owned application boundary.
-Tauri's [IPC model](https://v2.tauri.app/concept/inter-process-communication/)
-and [capability permissions](https://v2.tauri.app/security/capabilities/) fit a
-local harness whose renderer must not own shell, filesystem, credential, or
-permission authority.
+Use a native Slint renderer over a Rust-owned application boundary for the next
+bounded spike. The earlier Tauri 2/WebView2 host remains the visual,
+event-contract, and Sites rehearsal, but it is not the production privacy
+boundary. The renderer decision, rejected containment options, fallback, and
+falsification gates live in
+[`proofline-renderer-decision.md`](proofline-renderer-decision.md).
+
+Slint is an experiment, not an irreversible framework commitment. If it misses
+the accessibility, keyboard, text-quality, lifecycle, or no-unexpected-network
+gates, the fallback is a WinUI 3 renderer with a Rust core behind typed local
+IPC. Neither toolkit earns a `Private` claim by selection alone.
 
 The first extraction should create a reusable Rust core boundary for:
 
@@ -68,12 +74,14 @@ ungated implementation batch. The execution sequence is:
 1. **Prototype and contract:** preserve the selected hierarchy, remove
    misleading mock evidence, and expose a privacy-minimized read-only snapshot
    from the Rust harness.
-2. **Native measurement host:** wrap the selected renderer in a narrow Tauri 2
-   host that owns fixture verification, build identity, event identity and
+2. **Native renderer and measurement host:** reproduce the selected hierarchy
+   in the bounded Slint spike. The Rust host owns fixture verification, build
+   identity, event identity and
    ordering, encrypted local capture, retention metadata, explicit early purge,
    lazy crypto-erasure of expired artifacts on the next preflight, and
-   aggregate-only export. Browser and Sites builds remain rehearsal-only. The
-   current native preflight is also deliberately non-countable until native
+   aggregate-only export. Tauri/WebView2 and Sites builds remain
+   rehearsal-only. The current preflight is also deliberately non-countable
+   until native
    process-start and actual first-paint boundaries are implemented and tested;
    it does not yet prove restart recovery, timer/background expiry purge, or
    complete participant denominators.
@@ -144,7 +152,8 @@ diff or failed validation.
 - Checkpoints are mistaken for Git history.
 - partial usage or missing price data is presented as complete or free.
 - benchmark views encourage cherry-picked success-only claims.
-- platform webview differences degrade the compact layout.
+- native toolkit text, keyboard, or accessibility behavior degrades the compact
+  layout.
 
 The desktop north star remains the same as the harness: verified useful work per
 engineer minute, with local ownership and honest evidence.

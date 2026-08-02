@@ -1,5 +1,6 @@
 # Rust build output
 /target/
+/desktop/proofline-native/target/
 /web/dist/
 /web/node_modules/
 /web/design-qa-*.png
