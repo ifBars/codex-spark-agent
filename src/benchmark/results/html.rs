@@ -469,10 +469,17 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
             row.score,
             html_escape(&validation),
             row.success,
-            format_ms(row.duration_ms as f64),
+            duration_display(
+                row.duration_ms
+                    .map(|value| value as f64)
+                    .unwrap_or_default(),
+                row.duration_ms.is_some(),
+            ),
             row.source_files,
             row.source_bytes,
-            row.tool_or_item_calls,
+            row.tool_or_item_calls
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
             html_escape(&row.failure_points)
         );
     }
@@ -567,6 +574,7 @@ pub(super) fn comparison_input_table(inputs: &Value) -> String {
         ("Spark harness", "/harness_reports"),
         ("Codex CLI", "/codex_cli_reports"),
         ("OpenCode", "/opencode_reports"),
+        ("Spark usage history", "/usage_history_reports"),
     ] {
         let Some(reports) = inputs.pointer(pointer).and_then(Value::as_array) else {
             continue;
@@ -828,23 +836,28 @@ fn comparison_delta_table(rows: &[ComparisonRow]) -> String {
         let Some(codex) = comparison_row_for_runner(&rows, "codex-cli") else {
             continue;
         };
-        let duration_delta = spark.duration_ms as i128 - codex.duration_ms as i128;
+        let duration_delta = spark
+            .duration_ms
+            .zip(codex.duration_ms)
+            .map(|(spark, codex)| signed_ms(spark as i128 - codex as i128))
+            .unwrap_or_else(|| "unavailable".to_string());
         let token_ratio = spark
             .input_tokens
             .zip(codex.input_tokens)
             .map(|(spark, codex)| format!("{:.1}x", ratio_or_zero(spark as f64, codex as f64)))
             .unwrap_or_else(|| "unavailable".to_string());
-        let tool_ratio = ratio_or_zero(
-            spark.tool_or_item_calls as f64,
-            codex.tool_or_item_calls as f64,
-        );
+        let tool_ratio = spark
+            .tool_or_item_calls
+            .zip(codex.tool_or_item_calls)
+            .map(|(spark, codex)| format!("{:.1}x", ratio_or_zero(spark as f64, codex as f64)))
+            .unwrap_or_else(|| "unavailable".to_string());
         let index_delta =
             spark.benchmark_index.unwrap_or(0.0) - codex.benchmark_index.unwrap_or(0.0);
         let _ = write!(
             html,
-            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{:.1}x</td><td class=\"num\">{:+.1}</td></tr>",
+            "<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{:+.1}</td></tr>",
             html_escape(&scenario),
-            signed_ms(duration_delta),
+            duration_delta,
             token_ratio,
             tool_ratio,
             index_delta

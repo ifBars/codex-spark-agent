@@ -304,6 +304,45 @@ fn benchmark_compare_help_describes_harness_report_inputs() {
 }
 
 #[test]
+fn benchmark_compare_accepts_usage_history_without_a_codex_report() {
+    let cli = <Cli as clap::Parser>::try_parse_from([
+        "spark",
+        "benchmark-compare",
+        "--usage-history-report",
+        "usage-history.json",
+    ])
+    .expect("parse usage-history-only benchmark comparison");
+
+    let Command::BenchmarkCompare {
+        codex_cli_report,
+        usage_history_report,
+        ..
+    } = cli.command
+    else {
+        panic!("expected benchmark-compare command");
+    };
+    assert!(codex_cli_report.is_empty());
+    assert_eq!(
+        usage_history_report,
+        vec![PathBuf::from("usage-history.json")]
+    );
+}
+
+#[test]
+fn benchmark_compare_requires_at_least_one_input_at_execution() {
+    assert!(crate::ensure_benchmark_comparison_inputs(&[], &[], &[], &[]).is_err());
+    assert!(
+        crate::ensure_benchmark_comparison_inputs(
+            &[],
+            &[],
+            &[],
+            &[PathBuf::from("usage-history.json")],
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn json_count_map_summary_formats_sorted_nonzero_counts() {
     let value = json!({
         "ops-report": 1,
