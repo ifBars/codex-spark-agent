@@ -2,20 +2,22 @@
 
 Date: 2026-08-01
 
-Status: accepted for a bounded native spike; not release approval
+Status: Slint spike failed; WinUI 3 fallback authorized; not release approval
 
 ## Decision
 
-Proofline will evaluate a native Slint renderer as the primary desktop path.
+Proofline evaluated a native Slint renderer as the primary desktop path.
 The existing Tauri/WebView2 implementation remains a useful visual and event-contract
 rehearsal, but it is not the production privacy boundary and must not present an
 unqualified `Private` state.
 
-If the Slint spike fails the visual, accessibility, keyboard, or lifecycle gates in
-this record, the fallback is a WinUI 3 renderer with a Rust-owned core behind a
-versioned, ACL-restricted local IPC boundary. The fallback is Windows-only and more
-expensive to integrate, but it has the strongest evaluated path to OS-supported UI
-isolation through an AppContainer without network capabilities.
+The bounded DPI correction failed at 125% Windows scaling after replacing the
+post-show physical-size workaround with a layout-driven root. The composer and
+status ribbon remained off-client, so issue #15's stop condition is met. The
+selected path is now a WinUI 3 renderer with a Rust-owned core behind a versioned,
+ACL-restricted local IPC boundary. The fallback is Windows-only and more expensive
+to integrate, but it has the strongest evaluated path to OS-supported UI isolation
+through an AppContainer without network capabilities.
 
 This decision keeps the selected Proofline concept: a narrow task-history rail, an
 evidence-first completed-task document, collapsed model activity, an anchored
