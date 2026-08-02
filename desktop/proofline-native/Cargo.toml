@@ -1,0 +1,12 @@
+[package]
+name = "proofline-native"
+version = "0.0.1"
+edition = "2024"
+publish = false
+description = "Non-countable native Slint UI spike for Proofline"
+
+[dependencies]
+slint = { version = "=1.16.0", default-features = false, features = ["accessibility", "backend-winit", "compat-1-2", "renderer-software", "software-renderer-systemfonts", "std"] }
+
+[build-dependencies]
+slint-build = "=1.16.0"
