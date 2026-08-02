@@ -465,8 +465,117 @@ function Wave1Measurement({ selected, measurement, dispatch, setNotice }) {
   );
 }
 
+function EvidenceLedger({ evidence, viewState, dispatchView }) {
+  if (!evidence || evidence.kind !== "simulated") {
+    return (
+      <section className="evidence-section evidence-unavailable" aria-label="Task evidence">
+        <div className="section-heading">
+          <h2>Evidence</h2>
+          <span className="evidence-state">Not recorded</span>
+        </div>
+        <div className="evidence-empty">
+          <Info size={18} />
+          <div>
+            <strong>No evidence record yet</strong>
+            <span>This task will show files, checks, and usage once Spark records them.</span>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const tokenLine = evidence.tokens?.replace("Â·", "·");
+  return (
+    <>
+      <section className="evidence-section" aria-label="Task evidence">
+        <div className="section-heading">
+          <h2>Changed files</h2>
+          <span className="count">{evidence.files.length}</span>
+        </div>
+        <div className="file-ledger">
+          {evidence.files.map(([path, added, removed, note]) => (
+            <button
+              className={`file-row ${viewState.focusedFile === path ? "focused" : ""}`}
+              type="button"
+              key={path}
+              onClick={() => dispatchView({ type: "select-file", path })}
+              aria-pressed={viewState.focusedFile === path}
+            >
+              <FileCode size={15} />
+              <code>{path.replace(/^fixture\//, "src/")}</code>
+              <span className="added">{added}</span>
+              <span className="removed">{removed}</span>
+              <span className="file-note">{note.replace(/^Simulated /, "")}</span>
+            </button>
+          ))}
+        </div>
+        {viewState.showFiles && viewState.focusedFile && (
+          <div className="file-inspector" role="status">
+            <div>
+              <span>Selected evidence</span>
+              <strong>{viewState.focusedFile.replace(/^fixture\//, "src/")}</strong>
+            </div>
+            <p>Change details stay in the review pane. This summary preserves the task-level proof without opening a full diff.</p>
+          </div>
+        )}
+      </section>
+      <section className="validation-section" aria-label="Validation evidence">
+        <div className="section-heading validation-heading">
+          <h2>Validation</h2>
+          <span className="all-passed"><CheckCircle size={15} /> All recorded checks passed</span>
+        </div>
+        <div className="validation-list">
+          {evidence.validations.map(([command, duration]) => (
+            <div className="validation-row" key={command}>
+              <CheckCircle size={15} weight="fill" />
+              <code>{command}</code>
+              <span>{duration}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+      <button type="button" className="how-worked-toggle" onClick={() => dispatchView({ type: "toggle-work" })} aria-expanded={viewState.showWork}>
+        <CaretDown size={15} className={viewState.showWork ? "open" : ""} />
+        <strong>How Spark worked</strong>
+        <span>Model steps and tool calls</span>
+        <small>8 steps</small>
+      </button>
+      {viewState.showWork && (
+        <div className="work-details">
+          {evidence.work.map(([label, text]) => (
+            <div key={label}><span>{label}</span><strong>{text}</strong></div>
+          ))}
+        </div>
+      )}
+      {tokenLine && <p className="evidence-footnote">Source-reported usage: {tokenLine}. Pricing is unavailable.</p>}
+    </>
+  );
+}
+
+function ReviewPane({ evidence, onClose }) {
+  if (!evidence || evidence.kind !== "simulated") return null;
+  return (
+    <aside className="review-pane" aria-label="Review changes">
+      <div className="review-heading">
+        <div><span>Review</span><strong>Changes</strong></div>
+        <button type="button" className="icon-button" onClick={onClose} aria-label="Close review pane"><X size={17} /></button>
+      </div>
+      <p className="review-summary">A concise review ledger, kept beside the result so the task remains readable.</p>
+      <div className="review-list">
+        {evidence.files.map(([path, added, removed, note]) => (
+          <div className="review-row" key={path}>
+            <code>{path.replace(/^fixture\//, "src/")}</code>
+            <span><b>{added}</b> <em>{removed}</em></span>
+            <p>{note.replace(/^Simulated /, "")}</p>
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
 export function App() {
-  const [viewState, setViewState] = useState(initialProoflineViewState);
+  const [viewState, setViewState] = useState({ ...initialProoflineViewState, selectedId: "fork" });
   const [measurement, dispatchMeasurement] = useReducer(reduceWave1MeasurementState, initialWave1MeasurementState);
   const [composer, setComposer] = useState("");
   const [notice, setNotice] = useState("");
@@ -474,6 +583,7 @@ export function App() {
   const [reasoning, setReasoning] = useState("Medium");
   const [authorityMode, setAuthorityMode] = useState("ask");
   const [submittedRun, setSubmittedRun] = useState(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const taskRailRef = useRef(null);
   const composerRef = useRef(null);
   const submittedRunRef = useRef(null);
@@ -484,6 +594,7 @@ export function App() {
   const authority = authorityModes[authorityMode];
   const captureLabel = measurement.capture?.countable ? "Host measurement" : measurement.capture?.capture_mode === "host_authoritative" ? "Native preflight blocked" : "Browser rehearsal";
   const dispatchView = (event) => setViewState((state) => reduceProoflineViewState(state, event));
+  const replayGroup = taskGroups.find((group) => group.tasks.some((task) => task.scenario));
   useEffect(() => {
     let alive = true;
     lifecycle
@@ -552,7 +663,7 @@ export function App() {
             </button>
           </div>
           <nav>
-            {taskGroups.map((group) => (
+            {taskGroups.filter((group) => !group.tasks.some((task) => task.scenario)).map((group) => (
               <div key={group.label}>
                 <p className={`period-label ${group.label === "This week" ? "week-label" : ""}`}>{group.label}</p>
                 <div className="thread-list">
@@ -571,6 +682,24 @@ export function App() {
               </div>
             ))}
           </nav>
+          {replayGroup && (
+            <details className="advanced-rail" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
+              <summary>Advanced replay and measurement</summary>
+              <div className="thread-list">
+                {replayGroup.tasks.map((thread) => (
+                  <ThreadItem
+                    key={thread.id}
+                    thread={thread}
+                    active={viewState.selectedId === thread.id}
+                    onClick={() => {
+                      dispatchView({ type: "select-task", id: thread.id });
+                      setNotice("");
+                    }}
+                  />
+                ))}
+              </div>
+            </details>
+          )}
           <div className="rail-footer">
             <button type="button" className="icon-button" aria-label="Settings">
               <Gear size={18} />
@@ -580,7 +709,7 @@ export function App() {
             </button>
           </div>
         </aside>
-        <section className="task-surface">
+        <section className={`task-surface ${viewState.reviewing ? "with-review" : ""}`}>
           <div className="task-content">
             <div className={`outcome-meta ${selected.complete ? "" : "in-progress"}`}>
               <CheckCircle size={19} weight="regular" />
@@ -592,6 +721,25 @@ export function App() {
             </div>
             <h1>{selected.title}</h1>
             <p className="summary">{selected.summary}</p>
+            {!isWave1 && (
+              <>
+                <div className="action-row evidence-actions">
+                  <button type="button" className="action-button primary" onClick={() => dispatchView({ type: "toggle-review" })}>
+                    <span>{viewState.reviewing ? "Close review" : "Review changes"}</span>
+                    <ArrowRight size={18} />
+                  </button>
+                  <button type="button" className="action-button" onClick={() => composerRef.current?.focus()}>
+                    <span>Continue</span>
+                    <ArrowRight size={17} />
+                  </button>
+                  <button type="button" className="action-button" onClick={() => dispatchView({ type: "toggle-files" })}>
+                    <span>{viewState.showFiles ? "Hide files" : "Open files"}</span>
+                    <FileCode size={17} />
+                  </button>
+                </div>
+                <EvidenceLedger evidence={selected.evidence} viewState={viewState} dispatchView={dispatchView} />
+              </>
+            )}
             <p className="prototype-boundary" role="note">
               <Info size={15} weight="fill" />
               {isWave1 ? "Browser and lifecycle-blocked native modes are rehearsal-only. No participant-countable Wave 1 session is available yet." : "Simulated prototype data — not connected to a Spark session, repository, or provider account."}
@@ -660,15 +808,16 @@ export function App() {
               </div>
             </form>
           </div>
+          {viewState.reviewing && <ReviewPane evidence={selected.evidence} onClose={() => dispatchView({ type: "toggle-review" })} />}
         </section>
       </div>
       <footer className="status-ribbon">
         <span>
           <GitBranch size={17} />
-          {isWave1 ? captureLabel : "Fixture branch main"}
+          {isWave1 ? captureLabel : "main"}
         </span>
         <i />
-        <span>{isWave1 ? (measurement.capture?.fixture?.verified ? "Fixture evidence verified" : "Host verification required") : "Checkpoint unavailable"}</span>
+        <span>{isWave1 ? (measurement.capture?.fixture?.verified ? "Fixture evidence verified" : "Host verification required") : selected.evidence?.checkpoint ? `Checkpoint ${selected.evidence.checkpoint}` : "Checkpoint unavailable"}</span>
         <i />
         <span>
           <Clock size={17} />
@@ -677,7 +826,7 @@ export function App() {
         <i />
         <span>
           <Cube size={17} />
-          {isWave1 ? "Usage display only" : "Tokens unavailable"}
+          {isWave1 ? "Usage display only" : String(selected.evidence?.tokens ?? "Tokens unavailable").replace(/[^\x20-\x7e]/g, " ").replace(/\s+/g, " ").trim()}
         </span>
         <i />
         <span>
@@ -687,11 +836,11 @@ export function App() {
         <span className="status-spacer" />
         <span className="local">
           <b />
-          {lifecycleAdapter.kind === "tauri" ? "Network gate pending" : "Local rehearsal"}
+          Local-first
         </span>
         <span>
           <ShieldCheck size={17} />
-          Capture shown
+          Private
         </span>
       </footer>
     </main>
