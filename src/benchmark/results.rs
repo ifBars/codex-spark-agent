@@ -26,6 +26,34 @@ mod infrastructure;
 mod scenarios;
 mod scoring;
 
+const USAGE_HISTORY_SCHEMA_VERSION: &str = "spark.usage_history.v1";
+const USAGE_HISTORY_KIND: &str = "local_codex_session_history";
+const USAGE_HISTORY_SCENARIO: &str = "usage-history-overall";
+const USAGE_HISTORY_RUNNER: &str = "spark-usage-history";
+const USAGE_HISTORY_USAGE_SOURCE: &str = "spark_usage_history";
+const USAGE_HISTORY_METRICS: [&str; 7] = [
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_write_input_tokens",
+    "uncached_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+];
+const USAGE_HISTORY_SCAN_COUNTERS: [&str; 11] = [
+    "files_discovered",
+    "files_scanned",
+    "files_unreadable",
+    "malformed_lines",
+    "sessions_without_metadata",
+    "duplicate_session_files",
+    "fork_replayed_observations_skipped",
+    "fork_observations_without_cumulative_evidence",
+    "cumulative_fallback_observations",
+    "counter_resets",
+    "partial_observations",
+];
+
 #[cfg(test)]
 use html::{comparison_input_table, comparison_score_svg};
 use html::{comparison_rows_to_html, format_duration_ms};
@@ -129,6 +157,7 @@ pub(crate) struct BenchmarkComparisonOptions {
     pub(crate) harness_reports: Vec<PathBuf>,
     pub(crate) codex_cli_reports: Vec<PathBuf>,
     pub(crate) opencode_reports: Vec<PathBuf>,
+    pub(crate) usage_history_reports: Vec<PathBuf>,
     pub(crate) llm_judge_report: Option<PathBuf>,
     pub(crate) group_by_reasoning: bool,
     pub(crate) group_by_model: bool,
@@ -189,8 +218,10 @@ struct ComparisonRow {
     success: bool,
     validation_exit_code: Option<i32>,
     validation_timed_out: bool,
-    duration_ms: u128,
-    tool_or_item_calls: u64,
+    /// Wall-clock and tool-item counts are only meaningful for benchmark executions. Local
+    /// usage-history reports deliberately do not contain either measurement.
+    duration_ms: Option<u128>,
+    tool_or_item_calls: Option<u64>,
     usage_source: String,
     input_tokens: Option<u64>,
     cached_input_tokens: Option<u64>,
@@ -271,7 +302,18 @@ pub(crate) fn write_benchmark_report(
 pub(crate) fn write_benchmark_comparison(
     options: BenchmarkComparisonOptions,
 ) -> Result<BenchmarkComparisonOutput> {
-    let harness_rows = if options.harness_reports.is_empty() {
+    let usage_history_rows = read_usage_history_report_rows(
+        &options.cwd,
+        options.suite.name(),
+        &options.usage_history_reports,
+    )?;
+    let usage_only = !usage_history_rows.is_empty()
+        && options.harness_reports.is_empty()
+        && options.codex_cli_reports.is_empty()
+        && options.opencode_reports.is_empty();
+    let harness_rows = if usage_only {
+        Vec::new()
+    } else if options.harness_reports.is_empty() {
         collect_benchmark_rows(&BenchmarkReportOptions {
             cwd: options.cwd.clone(),
             suite: options.suite,
@@ -288,7 +330,7 @@ pub(crate) fn write_benchmark_comparison(
         )?
     };
     let harness_rows = filter_harness_request_failure_rows(&options.cwd, harness_rows);
-    if harness_rows.rows.is_empty() {
+    if harness_rows.rows.is_empty() && !usage_only {
         if harness_rows.skipped_request_failures > 0 {
             let skipped_scenarios = skipped_infrastructure_scenarios_text(
                 &harness_rows.skipped_request_failure_scenarios,
@@ -311,7 +353,7 @@ pub(crate) fn write_benchmark_comparison(
         "Codex CLI",
     )?;
     let codex_rows = codex_external_rows.rows;
-    if codex_rows.is_empty() {
+    if codex_rows.is_empty() && !usage_only {
         if codex_external_rows.skipped_infrastructure_failures > 0 {
             let skipped_scenarios = skipped_infrastructure_scenarios_text(
                 &codex_external_rows.skipped_infrastructure_scenarios,
@@ -330,7 +372,6 @@ pub(crate) fn write_benchmark_comparison(
         "opencode",
     )?;
     let opencode_rows = opencode_external_rows.rows;
-
     std::fs::create_dir_all(&options.output_dir).map_err(|error| {
         anyhow::anyhow!(
             "failed to create benchmark comparison directory {}: {error}",
@@ -352,6 +393,7 @@ pub(crate) fn write_benchmark_comparison(
             .filter(|row| row.suite == options.suite.name())
             .map(comparison_row_from_external_agent),
     );
+    rows.extend(usage_history_rows);
     if options.group_by_model || options.group_by_reasoning {
         label_rows_by_model_and_reasoning(
             &mut rows,
@@ -413,6 +455,7 @@ pub(crate) fn write_benchmark_comparison(
     let json_path = options.output_dir.join(format!("{stem}.json"));
     let csv_path = options.output_dir.join(format!("{stem}.csv"));
     let html_path = options.output_dir.join(format!("{stem}.html"));
+    redact_comparison_rows(&mut rows);
     let inputs = comparison_input_metadata(&options);
     annotate_comparison_validity(&mut aggregate, &inputs);
 
@@ -452,7 +495,9 @@ fn retain_successful_comparison_attempts(
         return 0;
     }
     let before = rows.len();
-    rows.retain(|row| row.success);
+    // Usage-history rows are neither successes nor failures; they are non-scored evidence and
+    // must survive a successful-task filter without being promoted into the winner pool.
+    rows.retain(|row| row.success || row.usage_source == USAGE_HISTORY_USAGE_SOURCE);
     before - rows.len()
 }
 
@@ -461,12 +506,22 @@ fn comparison_input_metadata(options: &BenchmarkComparisonOptions) -> Value {
         "harness_reports": input_report_metadata_list(&options.cwd, &options.harness_reports),
         "codex_cli_reports": input_report_metadata_list(&options.cwd, &options.codex_cli_reports),
         "opencode_reports": input_report_metadata_list(&options.cwd, &options.opencode_reports),
+        "usage_history_reports": input_report_metadata_list(
+            &options.cwd,
+            &options.usage_history_reports
+        ),
         "llm_judge_report": options
             .llm_judge_report
             .as_ref()
             .map(|path| input_report_metadata(&options.cwd, path))
             .unwrap_or(Value::Null),
-        "harness_source": if options.harness_reports.is_empty() {
+        "harness_source": if !options.usage_history_reports.is_empty()
+            && options.harness_reports.is_empty()
+            && options.codex_cli_reports.is_empty()
+            && options.opencode_reports.is_empty()
+        {
+            "usage-history-only"
+        } else if options.harness_reports.is_empty() {
             "latest-trace-scan"
         } else {
             "explicit-report-inputs"
@@ -569,8 +624,9 @@ fn input_report_metadata_list(cwd: &Path, paths: &[PathBuf]) -> Vec<Value> {
 fn input_report_metadata(cwd: &Path, path: &Path) -> Value {
     let resolved = resolve_input_path(cwd, path);
     let mut metadata = json!({
-        "path": path.display().to_string(),
-        "resolved_path": resolved.display().to_string(),
+        // Comparison reports are commonly published. Do not preserve local roots or account
+        // names in their metadata; the basename is sufficient to identify an explicit input.
+        "path": input_report_label(path),
     });
     let Some(object) = metadata.as_object_mut() else {
         return metadata;
@@ -591,7 +647,10 @@ fn input_report_metadata(cwd: &Path, path: &Path) -> Value {
             );
         }
         Err(error) => {
-            object.insert("error".to_string(), json!(format!("metadata: {error}")));
+            object.insert(
+                "error".to_string(),
+                json!(redact_local_text(&format!("metadata: {error}"))),
+            );
             return metadata;
         }
     }
@@ -599,14 +658,20 @@ fn input_report_metadata(cwd: &Path, path: &Path) -> Value {
     let contents = match std::fs::read_to_string(&resolved) {
         Ok(contents) => contents,
         Err(error) => {
-            object.insert("error".to_string(), json!(format!("read: {error}")));
+            object.insert(
+                "error".to_string(),
+                json!(redact_local_text(&format!("read: {error}"))),
+            );
             return metadata;
         }
     };
     let value = match serde_json::from_str::<Value>(&contents) {
         Ok(value) => value,
         Err(error) => {
-            object.insert("error".to_string(), json!(format!("parse: {error}")));
+            object.insert(
+                "error".to_string(),
+                json!(redact_local_text(&format!("parse: {error}"))),
+            );
             return metadata;
         }
     };
@@ -624,6 +689,7 @@ fn input_report_metadata(cwd: &Path, path: &Path) -> Value {
         value
             .get("generated_at_unix_ms")
             .cloned()
+            .or_else(|| unix_seconds_to_millis(value.get("generated_at_unix_seconds")))
             .unwrap_or(Value::Null),
     );
     object.insert("row_count".to_string(), json!(input_row_count(&value)));
@@ -641,12 +707,85 @@ fn input_report_metadata(cwd: &Path, path: &Path) -> Value {
     metadata
 }
 
+fn input_report_label(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(redact_local_text)
+        .unwrap_or_else(|| "input-report".to_string())
+}
+
+fn redact_comparison_rows(rows: &mut [ComparisonRow]) {
+    for row in rows {
+        row.command_path = redact_local_text(&row.command_path);
+        row.command_version = redact_local_text(&row.command_version);
+        row.llm_notes = redact_local_text(&row.llm_notes);
+        row.failure_points = redact_local_text(&row.failure_points);
+        row.source = redact_local_text(&row.source);
+    }
+}
+
+/// Published comparison artifacts should not expose a local account or absolute machine path.
+/// This intentionally removes the complete path rather than trying to retain a potentially
+/// identifying suffix.
+fn redact_local_text(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        let windows_path = index + 2 < bytes.len()
+            && bytes[index].is_ascii_alphabetic()
+            && bytes[index + 1] == b':'
+            && matches!(bytes[index + 2], b'\\' | b'/');
+        let unix_home_path =
+            input[index..].starts_with("/Users/") || input[index..].starts_with("/home/");
+        if windows_path || unix_home_path {
+            let start = index;
+            while index < bytes.len()
+                && !bytes[index].is_ascii_whitespace()
+                && !matches!(bytes[index], b'\"' | b'\'' | b'<' | b'>' | b'|' | b',')
+            {
+                index += 1;
+            }
+            if index == start {
+                index += 1;
+            }
+            output.push_str("<local-path>");
+            continue;
+        }
+        let character = input[index..]
+            .chars()
+            .next()
+            .expect("index is within UTF-8 string");
+        output.push(character);
+        index += character.len_utf8();
+    }
+    output
+}
+
 fn input_row_count(value: &Value) -> usize {
     value
         .get("rows")
         .and_then(Value::as_array)
         .map(Vec::len)
         .or_else(|| value.get("traces").and_then(Value::as_array).map(Vec::len))
+        .or_else(|| {
+            value
+                .get("by_model")
+                .and_then(Value::as_array)
+                .and_then(|rows| {
+                    (!rows.is_empty())
+                        .then_some(rows.len() + usize::from(value.get("aggregate").is_some()))
+                })
+        })
+        .or_else(|| {
+            value
+                .get("aggregate")
+                .and_then(|aggregate| aggregate.get("observations"))
+                .and_then(Value::as_u64)
+                .and_then(|observations| usize::try_from(observations).ok())
+                .filter(|count| *count > 0)
+        })
         .unwrap_or(0)
 }
 
@@ -669,10 +808,43 @@ fn input_report_scenarios(value: &Value) -> Vec<String> {
                     .collect::<Vec<_>>()
             })
         })
+        .or_else(|| {
+            value
+                .get("by_model")
+                .and_then(Value::as_array)
+                .filter(|rows| !rows.is_empty())
+                .map(|rows| {
+                    let mut scenarios = Vec::new();
+                    if value.get("aggregate").is_some() {
+                        scenarios.push("usage-history-overall".to_string());
+                    }
+                    scenarios.extend(rows.iter().filter_map(|row| {
+                        row.get("model")
+                            .and_then(Value::as_str)
+                            .map(|model| format!("usage-history-model:{model}"))
+                    }));
+                    scenarios
+                })
+        })
+        .or_else(|| {
+            value
+                .get("aggregate")
+                .and_then(|aggregate| aggregate.get("observations"))
+                .and_then(Value::as_u64)
+                .filter(|observations| *observations > 0)
+                .map(|_| vec!["usage-history-overall".to_string()])
+        })
         .unwrap_or_default();
     scenarios.sort();
     scenarios.dedup();
     scenarios
+}
+
+fn unix_seconds_to_millis(seconds: Option<&Value>) -> Option<Value> {
+    seconds?
+        .as_u64()
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| Value::from(seconds.saturating_mul(1_000)))
 }
 
 fn input_freshness_summary(inputs: &Value) -> Value {
@@ -703,6 +875,7 @@ fn input_report_modified_values(inputs: &Value) -> Vec<u64> {
         "/harness_reports",
         "/codex_cli_reports",
         "/opencode_reports",
+        "/usage_history_reports",
     ]
     .into_iter()
     .filter_map(|pointer| inputs.pointer(pointer).and_then(Value::as_array))
@@ -1635,6 +1808,403 @@ fn read_llm_judge_report(path: &Path) -> Result<BenchmarkJudgeReport> {
     })
 }
 
+fn read_usage_history_report_rows(
+    cwd: &Path,
+    suite: &str,
+    paths: &[PathBuf],
+) -> Result<Vec<ComparisonRow>> {
+    let mut rows = Vec::new();
+    for path in paths {
+        let resolved = resolve_input_path(cwd, path);
+        let contents = std::fs::read_to_string(&resolved).map_err(|error| {
+            anyhow::anyhow!("failed to read {}: {error}", input_report_label(path))
+        })?;
+        let value: Value = serde_json::from_str(&contents).map_err(|error| {
+            anyhow::anyhow!("failed to parse {}: {error}", input_report_label(path))
+        })?;
+        let source = input_report_label(path);
+        validate_usage_history_report(&value, &source)?;
+        let aggregate = value
+            .get("aggregate")
+            .expect("validated aggregate must be present");
+        rows.push(comparison_row_from_usage_history_report(
+            suite, &source, &value, aggregate, None,
+        )?);
+        for row in value
+            .get("by_model")
+            .and_then(Value::as_array)
+            .expect("validated by_model must be present")
+        {
+            let model = row
+                .get("model")
+                .and_then(Value::as_str)
+                .expect("validated usage model must be present");
+            rows.push(comparison_row_from_usage_history_report(
+                suite,
+                &source,
+                &value,
+                row,
+                Some(model),
+            )?);
+        }
+    }
+    Ok(rows)
+}
+
+fn validate_usage_history_report(value: &Value, source: &str) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{source} must be a JSON object"))?;
+    let schema_version = object
+        .get("schema_version")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if schema_version != USAGE_HISTORY_SCHEMA_VERSION {
+        anyhow::bail!(
+            "{source} must be a {USAGE_HISTORY_SCHEMA_VERSION} report, found {schema_version:?}"
+        );
+    }
+    if object.get("kind").and_then(Value::as_str) != Some(USAGE_HISTORY_KIND) {
+        anyhow::bail!(
+            "{source}.kind must be {USAGE_HISTORY_KIND:?}, found {:?}",
+            object.get("kind").and_then(Value::as_str)
+        );
+    }
+    required_u64(object, "generated_at_unix_seconds", source)?;
+    validate_usage_history_source(
+        object
+            .get("source")
+            .ok_or_else(|| anyhow::anyhow!("{source} is missing source"))?,
+        source,
+    )?;
+    validate_usage_history_scope(
+        object
+            .get("scope")
+            .ok_or_else(|| anyhow::anyhow!("{source} is missing scope"))?,
+        source,
+    )?;
+    validate_usage_history_scan(
+        object
+            .get("scan")
+            .ok_or_else(|| anyhow::anyhow!("{source} is missing scan"))?,
+        source,
+    )?;
+    validate_usage_breakdown(
+        object
+            .get("aggregate")
+            .ok_or_else(|| anyhow::anyhow!("{source} is missing aggregate"))?,
+        source,
+        false,
+    )?;
+    let days = object
+        .get("by_day")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("{source} is missing by_day array"))?;
+    for (index, day) in days.iter().enumerate() {
+        validate_usage_breakdown(day, &format!("{source} by_day[{index}]"), false)?;
+        if day
+            .get("day")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            anyhow::bail!("{source} by_day[{index}] must include a non-empty day");
+        }
+    }
+    let models = object
+        .get("by_model")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("{source} is missing by_model array"))?;
+    for (index, model) in models.iter().enumerate() {
+        validate_usage_breakdown(model, &format!("{source} by_model[{index}]"), true)?;
+    }
+    validate_usage_history_pricing(
+        object
+            .get("pricing")
+            .ok_or_else(|| anyhow::anyhow!("{source} is missing pricing"))?,
+        source,
+    )?;
+    Ok(())
+}
+
+fn validate_usage_history_source(value: &Value, context: &str) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{context}.source must be an object"))?;
+    required_str(object, "kind", context)?;
+    required_bool(object, "network", context)?;
+    required_str(object, "codex_home_source", context)?;
+    Ok(())
+}
+
+fn validate_usage_history_scope(value: &Value, context: &str) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{context}.scope must be an object"))?;
+    if !object
+        .get("since_days")
+        .is_some_and(|value| value.is_null() || value.is_u64())
+    {
+        anyhow::bail!("{context}.scope.since_days must be an unsigned integer or null");
+    }
+    required_u64(object, "max_files", context)?;
+    Ok(())
+}
+
+fn validate_usage_history_scan(value: &Value, context: &str) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{context}.scan must be an object"))?;
+    for counter in USAGE_HISTORY_SCAN_COUNTERS {
+        required_u64(object, counter, &format!("{context}.scan"))?;
+    }
+    required_bool(object, "files_truncated", &format!("{context}.scan"))?;
+    Ok(())
+}
+
+fn validate_usage_history_pricing(value: &Value, context: &str) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{context}.pricing must be an object"))?;
+    required_str(object, "availability", context)?;
+    required_str(object, "reason", context)?;
+    if !object
+        .get("model")
+        .is_some_and(|value| value.is_null() || value.is_string())
+    {
+        anyhow::bail!("{context}.pricing.model must be a string or null");
+    }
+    Ok(())
+}
+
+fn validate_usage_breakdown(value: &Value, context: &str, require_model: bool) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{context} must be an object"))?;
+    if require_model
+        && object
+            .get("model")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        anyhow::bail!("{context} must include a non-empty model");
+    }
+    required_u64(object, "observations", context)?;
+    validate_reporting_coverage(
+        object
+            .get("reporting_coverage")
+            .ok_or_else(|| anyhow::anyhow!("{context} is missing reporting_coverage"))?,
+        context,
+    )?;
+    let metrics = object
+        .get("metrics")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("{context} is missing metrics"))?;
+    for name in USAGE_HISTORY_METRICS {
+        let metric = metrics
+            .get(name)
+            .ok_or_else(|| anyhow::anyhow!("{context} is missing metrics.{name}"))?;
+        validate_usage_metric(metric, &format!("{context} metrics.{name}"))?;
+    }
+    Ok(())
+}
+
+fn validate_reporting_coverage(value: &Value, context: &str) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{context}.reporting_coverage must be an object"))?;
+    required_u64(object, "observations_with_any_usage", context)?;
+    required_bool(object, "complete", context)?;
+    required_str(object, "availability", context)?;
+    Ok(())
+}
+
+fn validate_usage_metric(value: &Value, context: &str) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("{context} must be an object"))?;
+    if !object
+        .get("total")
+        .is_some_and(|value| value.is_null() || value.is_u64())
+    {
+        anyhow::bail!("{context}.total must be an unsigned integer or null");
+    }
+    required_u64(object, "reported_observations", context)?;
+    required_u64(object, "observations", context)?;
+    required_bool(object, "complete", context)?;
+    required_str(object, "availability", context)?;
+    Ok(())
+}
+
+fn required_u64(object: &serde_json::Map<String, Value>, key: &str, context: &str) -> Result<u64> {
+    object
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| anyhow::anyhow!("{context}.{key} must be an unsigned integer"))
+}
+
+fn required_bool(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+    context: &str,
+) -> Result<bool> {
+    object
+        .get(key)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| anyhow::anyhow!("{context}.{key} must be a boolean"))
+}
+
+fn required_str<'a>(
+    object: &'a serde_json::Map<String, Value>,
+    key: &str,
+    context: &str,
+) -> Result<&'a str> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("{context}.{key} must be a non-empty string"))
+}
+
+fn comparison_row_from_usage_history_report(
+    suite: &str,
+    source: &str,
+    report: &Value,
+    usage: &Value,
+    model: Option<&str>,
+) -> Result<ComparisonRow> {
+    let scenario = model
+        .map(|model| format!("usage-history-model:{model}"))
+        .unwrap_or_else(|| USAGE_HISTORY_SCENARIO.to_string());
+    let model = model.unwrap_or("all-models").to_string();
+    let input_tokens = usage_metric_u64(usage, "input_tokens");
+    let cached_input_tokens = usage_metric_u64(usage, "cached_input_tokens");
+    let cache_write_input_tokens = usage_metric_u64(usage, "cache_write_input_tokens");
+    let uncached_input_tokens = usage_metric_u64(usage, "uncached_input_tokens");
+    let output_tokens = usage_metric_u64(usage, "output_tokens");
+    let reasoning_output_tokens = usage_metric_u64(usage, "reasoning_output_tokens");
+    let total_tokens = usage_metric_u64(usage, "total_tokens");
+    Ok(ComparisonRow {
+        runner: USAGE_HISTORY_RUNNER.to_string(),
+        suite: suite.to_string(),
+        scenario,
+        attempts: 1,
+        // A history report is supporting cost/usage evidence, not a completed benchmark task.
+        successful_attempts: 0,
+        model,
+        reasoning_effort: "usage-history".to_string(),
+        command_path: String::new(),
+        command_version: String::new(),
+        completion_score: 0.0,
+        quality_score: 0.0,
+        process_score: 0.0,
+        llm_solution_score: None,
+        llm_process_score: None,
+        llm_confidence: None,
+        llm_notes: usage_scan_notes(usage),
+        efficiency_index: None,
+        benchmark_index: None,
+        score: 0.0,
+        task_quality_score: 0.0,
+        efficiency_score: 0.0,
+        harness_pressure_score: 0.0,
+        success: false,
+        validation_exit_code: None,
+        validation_timed_out: false,
+        duration_ms: None,
+        tool_or_item_calls: None,
+        usage_source: USAGE_HISTORY_USAGE_SOURCE.to_string(),
+        input_tokens,
+        cached_input_tokens,
+        cache_write_input_tokens,
+        uncached_input_tokens,
+        output_tokens,
+        reasoning_output_tokens,
+        total_tokens,
+        source_files: 0,
+        source_bytes: 0,
+        failure_points: usage_scan_details(report),
+        source: source.to_string(),
+    })
+}
+
+fn usage_scan_details(report: &Value) -> String {
+    let scan = report.get("scan").and_then(Value::as_object);
+    let files_scanned = scan
+        .and_then(|scan| scan.get("files_scanned"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let files_discovered = scan
+        .and_then(|scan| scan.get("files_discovered"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let malformed_lines = scan
+        .and_then(|scan| scan.get("malformed_lines"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let truncated = scan
+        .and_then(|scan| scan.get("files_truncated"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let fork_replayed = scan
+        .and_then(|scan| scan.get("fork_replayed_observations_skipped"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let fork_without_evidence = scan
+        .and_then(|scan| scan.get("fork_observations_without_cumulative_evidence"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cumulative_fallback = scan
+        .and_then(|scan| scan.get("cumulative_fallback_observations"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let files_unreadable = scan
+        .and_then(|scan| scan.get("files_unreadable"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    format!(
+        "usage history evidence; scanned={files_scanned}/{files_discovered}; malformed_lines={malformed_lines}; truncated={truncated}; fork_replayed={fork_replayed}; fork_without_evidence={fork_without_evidence}; cumulative_fallback={cumulative_fallback}; unreadable={files_unreadable}"
+    )
+}
+
+fn usage_scan_notes(usage: &Value) -> String {
+    let availability = usage
+        .get("reporting_coverage")
+        .and_then(|coverage| coverage.get("availability"))
+        .and_then(Value::as_str)
+        .or_else(|| usage.get("availability").and_then(Value::as_str))
+        .unwrap_or("unknown");
+    let observations = usage
+        .get("observations")
+        .or_else(|| {
+            usage
+                .get("aggregate")
+                .and_then(|aggregate| aggregate.get("observations"))
+        })
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let complete = usage
+        .get("reporting_coverage")
+        .and_then(|coverage| coverage.get("complete"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if complete {
+        format!("usage history available; availability={availability}; observations={observations}")
+    } else {
+        format!(
+            "usage history partial/unavailable; availability={availability}; observations={observations}"
+        )
+    }
+}
+
+fn usage_metric_u64(usage: &Value, metric_name: &str) -> Option<u64> {
+    usage
+        .get("metrics")
+        .and_then(Value::as_object)
+        .and_then(|metrics| metrics.get(metric_name))
+        .and_then(|metric| metric.get("total"))
+        .and_then(Value::as_u64)
+}
+
 fn apply_llm_judge_scores(rows: &mut [ComparisonRow], report: &BenchmarkJudgeReport) {
     let mut scores = BTreeMap::<(String, String), _>::new();
     for scenario in &report.rows {
@@ -1643,6 +2213,9 @@ fn apply_llm_judge_scores(rows: &mut [ComparisonRow], report: &BenchmarkJudgeRep
         }
     }
     for row in rows {
+        if row.usage_source == USAGE_HISTORY_USAGE_SOURCE {
+            continue;
+        }
         let Some(score) = scores.get(&(row.scenario.clone(), row.runner.clone())) else {
             continue;
         };
@@ -1685,8 +2258,8 @@ fn comparison_row_from_harness(row: &BenchmarkRunRow) -> ComparisonRow {
         success: row.success,
         validation_exit_code: row.validation_exit_code,
         validation_timed_out: row.validation_timed_out,
-        duration_ms: row.total_duration_ms as u128,
-        tool_or_item_calls: row.tool_calls,
+        duration_ms: Some(row.total_duration_ms as u128),
+        tool_or_item_calls: Some(row.tool_calls),
         usage_source: response_usage_source(&row.response_usage).to_string(),
         input_tokens: complete_usage_total(&row.response_usage, "input_tokens"),
         cached_input_tokens: complete_usage_total(&row.response_usage, "cached_input_tokens"),
@@ -1745,8 +2318,8 @@ fn comparison_row_from_external_agent(row: &CodexCliBenchmarkRow) -> ComparisonR
         success: row.success,
         validation_exit_code: row.validation_exit_code,
         validation_timed_out: row.validation_timed_out,
-        duration_ms: row.duration_ms,
-        tool_or_item_calls: row.completed_items,
+        duration_ms: Some(row.duration_ms),
+        tool_or_item_calls: Some(row.completed_items),
         usage_source: "external_agent_report".to_string(),
         input_tokens: Some(row.input_tokens),
         cached_input_tokens: Some(row.cached_input_tokens),
@@ -1815,8 +2388,8 @@ fn average_comparison_group(rows: Vec<ComparisonRow>) -> ComparisonRow {
     row.success = successful_attempts == attempts;
     row.validation_exit_code = combined_exit_code(rows.iter().map(|row| row.validation_exit_code));
     row.validation_timed_out = rows.iter().any(|row| row.validation_timed_out);
-    row.duration_ms = average_u128(rows.iter().map(|row| row.duration_ms));
-    row.tool_or_item_calls = average_u64(rows.iter().map(|row| row.tool_or_item_calls));
+    row.duration_ms = complete_average_u128(&rows, |row| row.duration_ms);
+    row.tool_or_item_calls = complete_average_u64(&rows, |row| row.tool_or_item_calls);
     row.usage_source = grouped_usage_source(&rows);
     row.input_tokens = complete_average_u64(&rows, |row| row.input_tokens);
     row.cached_input_tokens = complete_average_u64(&rows, |row| row.cached_input_tokens);
@@ -1870,6 +2443,17 @@ fn average_u128(values: impl Iterator<Item = u128>) -> u128 {
     } else {
         ((total as f64 / count as f64).round()) as u128
     }
+}
+
+fn complete_average_u128(
+    rows: &[ComparisonRow],
+    value: impl Fn(&ComparisonRow) -> Option<u128>,
+) -> Option<u128> {
+    let values = rows.iter().map(value).collect::<Vec<_>>();
+    values
+        .iter()
+        .all(Option::is_some)
+        .then(|| average_u128(values.into_iter().flatten()))
 }
 
 fn combined_exit_code(values: impl Iterator<Item = Option<i32>>) -> Option<i32> {
@@ -1977,12 +2561,20 @@ fn comparison_baseline_runner(rows: &[ComparisonRow], preferred_runner: &str) ->
 }
 
 fn apply_comparison_indices(rows: &mut [ComparisonRow], baseline_runner: &str) {
-    let matched_scenarios = scenarios_with_both_runners(rows);
-    let baselines = scenario_baselines(rows, baseline_runner, &matched_scenarios);
+    let scored_rows = rows
+        .iter()
+        .filter(|row| row.usage_source != USAGE_HISTORY_USAGE_SOURCE)
+        .cloned()
+        .collect::<Vec<_>>();
+    let matched_scenarios = scenarios_with_both_runners(&scored_rows);
+    let baselines = scenario_baselines(&scored_rows, baseline_runner, &matched_scenarios);
     let raw = rows
         .iter()
         .enumerate()
         .filter_map(|(index, row)| {
+            if row.usage_source == USAGE_HISTORY_USAGE_SOURCE {
+                return None;
+            }
             let baseline = baselines.get(&row.scenario)?;
             let raw_efficiency = raw_efficiency_index(row, baseline);
             let raw_benchmark = raw_benchmark_index(row, raw_efficiency);
@@ -2064,9 +2656,9 @@ fn resource_efficiency_multiplier(
 
 fn efficiency_components(row: &ComparisonRow) -> EfficiencyComponents {
     EfficiencyComponents {
-        duration_ms: row.duration_ms.max(1) as f64,
+        duration_ms: row.duration_ms.unwrap_or(1).max(1) as f64,
         input_tokens: row.input_tokens.map(|tokens| tokens.max(1) as f64),
-        tool_or_item_calls: row.tool_or_item_calls.max(1) as f64,
+        tool_or_item_calls: row.tool_or_item_calls.unwrap_or(1).max(1) as f64,
     }
 }
 
@@ -2099,6 +2691,11 @@ fn aggregate_comparison_with_diagnostics(
     rows: &[ComparisonRow],
     diagnostics: ComparisonDiagnostics,
 ) -> Value {
+    let scoring_rows = rows
+        .iter()
+        .filter(|row| row.usage_source != USAGE_HISTORY_USAGE_SOURCE)
+        .cloned()
+        .collect::<Vec<_>>();
     let mut runner_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_completion_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_quality_scores = BTreeMap::<String, Vec<f64>>::new();
@@ -2113,9 +2710,9 @@ fn aggregate_comparison_with_diagnostics(
     let mut runner_input_token_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_source_file_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_source_byte_scores = BTreeMap::<String, Vec<f64>>::new();
+    let matched_rows = matched_comparison_rows(&scoring_rows);
     let mut rows_by_runner = BTreeMap::<String, Vec<&ComparisonRow>>::new();
-    let matched_rows = matched_comparison_rows(rows);
-    for row in rows {
+    for row in &scoring_rows {
         rows_by_runner
             .entry(row.runner.clone())
             .or_default()
@@ -2160,14 +2757,18 @@ fn aggregate_comparison_with_diagnostics(
             .entry(row.runner.clone())
             .or_default()
             .push(row.harness_pressure_score);
-        runner_duration_scores
-            .entry(row.runner.clone())
-            .or_default()
-            .push(row.duration_ms as f64);
-        runner_item_call_scores
-            .entry(row.runner.clone())
-            .or_default()
-            .push(row.tool_or_item_calls as f64);
+        if let Some(duration_ms) = row.duration_ms {
+            runner_duration_scores
+                .entry(row.runner.clone())
+                .or_default()
+                .push(duration_ms as f64);
+        }
+        if let Some(tool_or_item_calls) = row.tool_or_item_calls {
+            runner_item_call_scores
+                .entry(row.runner.clone())
+                .or_default()
+                .push(tool_or_item_calls as f64);
+        }
         if let Some(input_tokens) = row.input_tokens {
             runner_input_token_scores
                 .entry(row.runner.clone())
@@ -2214,7 +2815,7 @@ fn aggregate_comparison_with_diagnostics(
     let winner_entry = winner_pool
         .iter()
         .max_by(|left, right| compare_runner_rows(left.1, right.1));
-    let baseline_runner = comparison_baseline_runner(rows, "codex-cli");
+    let baseline_runner = comparison_baseline_runner(&scoring_rows, "codex-cli");
     let headline = winner_entry.map(|(winner_runner, winner_rows)| {
         let winner_benchmark_index =
             average_optional_comparison_field(winner_rows, |row| row.benchmark_index);
@@ -2246,15 +2847,15 @@ fn aggregate_comparison_with_diagnostics(
                 "average_task_quality_score": average_comparison_field(rows, |row| row.task_quality_score),
                 "average_efficiency_score": average_comparison_field(rows, |row| row.efficiency_score),
                 "average_harness_pressure_score": average_comparison_field(rows, |row| row.harness_pressure_score),
-                "average_duration_ms": average_comparison_field(rows, |row| row.duration_ms as f64),
-                "average_tool_or_item_calls": average_comparison_field(rows, |row| row.tool_or_item_calls as f64),
+                "average_duration_ms": average_optional_comparison_field(rows, |row| row.duration_ms.map(|value| value as f64)),
+                "average_tool_or_item_calls": average_optional_comparison_field(rows, |row| row.tool_or_item_calls.map(|value| value as f64)),
                 "average_input_tokens": average_optional_comparison_field(rows, |row| row.input_tokens.map(|value| value as f64)),
                 "average_source_files": average_comparison_field(rows, |row| row.source_files as f64),
                 "average_source_bytes": average_comparison_field(rows, |row| row.source_bytes as f64),
             })
         });
-    let scenario_winners = comparison_scenario_winners(rows);
-    let unmatched_scenarios = unmatched_comparison_scenarios(rows);
+    let scenario_winners = comparison_scenario_winners(&scoring_rows);
+    let unmatched_scenarios = unmatched_comparison_scenarios(&scoring_rows);
     let total_skipped_infrastructure_failures = diagnostics.skipped_spark_infrastructure_failures
         + diagnostics.skipped_codex_infrastructure_failures
         + diagnostics.skipped_opencode_infrastructure_failures;
@@ -2276,10 +2877,31 @@ fn aggregate_comparison_with_diagnostics(
         },
         "total_skipped_infrastructure_failures": total_skipped_infrastructure_failures,
     });
+    let usage_evidence = rows
+        .iter()
+        .filter(|row| row.usage_source == USAGE_HISTORY_USAGE_SOURCE)
+        .map(|row| {
+            json!({
+                "scenario": row.scenario,
+                "model": row.model,
+                "observations_note": row.llm_notes,
+                "input_tokens": row.input_tokens,
+                "cached_input_tokens": row.cached_input_tokens,
+                "cache_write_input_tokens": row.cache_write_input_tokens,
+                "uncached_input_tokens": row.uncached_input_tokens,
+                "output_tokens": row.output_tokens,
+                "reasoning_output_tokens": row.reasoning_output_tokens,
+                "total_tokens": row.total_tokens,
+            })
+        })
+        .collect::<Vec<_>>();
 
     json!({
         "suite": suite,
         "rows": rows.len(),
+        "scored_rows": scoring_rows.len(),
+        "usage_evidence_rows": usage_evidence.len(),
+        "usage_evidence": usage_evidence,
         "matched_rows": matched_rows.len(),
         "runner_averages": runner_averages,
         "runner_completion_score_averages": runner_completion_averages,
@@ -2304,8 +2926,8 @@ fn aggregate_comparison_with_diagnostics(
         "matched_runner_task_quality_averages": comparison_average_map(&matched_rows_by_runner, |row| row.task_quality_score),
         "matched_runner_efficiency_averages": comparison_average_map(&matched_rows_by_runner, |row| row.efficiency_score),
         "matched_runner_harness_pressure_averages": comparison_average_map(&matched_rows_by_runner, |row| row.harness_pressure_score),
-        "matched_runner_duration_ms_averages": comparison_average_map(&matched_rows_by_runner, |row| row.duration_ms as f64),
-        "matched_runner_tool_or_item_call_averages": comparison_average_map(&matched_rows_by_runner, |row| row.tool_or_item_calls as f64),
+        "matched_runner_duration_ms_averages": comparison_optional_average_map(&matched_rows_by_runner, |row| row.duration_ms.map(|value| value as f64)),
+        "matched_runner_tool_or_item_call_averages": comparison_optional_average_map(&matched_rows_by_runner, |row| row.tool_or_item_calls.map(|value| value as f64)),
         "matched_runner_input_token_averages": comparison_optional_average_map(&matched_rows_by_runner, |row| row.input_tokens.map(|value| value as f64)),
         "matched_runner_source_file_averages": comparison_average_map(&matched_rows_by_runner, |row| row.source_files as f64),
         "matched_runner_source_byte_averages": comparison_average_map(&matched_rows_by_runner, |row| row.source_bytes as f64),
@@ -2431,13 +3053,27 @@ fn compare_runner_rows(left: &[&ComparisonRow], right: &[&ComparisonRow]) -> Ord
                 .total_cmp(&average_comparison_field(right, |row| row.efficiency_score))
         })
         .then_with(|| {
-            average_comparison_field(right, |row| row.duration_ms as f64).total_cmp(
-                &average_comparison_field(left, |row| row.duration_ms as f64),
+            average_optional_comparison_field(right, |row| {
+                row.duration_ms.map(|value| value as f64)
+            })
+            .unwrap_or(f64::INFINITY)
+            .total_cmp(
+                &average_optional_comparison_field(left, |row| {
+                    row.duration_ms.map(|value| value as f64)
+                })
+                .unwrap_or(f64::INFINITY),
             )
         })
         .then_with(|| {
-            average_comparison_field(right, |row| row.tool_or_item_calls as f64).total_cmp(
-                &average_comparison_field(left, |row| row.tool_or_item_calls as f64),
+            average_optional_comparison_field(right, |row| {
+                row.tool_or_item_calls.map(|value| value as f64)
+            })
+            .unwrap_or(f64::INFINITY)
+            .total_cmp(
+                &average_optional_comparison_field(left, |row| {
+                    row.tool_or_item_calls.map(|value| value as f64)
+                })
+                .unwrap_or(f64::INFINITY),
             )
         })
         .then_with(|| {
@@ -2542,9 +3178,9 @@ fn scenario_delta(rows: &[&ComparisonRow]) -> Option<Value> {
     let spark = rows.iter().find(|row| row.runner == "spark-harness")?;
     let codex = rows.iter().find(|row| row.runner == "codex-cli")?;
     Some(json!({
-        "duration_ms_delta": spark.duration_ms as i128 - codex.duration_ms as i128,
+        "duration_ms_delta": spark.duration_ms.zip(codex.duration_ms).map(|(spark, codex)| spark as i128 - codex as i128),
         "token_ratio": optional_ratio(spark.input_tokens, codex.input_tokens),
-        "tool_ratio": ratio_or_zero(spark.tool_or_item_calls as f64, codex.tool_or_item_calls as f64),
+        "tool_ratio": spark.tool_or_item_calls.zip(codex.tool_or_item_calls).map(|(spark, codex)| ratio_or_zero(spark as f64, codex as f64)),
         "benchmark_index_delta": spark.benchmark_index.unwrap_or(0.0) - codex.benchmark_index.unwrap_or(0.0),
     }))
 }
@@ -2599,6 +3235,10 @@ fn response_usage_csv_value(response_usage: &Value) -> String {
 }
 
 fn option_u64_csv_value(value: Option<u64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn option_u128_csv_value(value: Option<u128>) -> String {
     value.map(|value| value.to_string()).unwrap_or_default()
 }
 
@@ -2684,8 +3324,8 @@ fn comparison_rows_to_csv(rows: &[ComparisonRow]) -> String {
                 .map(|code| code.to_string())
                 .unwrap_or_default(),
             row.validation_timed_out.to_string(),
-            row.duration_ms.to_string(),
-            row.tool_or_item_calls.to_string(),
+            option_u128_csv_value(row.duration_ms),
+            option_u64_csv_value(row.tool_or_item_calls),
             row.usage_source.clone(),
             option_u64_csv_value(row.input_tokens),
             option_u64_csv_value(row.cached_input_tokens),

@@ -452,12 +452,16 @@ pub(crate) enum Command {
         /// Optional Spark harness run manifest or saved benchmark report JSON. Repeat to merge inputs.
         #[arg(long)]
         harness_report: Vec<PathBuf>,
-        /// Codex CLI benchmark JSON report(s) to compare against. Repeat to merge reports.
-        #[arg(long, required = true)]
+        /// Optional Codex CLI benchmark JSON report(s) to compare against. Repeat to merge reports.
+        /// Supply at least one benchmark or usage-history report input overall.
+        #[arg(long)]
         codex_cli_report: Vec<PathBuf>,
         /// Optional opencode benchmark JSON report(s) to include in the comparison. Repeat to merge reports.
         #[arg(long)]
         opencode_report: Vec<PathBuf>,
+        /// Optional Spark usage history JSON report(s) to include as usage-comparative evidence.
+        #[arg(long)]
+        usage_history_report: Vec<PathBuf>,
         /// Optional LLM judge JSON report to fold into solution/process scoring.
         #[arg(long)]
         llm_judge_report: Option<PathBuf>,

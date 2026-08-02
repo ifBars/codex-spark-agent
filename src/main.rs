@@ -712,6 +712,7 @@ async fn run_command(command: Command) -> Result<()> {
             harness_report,
             codex_cli_report,
             opencode_report,
+            usage_history_report,
             llm_judge_report,
             group_by_reasoning,
             group_by_model,
@@ -719,6 +720,12 @@ async fn run_command(command: Command) -> Result<()> {
             fail_on_directional_comparison,
             output_dir,
         } => {
+            ensure_benchmark_comparison_inputs(
+                &harness_report,
+                &codex_cli_report,
+                &opencode_report,
+                &usage_history_report,
+            )?;
             let cwd = std::fs::canonicalize(&cwd)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
             let output_dir = if output_dir.is_absolute() {
@@ -735,6 +742,7 @@ async fn run_command(command: Command) -> Result<()> {
                     harness_reports: harness_report,
                     codex_cli_reports: codex_cli_report,
                     opencode_reports: opencode_report,
+                    usage_history_reports: usage_history_report,
                     llm_judge_report,
                     group_by_reasoning,
                     group_by_model,
@@ -811,6 +819,24 @@ async fn run_command(command: Command) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn ensure_benchmark_comparison_inputs(
+    harness_reports: &[std::path::PathBuf],
+    codex_cli_reports: &[std::path::PathBuf],
+    opencode_reports: &[std::path::PathBuf],
+    usage_history_reports: &[std::path::PathBuf],
+) -> Result<()> {
+    if harness_reports.is_empty()
+        && codex_cli_reports.is_empty()
+        && opencode_reports.is_empty()
+        && usage_history_reports.is_empty()
+    {
+        anyhow::bail!(
+            "benchmark-compare requires at least one of --harness-report, --codex-cli-report, --opencode-report, or --usage-history-report"
+        );
+    }
     Ok(())
 }
 

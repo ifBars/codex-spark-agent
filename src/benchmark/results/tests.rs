@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::*;
 
@@ -19,6 +19,7 @@ fn empty_comparison_inputs() -> Value {
         "harness_reports": [],
         "codex_cli_reports": [],
         "opencode_reports": [],
+        "usage_history_reports": [],
     })
 }
 
@@ -49,8 +50,8 @@ fn comparison_row(runner: &str, scenario: &str) -> ComparisonRow {
         success: true,
         validation_exit_code: Some(0),
         validation_timed_out: false,
-        duration_ms: 10_000,
-        tool_or_item_calls: 10,
+        duration_ms: Some(10_000),
+        tool_or_item_calls: Some(10),
         usage_source: "test".to_string(),
         input_tokens: Some(10_000),
         cached_input_tokens: Some(0),
@@ -112,6 +113,76 @@ fn external_report_json(runner: &str, scenario: &str) -> Value {
             "run_dir": "run",
             "failure_points": ""
         }]
+    })
+}
+
+fn usage_metric(total: Option<u64>, observations: u64, complete: bool) -> Value {
+    json!({
+        "total": total,
+        "reported_observations": if complete { observations } else { observations.saturating_sub(1) },
+        "observations": observations,
+        "complete": complete,
+        "availability": if complete { "full" } else { "partial" },
+    })
+}
+
+fn usage_breakdown(model: Option<&str>, observations: u64, complete: bool) -> Value {
+    let mut value = json!({
+        "observations": observations,
+        "reporting_coverage": {
+            "observations_with_any_usage": observations,
+            "complete": complete,
+            "availability": if complete { "full" } else { "partial" },
+        },
+        "metrics": {
+            "input_tokens": usage_metric(Some(1200), observations, complete),
+            "cached_input_tokens": usage_metric(Some(200), observations, complete),
+            "cache_write_input_tokens": usage_metric(Some(50), observations, complete),
+            "uncached_input_tokens": usage_metric(Some(950), observations, complete),
+            "output_tokens": usage_metric(Some(300), observations, complete),
+            "reasoning_output_tokens": usage_metric(Some(0), observations, complete),
+            "total_tokens": usage_metric(Some(1500), observations, complete),
+        },
+    });
+    if let Some(model) = model {
+        value["model"] = json!(model);
+    }
+    value
+}
+
+fn usage_history_document(aggregate: Value, by_day: Vec<Value>, by_model: Vec<Value>) -> Value {
+    json!({
+        "schema_version": "spark.usage_history.v1",
+        "kind": "local_codex_session_history",
+        "generated_at_unix_seconds": 1_700_000_000u64,
+        "source": {
+            "kind": "local_codex_session_history",
+            "network": false,
+            "codex_home_source": "explicit"
+        },
+        "scope": {"since_days": null, "max_files": 500},
+        "scan": {
+            "files_discovered": 30,
+            "files_scanned": 20,
+            "files_truncated": false,
+            "files_unreadable": 0,
+            "malformed_lines": 1,
+            "sessions_without_metadata": 0,
+            "duplicate_session_files": 0,
+            "fork_replayed_observations_skipped": 0,
+            "fork_observations_without_cumulative_evidence": 0,
+            "cumulative_fallback_observations": 0,
+            "counter_resets": 0,
+            "partial_observations": 0
+        },
+        "aggregate": aggregate,
+        "by_day": by_day,
+        "by_model": by_model,
+        "pricing": {
+            "availability": "unavailable",
+            "model": null,
+            "reason": "local history does not contain authoritative pricing"
+        }
     })
 }
 
@@ -189,9 +260,9 @@ fn reasoning_effort_reads_nested_profile_scenario_metadata() {
 fn benchmark_index_separates_successful_completion_ties() {
     let codex = comparison_row("codex-cli", "matched");
     let mut spark = comparison_row("spark-harness", "matched");
-    spark.duration_ms = 2_500;
+    spark.duration_ms = Some(2_500);
     spark.input_tokens = Some(2_500);
-    spark.tool_or_item_calls = 5;
+    spark.tool_or_item_calls = Some(5);
 
     let rows = indexed(vec![codex, spark]);
     let spark = rows
@@ -352,6 +423,7 @@ fn benchmark_comparison_records_input_report_provenance() {
         harness_reports: vec![harness_path.clone()],
         codex_cli_reports: vec![codex_path.clone()],
         opencode_reports: Vec::new(),
+        usage_history_reports: Vec::new(),
         llm_judge_report: None,
         group_by_reasoning: false,
         group_by_model: false,
@@ -366,17 +438,18 @@ fn benchmark_comparison_records_input_report_provenance() {
     .expect("comparison json");
     assert_eq!(
         report["inputs"]["harness_reports"][0]["path"],
-        harness_path.display().to_string()
+        "harness-report.json"
     );
     assert_eq!(
         report["inputs"]["codex_cli_reports"][0]["path"],
-        codex_path.display().to_string()
+        "codex-report.json"
     );
     assert_eq!(report["inputs"]["harness_reports"][0]["row_count"], 1);
     assert_eq!(
         report["inputs"]["codex_cli_reports"][0]["scenarios"][0],
         "config-migration"
     );
+    assert_eq!(report["inputs"]["usage_history_reports"], json!([]));
     assert_eq!(report["inputs"]["freshness"]["input_count"], 2);
     assert!(
         report["inputs"]["freshness"]["modified_span_ms"]
@@ -401,6 +474,364 @@ fn benchmark_comparison_records_input_report_provenance() {
     assert!(html.contains("Input freshness"));
     assert!(html.contains("harness-report.json"));
     assert!(html.contains("codex-report.json"));
+}
+
+#[test]
+fn comparison_includes_usage_history_rows_and_metadata() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut harness_row = benchmark_row();
+    harness_row.scenario = "real-scenario".to_string();
+    harness_row.success = true;
+    harness_row.completion_score = 100.0;
+    harness_row.quality_score = 100.0;
+    harness_row.process_score = 100.0;
+    harness_row.score = 100.0;
+    harness_row.task_quality_score = 100.0;
+    harness_row.efficiency_score = 100.0;
+    harness_row.harness_pressure_score = 100.0;
+    harness_row.validation_exit_code = Some(0);
+    let harness_report = json!({
+        "suite": "real-world",
+        "generated_at_unix_ms": 10,
+        "rows": [harness_row],
+        "aggregate": {}
+    });
+    let harness_path = dir.path().join("harness-report.json");
+    std::fs::write(
+        &harness_path,
+        serde_json::to_string(&harness_report).expect("harness json"),
+    )
+    .expect("write harness report");
+
+    let mut codex_report = external_report_json("codex-cli", "real-scenario");
+    codex_report["generated_at_unix_ms"] = json!(20);
+    let codex_path = dir.path().join("codex-report.json");
+    std::fs::write(
+        &codex_path,
+        serde_json::to_string(&codex_report).expect("codex json"),
+    )
+    .expect("write codex report");
+
+    let usage_path = dir.path().join("usage-history.json");
+    let usage_report = usage_history_document(
+        usage_breakdown(None, 12, true),
+        Vec::new(),
+        vec![usage_breakdown(Some("spark-model-a"), 7, true)],
+    );
+    std::fs::write(
+        &usage_path,
+        serde_json::to_string_pretty(&usage_report).expect("json"),
+    )
+    .expect("write usage report");
+
+    let output = write_benchmark_comparison(BenchmarkComparisonOptions {
+        cwd: dir.path().to_path_buf(),
+        suite: ProfileBenchmarkSuiteKind::RealWorld,
+        limit: 50,
+        all_runs: false,
+        harness_reports: vec![harness_path],
+        codex_cli_reports: vec![codex_path],
+        opencode_reports: Vec::new(),
+        usage_history_reports: vec![usage_path.clone()],
+        llm_judge_report: None,
+        group_by_reasoning: false,
+        group_by_model: false,
+        successful_only: false,
+        output_dir: dir.path().join("out"),
+    })
+    .expect("write usage comparison");
+
+    let report: Value = serde_json::from_str(
+        &std::fs::read_to_string(&output.json_path).expect("read comparison json"),
+    )
+    .expect("comparison json");
+    let usage_input = &report["inputs"]["usage_history_reports"][0];
+    assert_eq!(usage_input["path"], "usage-history.json");
+    assert_eq!(usage_input["row_count"], 2);
+    assert!(usage_input["scenarios"].as_array().is_some());
+    assert!(
+        usage_input["scenarios"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("usage-history-overall"))
+    );
+    assert!(
+        usage_input["scenarios"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("usage-history-model:spark-model-a"))
+    );
+
+    let rows = report["rows"].as_array().expect("comparison rows exist");
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["usage_source"] == "spark_usage_history")
+            .count(),
+        2
+    );
+    let overall = rows
+        .iter()
+        .find(|row| row["scenario"] == "usage-history-overall")
+        .expect("overall usage row");
+    assert_eq!(overall["uncached_input_tokens"], 950);
+    assert_eq!(overall["duration_ms"], Value::Null);
+    assert_eq!(overall["tool_or_item_calls"], Value::Null);
+    assert_eq!(overall["benchmark_index"], Value::Null);
+    assert_eq!(overall["success"], false);
+    assert_eq!(report["aggregate"]["usage_evidence_rows"], 2);
+    assert_eq!(report["aggregate"]["scored_rows"], 2);
+    assert!(report["aggregate"]["winner"].is_object());
+    assert_ne!(
+        report["aggregate"]["winner"]["runner"],
+        "spark-usage-history"
+    );
+    let report_text = std::fs::read_to_string(&output.json_path).expect("read comparison text");
+    assert!(!report_text.contains(r"C:\Users\ghost"));
+    let html = std::fs::read_to_string(&output.html_path).expect("read comparison html");
+    assert!(html.contains("Spark usage history"));
+    assert!(html.contains("usage-history.json"));
+    assert!(!html.contains(r"C:\Users\ghost"));
+    let csv = std::fs::read_to_string(&output.csv_path).expect("read comparison csv");
+    assert!(!csv.contains(r"C:\Users\ghost"));
+}
+
+#[test]
+fn usage_history_schema_mismatch_is_rejected() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let usage_path = dir.path().join("bad-usage-history.json");
+    std::fs::write(
+        &usage_path,
+        serde_json::to_string(&json!({
+            "schema_version": "other.schema",
+            "aggregate": {"observations": 1}
+        }))
+        .expect("json"),
+    )
+    .expect("write bad report");
+
+    let result = write_benchmark_comparison(BenchmarkComparisonOptions {
+        cwd: dir.path().to_path_buf(),
+        suite: ProfileBenchmarkSuiteKind::RealWorld,
+        limit: 50,
+        all_runs: false,
+        harness_reports: Vec::new(),
+        codex_cli_reports: Vec::new(),
+        opencode_reports: Vec::new(),
+        usage_history_reports: vec![usage_path],
+        llm_judge_report: None,
+        group_by_reasoning: false,
+        group_by_model: false,
+        successful_only: false,
+        output_dir: dir.path().join("out"),
+    });
+    assert!(result.is_err());
+}
+
+#[test]
+fn usage_history_rejects_malformed_top_level_contract_fields() {
+    let valid = || usage_history_document(usage_breakdown(None, 2, true), Vec::new(), Vec::new());
+
+    let mut report = valid();
+    report["kind"] = json!("another_history_kind");
+    assert!(
+        validate_usage_history_report(&report, "usage.json")
+            .expect_err("wrong top-level kind must fail")
+            .to_string()
+            .contains("kind")
+    );
+
+    let mut report = valid();
+    report["generated_at_unix_seconds"] = json!("not-a-timestamp");
+    assert!(
+        validate_usage_history_report(&report, "usage.json")
+            .expect_err("timestamp type must fail")
+            .to_string()
+            .contains("generated_at_unix_seconds")
+    );
+
+    let mut report = valid();
+    report["source"]["network"] = json!("false");
+    assert!(
+        validate_usage_history_report(&report, "usage.json")
+            .expect_err("source.network type must fail")
+            .to_string()
+            .contains("network")
+    );
+
+    let mut report = valid();
+    report["scope"]["since_days"] = json!(false);
+    assert!(
+        validate_usage_history_report(&report, "usage.json")
+            .expect_err("scope.since_days type must fail")
+            .to_string()
+            .contains("since_days")
+    );
+
+    let mut report = valid();
+    report["scan"]["partial_observations"] = json!("zero");
+    assert!(
+        validate_usage_history_report(&report, "usage.json")
+            .expect_err("scan counter type must fail")
+            .to_string()
+            .contains("partial_observations")
+    );
+
+    let mut report = valid();
+    report["by_day"] = json!([usage_breakdown(None, 2, true)]);
+    assert!(
+        validate_usage_history_report(&report, "usage.json")
+            .expect_err("by_day without day must fail")
+            .to_string()
+            .contains("day")
+    );
+
+    let mut report = valid();
+    report["pricing"]["model"] = json!(42);
+    assert!(
+        validate_usage_history_report(&report, "usage.json")
+            .expect_err("pricing model type must fail")
+            .to_string()
+            .contains("pricing.model")
+    );
+}
+
+#[test]
+fn usage_history_rejects_flat_or_incomplete_nested_reports() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let usage_path = dir.path().join("flat-usage-history.json");
+    let mut report = usage_history_document(
+        json!({"observations": 2, "input_tokens": 42}),
+        Vec::new(),
+        Vec::new(),
+    );
+    std::fs::write(&usage_path, serde_json::to_string(&report).expect("json"))
+        .expect("write flat report");
+    let result = write_benchmark_comparison(BenchmarkComparisonOptions {
+        cwd: dir.path().to_path_buf(),
+        suite: ProfileBenchmarkSuiteKind::RealWorld,
+        limit: 50,
+        all_runs: false,
+        harness_reports: Vec::new(),
+        codex_cli_reports: Vec::new(),
+        opencode_reports: Vec::new(),
+        usage_history_reports: vec![usage_path.clone()],
+        llm_judge_report: None,
+        group_by_reasoning: false,
+        group_by_model: false,
+        successful_only: false,
+        output_dir: dir.path().join("out"),
+    });
+    assert!(
+        result
+            .expect_err("flat report must fail")
+            .to_string()
+            .contains("reporting_coverage")
+    );
+
+    report = usage_history_document(
+        usage_breakdown(None, 2, true),
+        Vec::new(),
+        vec![json!({"model": "spark", "observations": 2})],
+    );
+    std::fs::write(&usage_path, serde_json::to_string(&report).expect("json"))
+        .expect("write incomplete report");
+    let result = write_benchmark_comparison(BenchmarkComparisonOptions {
+        cwd: dir.path().to_path_buf(),
+        suite: ProfileBenchmarkSuiteKind::RealWorld,
+        limit: 50,
+        all_runs: false,
+        harness_reports: Vec::new(),
+        codex_cli_reports: Vec::new(),
+        opencode_reports: Vec::new(),
+        usage_history_reports: vec![usage_path],
+        llm_judge_report: None,
+        group_by_reasoning: false,
+        group_by_model: false,
+        successful_only: false,
+        output_dir: dir.path().join("out-again"),
+    });
+    assert!(
+        result
+            .expect_err("incomplete report must fail")
+            .to_string()
+            .contains("reporting_coverage")
+    );
+}
+
+#[test]
+fn usage_only_comparison_is_evidence_not_a_winner() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let usage_path = dir.path().join("usage-history.json");
+    std::fs::write(
+        &usage_path,
+        serde_json::to_string(&usage_history_document(
+            usage_breakdown(None, 3, false),
+            Vec::new(),
+            vec![usage_breakdown(Some("spark-model"), 3, false)],
+        ))
+        .expect("json"),
+    )
+    .expect("write usage report");
+
+    let output = write_benchmark_comparison(BenchmarkComparisonOptions {
+        cwd: dir.path().to_path_buf(),
+        suite: ProfileBenchmarkSuiteKind::RealWorld,
+        limit: 50,
+        all_runs: false,
+        harness_reports: Vec::new(),
+        codex_cli_reports: Vec::new(),
+        opencode_reports: Vec::new(),
+        usage_history_reports: vec![usage_path],
+        llm_judge_report: None,
+        group_by_reasoning: false,
+        group_by_model: false,
+        successful_only: true,
+        output_dir: dir.path().join("out"),
+    })
+    .expect("usage-only comparison should write evidence");
+    let report: Value =
+        serde_json::from_str(&std::fs::read_to_string(output.json_path).expect("read comparison"))
+            .expect("json");
+    assert_eq!(report["inputs"]["harness_source"], "usage-history-only");
+    assert_eq!(report["aggregate"]["scored_rows"], 0);
+    assert_eq!(report["aggregate"]["usage_evidence_rows"], 2);
+    assert!(report["aggregate"]["winner"].is_null());
+    assert!(
+        report["aggregate"]["scenario_winners"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        report["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["benchmark_index"].is_null())
+    );
+}
+
+#[test]
+fn comparison_redacts_local_paths_and_usage_inputs_affect_freshness() {
+    let mut inputs = json!({
+        "harness_reports": [{"modified_unix_ms": 1_000u64}],
+        "codex_cli_reports": [],
+        "opencode_reports": [],
+        "usage_history_reports": [{"modified_unix_ms": 7_202_000u64}],
+    });
+    let freshness = input_freshness_summary(&inputs);
+    assert_eq!(freshness["input_count"], 2);
+    assert_eq!(freshness["modified_span_ms"], 7_201_000u64);
+    assert_eq!(freshness["mixed_input_warning"], true);
+    inputs["path"] = json!(r"C:\Users\ghost\private\report.json");
+    assert_eq!(
+        redact_local_text(inputs["path"].as_str().unwrap()),
+        "<local-path>"
+    );
+    assert_eq!(
+        redact_local_text("failure at C:\\Users\\ghost\\secret.txt"),
+        "failure at <local-path>"
+    );
 }
 
 #[test]
@@ -1257,9 +1688,9 @@ fn codex_cli_scenario_indices_can_vary_while_average_stays_baseline() {
 fn spark_can_exceed_100_when_quality_matches_and_efficiency_wins() {
     let codex = comparison_row("codex-cli", "one");
     let mut spark = comparison_row("spark-harness", "one");
-    spark.duration_ms = 5_000;
+    spark.duration_ms = Some(5_000);
     spark.input_tokens = Some(4_000);
-    spark.tool_or_item_calls = 4;
+    spark.tool_or_item_calls = Some(4);
     spark.source_bytes = 1_000;
 
     let rows = indexed(vec![spark, codex]);
@@ -1288,9 +1719,9 @@ fn spark_can_exceed_100_when_quality_matches_and_efficiency_wins() {
 fn benchmark_index_rewards_faster_equal_quality_even_with_process_pressure() {
     let codex = comparison_row("codex-cli", "one");
     let mut spark = comparison_row("spark-harness", "one");
-    spark.duration_ms = 2_500;
+    spark.duration_ms = Some(2_500);
     spark.input_tokens = Some(4_000);
-    spark.tool_or_item_calls = 6;
+    spark.tool_or_item_calls = Some(6);
     spark.process_score = 70.0;
     spark.harness_pressure_score = 70.0;
 
@@ -1307,9 +1738,9 @@ fn benchmark_index_rewards_faster_equal_quality_even_with_process_pressure() {
 fn benchmark_index_reflects_quality_gated_throughput() {
     let codex = comparison_row("codex-cli", "one");
     let mut spark = comparison_row("spark-harness", "one");
-    spark.duration_ms = 1_000;
+    spark.duration_ms = Some(1_000);
     spark.input_tokens = Some(1_000);
-    spark.tool_or_item_calls = 2;
+    spark.tool_or_item_calls = Some(2);
 
     let rows = indexed(vec![spark, codex]);
     let spark = rows
@@ -1323,9 +1754,9 @@ fn benchmark_index_reflects_quality_gated_throughput() {
 #[test]
 fn comparison_aggregate_uses_matched_rows_for_winner() {
     let mut matched_spark = comparison_row("spark-harness", "matched");
-    matched_spark.duration_ms = 20_000;
+    matched_spark.duration_ms = Some(20_000);
     matched_spark.input_tokens = Some(20_000);
-    matched_spark.tool_or_item_calls = 20;
+    matched_spark.tool_or_item_calls = Some(20);
     let rows = indexed(vec![
         matched_spark,
         comparison_row("codex-cli", "matched"),
@@ -1350,9 +1781,9 @@ fn failed_validation_caps_benchmark_index_below_successful_runs() {
     spark.completion_score = 50.0;
     spark.quality_score = 50.0;
     spark.validation_exit_code = Some(1);
-    spark.duration_ms = 100;
+    spark.duration_ms = Some(100);
     spark.input_tokens = Some(100);
-    spark.tool_or_item_calls = 1;
+    spark.tool_or_item_calls = Some(1);
 
     let rows = indexed(vec![spark, codex]);
     let spark = rows
@@ -1549,9 +1980,9 @@ fn headline_score_includes_successful_process_pressure() {
 fn benchmark_index_uses_process_as_quality_gate() {
     let codex = comparison_row("codex-cli", "one");
     let mut clean = comparison_row("spark-clean", "one");
-    clean.duration_ms = 2_500;
+    clean.duration_ms = Some(2_500);
     clean.input_tokens = Some(4_000);
-    clean.tool_or_item_calls = 6;
+    clean.tool_or_item_calls = Some(6);
 
     let mut pressured = clean.clone();
     pressured.runner = "spark-pressured".to_string();
