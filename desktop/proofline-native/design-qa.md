@@ -1,8 +1,10 @@
 # Proofline native spike design QA
 
-Source visual truth: `C:\Users\ghost\AppData\Local\Temp\codex-clipboard-1f2076e5-0954-483d-8521-a2e48ed111b2.png`
+Source visual truth: the user-provided selected Proofline mockup (local-only source;
+not retained in this repository).
 
-Implementation screenshot: `C:\Users\ghost\AppData\Local\Temp\codex-shot-2026-08-01_18-51-14.png`
+Implementation screenshot: local-only capture, not retained and not auditable as
+release evidence.
 
 Viewport and density:
 
@@ -81,16 +83,29 @@ required after the P1 is fixed.
 2. The second pass rendered the rail and evidence hierarchy but clipped the
    composer and status ribbon at 125% Windows scaling. The window was resized
    from system DPI and the source mark and proportional native surface were added.
-3. The current capture keeps the rendered evidence hierarchy but still clips the
-   anchored bottom regions. No further visual claim is accepted.
+3. The bounded issue #15 correction removed the post-show Win32 DPI resize and
+   replaced the fixed-position root with a layout-driven composition. It also
+   added keyboard and accessibility semantics that compile against pinned Slint
+   1.16.0.
+4. Three post-correction captures on the host's 125% display still placed only
+   the composer's top edge at the client bottom and left the persistent status
+   ribbon clipped or off-client. The latest retained capture is the implementation
+   screenshot named above.
+5. Per the one-cycle stop condition, no more Slint product tuning is allowed. The
+   renderer decision now advances to the WinUI 3 plus Rust-core fallback. The
+   100%, 150%, and 200% Slint captures were not run because the required 125%
+   scale already failed.
 
 ## Implementation checklist
 
-1. Falsify or fix Slint's DPI/root-layout behavior with a layout-only reproducer.
-2. If the reproducer does not pass all four scale factors, start the WinUI 3
-   fallback spike from the renderer decision record.
-3. Re-capture the same completed-task state with the full composer and footer.
-4. Test task selection and activity disclosure with keyboard and UI Automation.
-5. Repeat full-view and focused-region design QA.
+1. Preserve this blocked Slint evidence and do not merge the failed correction as
+   a release candidate.
+2. Start the WinUI 3 fallback from a current official template once the required
+   Windows App SDK C# toolchain is available.
+3. Recreate the same selected completed-task state without adding worker-plane or
+   provider authority to the renderer.
+4. Capture 100%, 125%, 150%, and 200%; test keyboard, UI Automation, and Narrator
+   (or an explicitly approved equivalent); then repeat full-view and focused-region
+   design QA.
 
 final result: blocked

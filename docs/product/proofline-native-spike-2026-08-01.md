@@ -60,12 +60,21 @@ Keep the Tauri/browser implementation as the visual and Sites rehearsal and keep
 this Slint crate as the native falsification spike. Do not extend either into live
 provider control.
 
-Allow one bounded Slint DPI-layout reproducer that contains only the window, task
-rail, composer, and footer and must pass 100%, 125%, 150%, and 200% scaling. If it
-cannot make the two bottom regions both visible and accessible without forcing a
-global scale override or machine-specific coordinates, stop Slint work and start
-the WinUI 3 plus Rust-core fallback described in
+The one bounded Slint DPI-layout correction has now run and failed at the host's
+125% display scale. It removed the post-show physical-size workaround, introduced
+a layout-driven root, and added compiler-accepted keyboard/accessibility semantics,
+but the composer and status ribbon remained clipped. Per the recorded stop
+condition, Slint product work is closed and the next renderer spike is WinUI 3 plus
+the Rust-core boundary described in
 [`proofline-renderer-decision.md`](proofline-renderer-decision.md).
+
+The required WinUI bootstrap was attempted with the repository-selected workflow,
+but the WinGet configuration was canceled before applying its units. A read-only
+audit found Windows build 19045, Developer Mode enabled, .NET SDKs 6/8/9, and
+Windows SDKs through 26100, but no installed `winui` template and no Visual Studio
+instance with the Windows App SDK C# component. The fallback implementation must
+not be hand-authored around that missing template; resume from the official
+scaffold after the toolchain installation succeeds.
 
 The 10-cold / 10-warm protocol and a desktop version tag remain blocked. The current
 published CLI release is unaffected.
