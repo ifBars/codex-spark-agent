@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ifbars.dev/schemas/proofline-lifecycle-status.schema.json",
+  "title": "Proofline native lifecycle status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "capture_mode",
+    "countable",
+    "process_to_page_load_ms",
+    "process_to_ui_ready_ms",
+    "page_load_to_ui_ready_ms",
+    "run_to_first_visible_ms",
+    "page_load_finished",
+    "ui_ready_received",
+    "first_visible_received",
+    "calibration_verified",
+    "no_network_verified",
+    "exact_build_verified"
+  ],
+  "properties": {
+    "schema": { "const": "spark.proofline.lifecycle.status.v1" },
+    "capture_mode": { "const": "host_authoritative" },
+    "countable": { "type": "boolean" },
+    "process_to_page_load_ms": { "$ref": "#/$defs/nullableDuration" },
+    "process_to_ui_ready_ms": { "$ref": "#/$defs/nullableDuration" },
+    "page_load_to_ui_ready_ms": { "$ref": "#/$defs/nullableDuration" },
+    "run_to_first_visible_ms": { "$ref": "#/$defs/nullableDuration" },
+    "page_load_finished": { "type": "boolean" },
+    "ui_ready_received": { "type": "boolean" },
+    "first_visible_received": { "type": "boolean" },
+    "calibration_verified": { "type": "boolean" },
+    "no_network_verified": { "type": "boolean" },
+    "exact_build_verified": { "type": "boolean" },
+    "ineligible_reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+  },
+  "$defs": {
+    "nullableDuration": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    }
+  }
+}

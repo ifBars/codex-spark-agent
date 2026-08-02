@@ -69,10 +69,14 @@ repository.
   so the facilitator must still verify the retention checklist. The repository
   receives only aggregated, redacted findings.
 
-The current production native host deliberately reports `countable=false`
-until native process-start and actual first-paint boundaries are implemented
-and tested. Its lifecycle receipt timing is not an official cold/warm startup
-or first-visible-activity sample. A future native `countable=true` would be
+The current production native host deliberately reports `countable=false`.
+It now records a process-entry monotonic origin, Tauri main-webview page-load
+completion, and challenge-bound renderer readiness/visible-state receipts, but
+those boundaries are not official cold/warm or first-visible-activity evidence
+until issue #11 completes Proofline-specific external visual calibration, the 10 cold and 10 warm
+launch suite, exact-build attestation, and an enforceable runtime network boundary. Sampled
+socket polling is diagnostic only. Page-load
+completion is never described as first paint. A future native `countable=true` would be
 necessary but still not sufficient for a valid Wave 1 row: the wave must also
 complete the 10 cold and 10 warm launch samples, privacy-owner review,
 moderator protocol, and participant/task gates below. The aggregate's rejected-

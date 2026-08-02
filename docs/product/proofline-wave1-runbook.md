@@ -361,9 +361,13 @@ artifacts before rotating the namespace. It has no timer or background purge,
 so expiry cleanup is not guaranteed without a later preflight.
 
 That foundation does **not** complete Wave 1. Production native preflight
-deliberately reports `countable=false` until a monotonic process-start boundary
-and a one-time actual-first-paint acknowledgement exist. Official cold/warm
-sampling, crash/restart ledger recovery, timer/background expiry purge, proof
+deliberately reports `countable=false`. A monotonic process-entry boundary,
+main-webview page-load diagnostic, and challenge-bound readiness/visible-state
+receipts now exist, but they require Proofline-specific external visual calibration,
+exact-build attestation, an enforceable runtime network boundary, and official cold/warm sampling.
+Sampled socket polling cannot prove that no connection occurred.
+None is described as actual first paint. Crash/restart ledger recovery,
+timer/background expiry purge, proof
 of cleanup when no later preflight occurs, a non-Windows key protector,
 privacy-owner sign-off, complete worksheet denominators, and five real
 participant sessions remain outstanding. Keep issue #6 open and do not count a
