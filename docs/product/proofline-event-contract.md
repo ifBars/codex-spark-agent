@@ -171,8 +171,10 @@ timestamp, and source command/tool; generic message text is not review evidence.
   background expiry purge. Host-generated event identity, timestamp, and
   sequence remain inside the encrypted ledger; the
   renderer cannot submit or retrieve them. Production preflight deliberately
-  remains non-countable until native process-start and actual first-paint
-  instrumentation exists. The host has no live Spark session/run stream,
+  remains non-countable while the native lifecycle receipts await external
+  Proofline-specific visual calibration, exact-build attestation, cold/warm sampling,
+  and an enforceable runtime network boundary. Sampled socket polling is diagnostic
+  only. Page-load completion is not a first-paint claim. The host has no live Spark session/run stream,
   process supervision, restart reconstruction, or snapshot recovery API.
 - The aggregate's invalid-preflight counter covers fixture request/byte
   failures only. It is not a complete readiness, startup, task-attempt, or

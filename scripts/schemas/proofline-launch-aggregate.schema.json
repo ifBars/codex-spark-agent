@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ifbars.dev/schemas/proofline-launch-aggregate.schema.json",
+  "title": "Proofline launch calibration aggregate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "synthetic_test",
+    "countable",
+    "evidence_class",
+    "build_sha256",
+    "fixture_sha256",
+    "cold_attempts",
+    "warm_attempts",
+    "denominator",
+    "observed_attempts",
+    "censored_attempts",
+    "censored_reasons",
+    "durations",
+    "threshold_outcomes",
+    "visual_observation",
+    "network_sampled_observation",
+    "profile_isolation_complete",
+    "cleanup_identity_complete",
+    "startup_crash_observed",
+    "protocol_attempt_requirement_met",
+    "calibration_candidate_eligible",
+    "ineligible_reasons"
+  ],
+  "properties": {
+    "schema": { "const": "spark.proofline.launch-calibration.aggregate.v1" },
+    "synthetic_test": { "const": false },
+    "countable": { "const": false },
+    "evidence_class": { "const": "native_calibration_candidate" },
+    "build_sha256": { "$ref": "#/$defs/sha256" },
+    "fixture_sha256": { "$ref": "#/$defs/sha256" },
+    "cold_attempts": { "$ref": "#/$defs/nonNegativeInteger" },
+    "warm_attempts": { "$ref": "#/$defs/nonNegativeInteger" },
+    "denominator": { "$ref": "#/$defs/nonNegativeInteger" },
+    "observed_attempts": { "$ref": "#/$defs/nonNegativeInteger" },
+    "censored_attempts": { "$ref": "#/$defs/nonNegativeInteger" },
+    "censored_reasons": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason", "count"],
+        "properties": {
+          "reason": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+          "count": { "$ref": "#/$defs/nonNegativeInteger" }
+        }
+      }
+    },
+    "durations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cold", "warm"],
+      "properties": {
+        "cold": { "$ref": "#/$defs/modeSummary" },
+        "warm": { "$ref": "#/$defs/modeSummary" }
+      }
+    },
+    "threshold_outcomes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cold", "warm", "overall_pass"],
+      "properties": {
+        "cold": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["median_max_ms", "p95_max_ms", "pass"],
+          "properties": {
+            "median_max_ms": { "const": 3000 },
+            "p95_max_ms": { "const": 5000 },
+            "pass": { "type": ["boolean", "null"] }
+          }
+        },
+        "warm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["median_max_ms", "pass"],
+          "properties": {
+            "median_max_ms": { "const": 1500 },
+            "pass": { "type": ["boolean", "null"] }
+          }
+        },
+        "overall_pass": { "type": "boolean" }
+      }
+    },
+    "visual_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["complete", "stable_attempts", "disagreement_attempts", "anchor_verified_attempts"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "stable_attempts": { "$ref": "#/$defs/nonNegativeInteger" },
+        "disagreement_attempts": { "$ref": "#/$defs/nonNegativeInteger" },
+        "anchor_verified_attempts": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    },
+    "network_sampled_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["complete", "external_tcp_activity_observed", "verification_claimed"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "external_tcp_activity_observed": { "type": "boolean" },
+        "verification_claimed": { "const": false }
+      }
+    },
+    "profile_isolation_complete": { "type": "boolean" },
+    "cleanup_identity_complete": { "type": "boolean" },
+    "startup_crash_observed": { "type": "boolean" },
+    "protocol_attempt_requirement_met": { "type": "boolean" },
+    "calibration_candidate_eligible": { "const": false },
+    "ineligible_reasons": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nonNegativeInteger": { "type": "integer", "minimum": 0 },
+    "nullableNonNegativeInteger": { "type": ["integer", "null"], "minimum": 0 },
+    "durationSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observed_count", "median", "p95"],
+      "properties": {
+        "observed_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "median": { "$ref": "#/$defs/nullableNonNegativeInteger" },
+        "p95": { "$ref": "#/$defs/nullableNonNegativeInteger" }
+      }
+    },
+    "modeSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "denominator",
+        "observed_attempts",
+        "censored_attempts",
+        "process_to_page_load_ms",
+        "process_to_ui_ready_ms",
+        "page_load_to_ui_ready_ms",
+        "run_to_first_visible_ms"
+      ],
+      "properties": {
+        "denominator": { "$ref": "#/$defs/nonNegativeInteger" },
+        "observed_attempts": { "$ref": "#/$defs/nonNegativeInteger" },
+        "censored_attempts": { "$ref": "#/$defs/nonNegativeInteger" },
+        "process_to_page_load_ms": { "$ref": "#/$defs/durationSummary" },
+        "process_to_ui_ready_ms": { "$ref": "#/$defs/durationSummary" },
+        "page_load_to_ui_ready_ms": { "$ref": "#/$defs/durationSummary" },
+        "run_to_first_visible_ms": { "$ref": "#/$defs/durationSummary" }
+      }
+    }
+  }
+}

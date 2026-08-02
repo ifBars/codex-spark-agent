@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { ArrowRight, CaretDown, CheckCircle, Circle, Clock, Cube, FileCode, Gear, GitBranch, Info, Minus, PaperPlaneTilt, PencilSimple, ShieldCheck, Sparkle, Tag, UserCircle, X } from "@phosphor-icons/react";
 import { authorityModes, getTaskFixture, initialProoflineViewState, prototypeSubmissionNotice, reduceProoflineViewState, taskGroups } from "./proofline-state.js";
 import { createWave1Adapter, isParticipantId } from "./wave1-bridge.js";
+import { commitSubmittedRunAfterHostAck, createLifecycleAdapter, createLifecycleReceiptController } from "./lifecycle-bridge.js";
 import { initialWave1MeasurementState, reduceWave1MeasurementState } from "./wave1-ledger.js";
 import { getWave1Scenario, initialWave1ReplayViewState, reduceWave1ReplayViewState, wave1FixtureRequest } from "./wave1-replay.js";
 import prooflineMark from "../assets/proofline-mark.png";
@@ -472,16 +473,52 @@ export function App() {
   const [model, setModel] = useState("GPT-5.3-Codex-Spark");
   const [reasoning, setReasoning] = useState("Medium");
   const [authorityMode, setAuthorityMode] = useState("ask");
+  const [submittedRun, setSubmittedRun] = useState(null);
+  const taskRailRef = useRef(null);
+  const composerRef = useRef(null);
+  const submittedRunRef = useRef(null);
+  const lifecycleAdapter = useMemo(() => createLifecycleAdapter(), []);
+  const lifecycle = useMemo(() => createLifecycleReceiptController({ adapter: lifecycleAdapter }), [lifecycleAdapter]);
   const selected = getTaskFixture(viewState.selectedId);
   const isWave1 = Boolean(selected.scenario);
   const authority = authorityModes[authorityMode];
   const captureLabel = measurement.capture?.countable ? "Host measurement" : measurement.capture?.capture_mode === "host_authoritative" ? "Native preflight blocked" : "Browser rehearsal";
   const dispatchView = (event) => setViewState((state) => reduceProoflineViewState(state, event));
-  function submitComposer(event) {
+  useEffect(() => {
+    let alive = true;
+    lifecycle
+      .beginLaunch()
+      .then(() => alive && lifecycle.acknowledgeUiReadyWhenInteractive({ taskRail: taskRailRef.current, composer: composerRef.current }))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [lifecycle]);
+  useEffect(() => {
+    if (!submittedRun) return;
+    lifecycle.acknowledgeFirstVisibleAfterFrames({ isVisible: () => submittedRunRef.current?.isConnected === true && submittedRunRef.current.dataset.runSubmitted === "true" });
+  }, [lifecycle, submittedRun]);
+  async function submitComposer(event) {
     event.preventDefault();
     if (!composer.trim()) return;
-    setNotice(prototypeSubmissionNotice());
-    setComposer("");
+    if (lifecycleAdapter.kind === "browser") {
+      setNotice(prototypeSubmissionNotice());
+      setComposer("");
+      return;
+    }
+    try {
+      const accepted = await commitSubmittedRunAfterHostAck({
+        controller: lifecycle,
+        commit: (run) => {
+          setNotice(prototypeSubmissionNotice());
+          setComposer("");
+          setSubmittedRun(run.challenge);
+        },
+      });
+      if (!accepted) setNotice("Native lifecycle did not accept this staged instruction. No run timing was recorded.");
+    } catch {
+      setNotice("Native lifecycle did not accept this staged instruction. No run timing was recorded.");
+    }
   }
   return (
     <main className="app-shell">
@@ -503,7 +540,7 @@ export function App() {
         </div>
       </header>
       <div className="workspace-shell">
-        <aside className="thread-rail" aria-label="Spark task history">
+        <aside className="thread-rail" aria-label="Spark task history" ref={taskRailRef}>
           <div className="rail-brand">
             <img className="brand-image" src={prooflineMark} alt="" />
             <div>
@@ -577,13 +614,13 @@ export function App() {
               </section>
             )}
             {notice && (
-              <div className="action-notice" role="status" style={isWave1 ? { marginTop: 8 } : undefined}>
+              <div className="action-notice" role="status" ref={submittedRun ? submittedRunRef : null} data-run-submitted={submittedRun ? "true" : undefined} style={isWave1 ? { marginTop: 8 } : undefined}>
                 <CheckCircle size={16} />
                 {notice}
               </div>
             )}
             <form className="composer" onSubmit={submitComposer}>
-              <textarea value={composer} onChange={(event) => setComposer(event.target.value)} placeholder="What should Spark do next?" aria-label="What should Spark do next?" />
+              <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} placeholder="What should Spark do next?" aria-label="What should Spark do next?" />
               <p className="authority-note">
                 <ShieldCheck size={15} />
                 {authority.note}
@@ -650,7 +687,7 @@ export function App() {
         <span className="status-spacer" />
         <span className="local">
           <b />
-          Local-first
+          {lifecycleAdapter.kind === "tauri" ? "Network gate pending" : "Local rehearsal"}
         </span>
         <span>
           <ShieldCheck size={17} />

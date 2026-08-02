@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ifbars.dev/schemas/proofline-launch-refusal.schema.json",
+  "title": "Proofline launch calibration refusal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "synthetic_test",
+    "countable",
+    "eligible",
+    "ineligible_reason"
+  ],
+  "properties": {
+    "schema": { "const": "spark.proofline.launch-calibration.refusal.v1" },
+    "synthetic_test": { "const": false },
+    "countable": { "const": false },
+    "eligible": { "const": false },
+    "ineligible_reason": { "type": "string", "pattern": "^[a-z0-9_]+$" }
+  }
+}
