@@ -14,10 +14,12 @@ unqualified `Private` state.
 The bounded DPI correction failed at 125% Windows scaling after replacing the
 post-show physical-size workaround with a layout-driven root. The composer and
 status ribbon remained off-client, so issue #15's stop condition is met. The
-selected path is now a WinUI 3 renderer with a Rust-owned core behind a versioned,
-ACL-restricted local IPC boundary. The fallback is Windows-only and more expensive
-to integrate, but it has the strongest evaluated path to OS-supported UI isolation
-through an AppContainer without network capabilities.
+selected path is now a planned WinUI 3 renderer with a Rust-owned core. Its
+versioned, ACL-restricted local IPC boundary and an AppContainer without network
+capabilities are requirements to prove, not established properties. The fallback is
+Windows-only and more expensive to integrate, but it has the strongest evaluated
+path to OS-supported UI isolation once an official WinUI scaffold, package manifest,
+and ACL verification have been completed.
 
 This decision keeps the selected Proofline concept: a narrow task-history rail, an
 evidence-first completed-task document, collapsed model activity, an anchored

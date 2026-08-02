@@ -1,3 +1,5 @@
+#requires -PSEdition Desktop
+
 [CmdletBinding(DefaultParameterSetName = 'Real')]
 param(
     [Parameter(ParameterSetName = 'Real', Mandatory = $true)]
@@ -53,6 +55,10 @@ function Write-ProoflineNativeJsonAtomic([string]$Path, [object]$Value) {
     if ([IO.File]::Exists($absolute)) {
         $backup = "$absolute.bak-$([Guid]::NewGuid().ToString('N'))"
         try { [IO.File]::Replace($temporary, $absolute, $backup) }
+        catch {
+            if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+            throw
+        }
         finally { if ([IO.File]::Exists($backup)) { [IO.File]::Delete($backup) } }
     }
     else { [IO.File]::Move($temporary, $absolute) }
@@ -94,35 +100,66 @@ function Test-ProoflineNativeProcessIdentity([object]$Captured, [object]$Current
         ([string]$Captured.executable_sha256).Equals([string]$Current.executable_sha256, [StringComparison]::OrdinalIgnoreCase)
 }
 
-function Get-ProoflineNativeDescendantIds([int]$RootProcessId) {
+function Get-ProoflineNativeDescendantIds(
+    [int]$RootProcessId,
+    [object]$RootIdentity,
+    [Collections.Generic.List[string]]$ObservationFailures
+) {
     $owned = [Collections.Generic.HashSet[int]]::new()
     [void]$owned.Add($RootProcessId)
     try {
-        $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId, ParentProcessId)
+        $rows = @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId, ParentProcessId, CreationDate)
+        $createdAt = @{}
+        foreach ($row in $rows) {
+            if ($null -ne $row.CreationDate) {
+                $createdAt[[int]$row.ProcessId] = ([DateTime]$row.CreationDate).ToUniversalTime().Ticks
+            }
+        }
+        if ($null -ne $RootIdentity) { $createdAt[$RootProcessId] = [long]$RootIdentity.creation_utc_ticks }
+        if (-not $createdAt.ContainsKey($RootProcessId)) {
+            [void]$ObservationFailures.Add('process_tree_root_creation_time_unavailable')
+            return @($owned | Sort-Object)
+        }
         $changed = $true
         while ($changed) {
             $changed = $false
             foreach ($row in $rows) {
-                if ($owned.Contains([int]$row.ParentProcessId) -and $owned.Add([int]$row.ProcessId)) { $changed = $true }
+                $parentId = [int]$row.ParentProcessId
+                $childId = [int]$row.ProcessId
+                if ($owned.Contains($parentId) -and $createdAt.ContainsKey($parentId) -and $createdAt.ContainsKey($childId) -and
+                    [long]$createdAt[$childId] -ge [long]$createdAt[$parentId] -and $owned.Add($childId)) {
+                    $changed = $true
+                }
             }
         }
     }
-    catch { }
+    catch { [void]$ObservationFailures.Add('process_tree_cim_enumeration_failed') }
     return @($owned | Sort-Object)
 }
 
 function Update-ProoflineNativeProcessTree(
     [int]$RootProcessId,
     [Collections.IDictionary]$Identities,
-    [Collections.Generic.HashSet[int]]$UncapturedIds
+    [Collections.Generic.HashSet[int]]$UncapturedIds,
+    [Collections.Generic.HashSet[int]]$PendingIdentityIds,
+    [Collections.Generic.List[string]]$ObservationFailures
 ) {
-    $ids = @(Get-ProoflineNativeDescendantIds $RootProcessId)
+    $rootIdentity = $Identities[[string]$RootProcessId]
+    if ($null -eq $rootIdentity) { $rootIdentity = Get-ProoflineNativeProcessIdentity $RootProcessId }
+    $ids = @(Get-ProoflineNativeDescendantIds -RootProcessId $RootProcessId -RootIdentity $rootIdentity -ObservationFailures $ObservationFailures)
     foreach ($id in $ids) {
         $key = [string]$id
-        if ($Identities.Contains($key) -or $UncapturedIds.Contains($id)) { continue }
+        if ($Identities.Contains($key)) { continue }
         $identity = Get-ProoflineNativeProcessIdentity $id
-        if ($null -eq $identity) { [void]$UncapturedIds.Add($id) }
-        else { $Identities[$key] = $identity }
+        if ($null -eq $identity) {
+            if ($null -ne (Get-Process -Id $id -ErrorAction SilentlyContinue)) { [void]$PendingIdentityIds.Add($id) }
+            else { [void]$UncapturedIds.Add($id) }
+        }
+        else {
+            [void]$PendingIdentityIds.Remove($id)
+            [void]$UncapturedIds.Remove($id)
+            $Identities[$key] = $identity
+        }
     }
     return $ids
 }
@@ -160,13 +197,13 @@ function Find-ProoflineNativeUiAutomationAnchor([IntPtr]$WindowHandle, [string]$
         Add-Type -AssemblyName UIAutomationTypes -ErrorAction Stop
         $window = [System.Windows.Automation.AutomationElement]::FromHandle($WindowHandle)
         if ($null -eq $window) { return [pscustomobject]@{ available = $true; observed = $false; matched_name = $null } }
-        $elements = $window.FindAll([System.Windows.Automation.TreeScope]::Element -bor [System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-        foreach ($element in $elements) {
-            $name = [string]$element.Current.Name
-            if ($name.IndexOf($ExpectedAnchor, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                return [pscustomobject]@{ available = $true; observed = $true; matched_name = $name }
-            }
+        $windowName = [string]$window.Current.Name
+        if ($windowName.IndexOf($ExpectedAnchor, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            return [pscustomobject]@{ available = $true; observed = $true; matched_name = $windowName }
         }
+        $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty, $ExpectedAnchor)
+        $element = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        if ($null -ne $element) { return [pscustomobject]@{ available = $true; observed = $true; matched_name = [string]$element.Current.Name } }
         return [pscustomobject]@{ available = $true; observed = $false; matched_name = $null }
     }
     catch { return [pscustomobject]@{ available = $false; observed = $false; matched_name = $null } }
@@ -175,13 +212,16 @@ function Find-ProoflineNativeUiAutomationAnchor([IntPtr]$WindowHandle, [string]$
 function Stop-ProoflineNativeProcessTree(
     [object[]]$ProcessIdentities,
     [int[]]$UncapturedProcessIds,
-    [int]$RootProcessId
+    [int]$RootProcessId,
+    [Collections.Generic.List[string]]$ObservationFailures
 ) {
     $uncertain = [Collections.Generic.HashSet[int]]::new()
     foreach ($id in $UncapturedProcessIds) {
         if ($null -ne (Get-Process -Id $id -ErrorAction SilentlyContinue)) { [void]$uncertain.Add($id) }
     }
-    foreach ($captured in @($ProcessIdentities | Sort-Object @{ Expression = { [int]$_.process_id -eq $RootProcessId }; Descending = $false }, @{ Expression = { [int]$_.process_id }; Descending = $true })) {
+    $root = @($ProcessIdentities | Where-Object { [int]$_.process_id -eq $RootProcessId })
+    $descendants = @($ProcessIdentities | Where-Object { [int]$_.process_id -ne $RootProcessId } | Sort-Object { [int]$_.process_id })
+    foreach ($captured in @($root + $descendants)) {
         $id = [int]$captured.process_id
         if ($null -eq (Get-Process -Id $id -ErrorAction SilentlyContinue)) { continue }
         if (-not (Test-ProoflineNativeProcessIdentity $captured (Get-ProoflineNativeProcessIdentity $id))) {
@@ -190,10 +230,26 @@ function Stop-ProoflineNativeProcessTree(
         }
         try { Stop-Process -Id $id -Force -ErrorAction Stop } catch { [void]$uncertain.Add($id) }
     }
-    Start-Sleep -Milliseconds 100
-    $stillRunning = @($ProcessIdentities | Where-Object {
-        Test-ProoflineNativeProcessIdentity $_ (Get-ProoflineNativeProcessIdentity ([int]$_.process_id))
-    } | ForEach-Object { [int]$_.process_id })
+    $rootIdentity = $root | Select-Object -First 1
+    $rescannedIds = @(Get-ProoflineNativeDescendantIds -RootProcessId $RootProcessId -RootIdentity $rootIdentity -ObservationFailures $ObservationFailures)
+    $knownById = [ordered]@{}
+    foreach ($identity in $ProcessIdentities) { $knownById[[string]$identity.process_id] = $identity }
+    foreach ($id in $rescannedIds) {
+        $key = [string]$id
+        if ($knownById.Contains($key)) { continue }
+        $identity = Get-ProoflineNativeProcessIdentity $id
+        if ($null -eq $identity) { [void]$uncertain.Add($id) }
+        else { $knownById[$key] = $identity; try { Stop-Process -Id $id -Force -ErrorAction Stop } catch { [void]$uncertain.Add($id) } }
+    }
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    $stillRunning = @()
+    while ($deadline.Elapsed.TotalSeconds -lt 5) {
+        $stillRunning = @($knownById.Values | Where-Object {
+            Test-ProoflineNativeProcessIdentity $_ (Get-ProoflineNativeProcessIdentity ([int]$_.process_id))
+        } | ForEach-Object { [int]$_.process_id })
+        if ($stillRunning.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+    }
     return [pscustomobject]@{
         complete = $uncertain.Count -eq 0 -and $stillRunning.Count -eq 0
         uncertain_process_ids = @($uncertain | Sort-Object)
@@ -214,6 +270,8 @@ function New-ProoflineNativeAttempt(
     $process = $null
     $identities = [ordered]@{}
     $uncaptured = [Collections.Generic.HashSet[int]]::new()
+    $pendingIdentity = [Collections.Generic.HashSet[int]]::new()
+    $treeObservationFailures = [Collections.Generic.List[string]]::new()
     $connections = [ordered]@{}
     $tcpAvailable = $true
     $firstWindowHandleMs = $null
@@ -222,6 +280,7 @@ function New-ProoflineNativeAttempt(
     $uiaAnchor = $null
     $startupCrash = $false
     $observedProcessIds = @()
+    $nextAnchorProbeMs = 0
     $rootIdentityVerifiedBeforeCleanup = $false
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $reasons = [Collections.Generic.List[string]]::new()
@@ -230,7 +289,7 @@ function New-ProoflineNativeAttempt(
         [IO.Directory]::CreateDirectory($ArtifactDirectory) | Out-Null
         $process = Start-Process -FilePath $Executable -PassThru -ErrorAction Stop
         while ($clock.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-            $observedProcessIds = @(Update-ProoflineNativeProcessTree -RootProcessId $process.Id -Identities $identities -UncapturedIds $uncaptured)
+            $observedProcessIds = @(Update-ProoflineNativeProcessTree -RootProcessId $process.Id -Identities $identities -UncapturedIds $uncaptured -PendingIdentityIds $pendingIdentity -ObservationFailures $treeObservationFailures)
             $sample = Get-ProoflineNativeTcpSample -ProcessIds $observedProcessIds
             if (-not $sample.available) { $tcpAvailable = $false }
             foreach ($connection in $sample.connections) {
@@ -238,10 +297,12 @@ function New-ProoflineNativeAttempt(
                 $connections[$key] = $connection
             }
             if ($process.HasExited) { $startupCrash = $true; break }
+            $process.Refresh()
             if ($firstWindowHandleMs -eq $null -and $process.MainWindowHandle -ne 0) {
                 $firstWindowHandleMs = [long]$clock.ElapsedMilliseconds
             }
-            if ($firstWindowHandleMs -ne $null -and $firstUiaAnchorMs -eq $null) {
+            if ($firstWindowHandleMs -ne $null -and $firstUiaAnchorMs -eq $null -and $clock.ElapsedMilliseconds -ge $nextAnchorProbeMs) {
+                $nextAnchorProbeMs = $clock.ElapsedMilliseconds + 150
                 $uia = Find-ProoflineNativeUiAutomationAnchor -WindowHandle ([IntPtr]$process.MainWindowHandle) -ExpectedAnchor $Anchor
                 $uiaAvailable = $uia.available
                 if ($uia.observed) {
@@ -249,7 +310,7 @@ function New-ProoflineNativeAttempt(
                     $uiaAnchor = $uia.matched_name
                     $until = $clock.ElapsedMilliseconds + $ConnectionObservationMilliseconds
                     while ($clock.ElapsedMilliseconds -lt $until) {
-                        $observedProcessIds = @(Update-ProoflineNativeProcessTree -RootProcessId $process.Id -Identities $identities -UncapturedIds $uncaptured)
+                        $observedProcessIds = @(Update-ProoflineNativeProcessTree -RootProcessId $process.Id -Identities $identities -UncapturedIds $uncaptured -PendingIdentityIds $pendingIdentity -ObservationFailures $treeObservationFailures)
                         $sample = Get-ProoflineNativeTcpSample -ProcessIds $observedProcessIds
                         if (-not $sample.available) { $tcpAvailable = $false }
                         foreach ($connection in $sample.connections) {
@@ -267,11 +328,12 @@ function New-ProoflineNativeAttempt(
     catch { [void]$reasons.Add('attempt_start_or_observation_failure') }
     finally {
         if ($null -ne $process) {
-            $observedProcessIds = @(Update-ProoflineNativeProcessTree -RootProcessId $process.Id -Identities $identities -UncapturedIds $uncaptured)
+            $observedProcessIds = @(Update-ProoflineNativeProcessTree -RootProcessId $process.Id -Identities $identities -UncapturedIds $uncaptured -PendingIdentityIds $pendingIdentity -ObservationFailures $treeObservationFailures)
             $capturedRoot = $identities[[string]$process.Id]
             $currentRoot = Get-ProoflineNativeProcessIdentity $process.Id
             $rootIdentityVerifiedBeforeCleanup = Test-ProoflineNativeProcessIdentity $capturedRoot $currentRoot
-            $cleanup = Stop-ProoflineNativeProcessTree -ProcessIdentities @($identities.Values) -UncapturedProcessIds @($uncaptured) -RootProcessId $process.Id
+            $unverifiedIds = @($uncaptured | Sort-Object) + @($pendingIdentity | Sort-Object)
+            $cleanup = Stop-ProoflineNativeProcessTree -ProcessIdentities @($identities.Values) -UncapturedProcessIds $unverifiedIds -RootProcessId $process.Id -ObservationFailures $treeObservationFailures
         }
     }
     $rootIdentity = if ($null -eq $process) { $null } else { $identities[[string]$process.Id] }
@@ -285,7 +347,8 @@ function New-ProoflineNativeAttempt(
     $externalConnections = @($connections.Values | Where-Object { Test-ProoflineNativeNonLoopback $_ })
     if ($externalConnections.Count -gt 0) { [void]$reasons.Add('non_loopback_tcp_observed') }
     if ($startupCrash) { [void]$reasons.Add('process_exited_before_anchor') }
-    if ($uncaptured.Count -gt 0) { [void]$reasons.Add('process_identity_capture_incomplete') }
+    if ($uncaptured.Count -gt 0 -or $pendingIdentity.Count -gt 0) { [void]$reasons.Add('process_identity_capture_incomplete') }
+    if ($treeObservationFailures.Count -gt 0) { [void]$reasons.Add('process_tree_observation_incomplete') }
     if (-not $cleanup.complete) { [void]$reasons.Add('safe_cleanup_incomplete') }
     $raw = [ordered]@{
         schema = 'spark.proofline.native-lifecycle-gate.attempt.v1'
@@ -295,6 +358,8 @@ function New-ProoflineNativeAttempt(
         root_process_id = if ($null -eq $process) { $null } else { $process.Id }
         process_identities = @($identities.Values)
         uncaptured_process_ids = @($uncaptured | Sort-Object)
+        pending_identity_process_ids = @($pendingIdentity | Sort-Object)
+        process_tree_observation_failures = @($treeObservationFailures | Sort-Object -Unique)
         root_identity_verified_before_cleanup = $rootIdentityVerifiedBeforeCleanup
         first_window_handle_ms = $firstWindowHandleMs
         first_uia_anchor_ms = $firstUiaAnchorMs
@@ -326,6 +391,8 @@ function New-ProoflineNativeAttempt(
         tcp_observation_complete = $tcpAvailable
         non_loopback_tcp_observed = $externalConnections.Count -gt 0
         root_identity_verified = $rootIdentityMatches -and $null -ne $rootIdentity -and $rootIdentity.executable_sha256 -eq $ExpectedSha256
+        process_identity_capture_complete = $uncaptured.Count -eq 0 -and $pendingIdentity.Count -eq 0
+        process_tree_observation_complete = $treeObservationFailures.Count -eq 0
         cleanup_complete = $cleanup.complete
     }
 }
@@ -357,9 +424,22 @@ function New-ProoflineNativeAggregate([object[]]$Samples, [string]$BuildSha256, 
     $protocolTenByTen = $ColdCount -eq 10 -and $WarmCount -eq 10 -and $Samples.Count -eq 20
     $allAnchor = $Samples.Count -gt 0 -and @($Samples | Where-Object { -not $_.uia_anchor_observed }).Count -eq 0
     $allIdentity = $Samples.Count -gt 0 -and @($Samples | Where-Object { -not $_.root_identity_verified }).Count -eq 0
+    $allIdentityCapture = $Samples.Count -gt 0 -and @($Samples | Where-Object { -not $_.process_identity_capture_complete }).Count -eq 0
+    $allTreeObservation = $Samples.Count -gt 0 -and @($Samples | Where-Object { -not $_.process_tree_observation_complete }).Count -eq 0
     $allTcpObserved = $Samples.Count -gt 0 -and @($Samples | Where-Object { -not $_.tcp_observation_complete }).Count -eq 0
     $externalObserved = @($Samples | Where-Object { $_.non_loopback_tcp_observed }).Count -gt 0
     $allCleanup = $Samples.Count -gt 0 -and @($Samples | Where-Object { -not $_.cleanup_complete }).Count -eq 0
+    $blocked = [Collections.Generic.List[string]]::new()
+    [void]$blocked.Add('event_based_or_enforceable_network_boundary_not_established')
+    [void]$blocked.Add('stable_visual_frame_not_established')
+    if (-not $protocolTenByTen) { [void]$blocked.Add('protocol_attempt_requirement_not_met') }
+    if ($censored.Count -gt 0) { [void]$blocked.Add('censored_attempts_present') }
+    if (-not $allIdentity) { [void]$blocked.Add('exact_binary_identity_incomplete') }
+    if (-not $allIdentityCapture) { [void]$blocked.Add('process_identity_capture_incomplete') }
+    if (-not $allTreeObservation) { [void]$blocked.Add('process_tree_observation_incomplete') }
+    if (-not $allTcpObserved) { [void]$blocked.Add('tcp_observation_incomplete') }
+    if ($externalObserved) { [void]$blocked.Add('non_loopback_tcp_observed') }
+    if (-not $allCleanup) { [void]$blocked.Add('safe_cleanup_incomplete') }
     return [ordered]@{
         schema = 'spark.proofline.native-lifecycle-gate.aggregate.v1'
         synthetic_test = $false
@@ -380,7 +460,9 @@ function New-ProoflineNativeAggregate([object[]]$Samples, [string]$BuildSha256, 
         }
         evidence = [ordered]@{
             exact_binary_identity_complete = $allIdentity
-            process_tree_captured = $allCleanup
+            process_identity_capture_complete = $allIdentityCapture
+            process_tree_observation_complete = $allTreeObservation
+            safe_cleanup_complete = $allCleanup
             named_uia_anchor_complete = $allAnchor
             stable_visual_frame_proven = $false
             network_observation_method = 'sampled_windows_tcp_table'
@@ -392,7 +474,7 @@ function New-ProoflineNativeAggregate([object[]]$Samples, [string]$BuildSha256, 
         release_protocol = [ordered]@{
             ten_cold_ten_warm_attempts = $protocolTenByTen
             eligible = $false
-            blocked_reasons = @('event_based_or_enforceable_network_boundary_not_established', 'stable_visual_frame_not_established')
+            blocked_reasons = @($blocked)
         }
         privacy_gate = 'pending'
         limitations = @(
@@ -424,7 +506,7 @@ function Invoke-ProoflineNativeLifecycleGate {
             }
             catch {
                 [IO.Directory]::CreateDirectory($artifactPath) | Out-Null
-                $failure = [pscustomobject]@{ mode = $mode; censored = $true; censored_reasons = @('attempt_harness_failure'); first_window_handle_ms = $null; first_uia_anchor_ms = $null; uia_anchor_observed = $false; tcp_observation_complete = $false; non_loopback_tcp_observed = $false; root_identity_verified = $false; cleanup_complete = $false }
+                $failure = [pscustomobject]@{ mode = $mode; censored = $true; censored_reasons = @('attempt_harness_failure'); first_window_handle_ms = $null; first_uia_anchor_ms = $null; uia_anchor_observed = $false; tcp_observation_complete = $false; non_loopback_tcp_observed = $false; root_identity_verified = $false; process_identity_capture_complete = $false; process_tree_observation_complete = $false; cleanup_complete = $false }
                 Write-ProoflineNativeJsonAtomic -Path (Join-Path $artifactPath 'attempt-failure.json') -Value ([ordered]@{ schema = 'spark.proofline.native-lifecycle-gate.censored-attempt.v1'; mode = $mode; ordinal = $ordinal; reason = 'attempt_harness_failure' })
                 [void]$samples.Add($failure)
             }
@@ -437,8 +519,8 @@ function Invoke-ProoflineNativeLifecycleGate {
 
 function Invoke-ProoflineNativeLifecycleSyntheticTest {
     $samples = @(
-        [pscustomobject]@{ mode = 'cold'; censored = $false; censored_reasons = @(); first_uia_anchor_ms = 100; uia_anchor_observed = $true; tcp_observation_complete = $true; non_loopback_tcp_observed = $false; root_identity_verified = $true; cleanup_complete = $true },
-        [pscustomobject]@{ mode = 'warm'; censored = $false; censored_reasons = @(); first_uia_anchor_ms = 50; uia_anchor_observed = $true; tcp_observation_complete = $true; non_loopback_tcp_observed = $false; root_identity_verified = $true; cleanup_complete = $true }
+        [pscustomobject]@{ mode = 'cold'; censored = $false; censored_reasons = @(); first_uia_anchor_ms = 100; uia_anchor_observed = $true; tcp_observation_complete = $true; non_loopback_tcp_observed = $false; root_identity_verified = $true; process_identity_capture_complete = $true; process_tree_observation_complete = $true; cleanup_complete = $true },
+        [pscustomobject]@{ mode = 'warm'; censored = $false; censored_reasons = @(); first_uia_anchor_ms = 50; uia_anchor_observed = $true; tcp_observation_complete = $true; non_loopback_tcp_observed = $false; root_identity_verified = $true; process_identity_capture_complete = $true; process_tree_observation_complete = $true; cleanup_complete = $true }
     )
     $aggregate = New-ProoflineNativeAggregate -Samples $samples -BuildSha256 ('a' * 64) -ColdCount 1 -WarmCount 1
     return [ordered]@{

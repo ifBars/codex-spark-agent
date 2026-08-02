@@ -1,8 +1,10 @@
 # Proofline native spike design QA
 
-Source visual truth: `C:\Users\ghost\AppData\Local\Temp\codex-clipboard-1f2076e5-0954-483d-8521-a2e48ed111b2.png`
+Source visual truth: the user-provided selected Proofline mockup (local-only source;
+not retained in this repository).
 
-Implementation screenshot: `C:\Users\ghost\AppData\Local\Temp\codex-shot-2026-08-01_19-24-06.png`
+Implementation screenshot: local-only capture, not retained and not auditable as
+release evidence.
 
 Viewport and density:
 
@@ -102,7 +104,8 @@ required after the P1 is fixed.
    Windows App SDK C# toolchain is available.
 3. Recreate the same selected completed-task state without adding worker-plane or
    provider authority to the renderer.
-4. Capture 100%, 125%, 150%, and 200%; test keyboard and UI Automation; then repeat
-   full-view and focused-region design QA.
+4. Capture 100%, 125%, 150%, and 200%; test keyboard, UI Automation, and Narrator
+   (or an explicitly approved equivalent); then repeat full-view and focused-region
+   design QA.
 
 final result: blocked
