@@ -7,6 +7,7 @@ mod cli;
 mod client;
 mod codex_integration;
 mod config;
+mod desktop_server;
 mod mcp;
 mod mcp_server;
 mod memory;
@@ -276,6 +277,12 @@ async fn run_command(command: Command) -> Result<()> {
         }
         Command::McpServer => {
             mcp_server::run().await?;
+        }
+        Command::DesktopServer { stdio: true } => {
+            desktop_server::run_stdio().await?;
+        }
+        Command::DesktopServer { stdio: false } => {
+            anyhow::bail!("desktop-server requires --stdio");
         }
         Command::Brief {
             question,

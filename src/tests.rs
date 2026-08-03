@@ -63,6 +63,17 @@ fn chat_cli_accepts_reasoning_effort_flag() {
 }
 
 #[test]
+fn desktop_server_cli_requires_stdio() {
+    let cli = <Cli as clap::Parser>::try_parse_from(["spark", "desktop-server", "--stdio"])
+        .expect("parse desktop server command");
+    assert!(matches!(
+        cli.command,
+        Command::DesktopServer { stdio: true }
+    ));
+    assert!(<Cli as clap::Parser>::try_parse_from(["spark", "desktop-server"]).is_err());
+}
+
+#[test]
 fn trace_retention_cli_keeps_confirmation_separate_from_purge_intent() {
     let confirmation_without_purge =
         <Cli as clap::Parser>::try_parse_from(["spark", "trace-retention", "--confirm"])

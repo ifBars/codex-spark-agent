@@ -152,6 +152,12 @@ pub(crate) enum Command {
     Tools,
     /// Serve the Spark repository explorer over MCP stdio for native Codex.
     McpServer,
+    /// Serve the persistent Proofline desktop protocol over newline-delimited JSON stdin/stdout.
+    DesktopServer {
+        /// Use standard input and output for the desktop protocol.
+        #[arg(long, required = true)]
+        stdio: bool,
+    },
     /// Produce a compact, read-only local repository brief.
     Brief {
         /// Concrete repository question to answer.
