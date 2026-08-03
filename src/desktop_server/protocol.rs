@@ -454,7 +454,7 @@ impl CancelRunRequest {
     pub(crate) fn test_request(run_id: &str) -> Self {
         Self {
             schema_version: DESKTOP_SERVER_SCHEMA_VERSION.to_string(),
-            caller_id: "proofline".to_string(),
+            caller_id: "t3code".to_string(),
             request_id: "request".to_string(),
             run_id: run_id.to_string(),
         }
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn parses_versioned_start_run_without_retaining_a_prompt_in_errors() {
-        let command = parse_command(r#"{"schema_version":"spark.desktop_server.v1","kind":"start_run","caller_id":"proofline","request_id":"request-1","run_id":"run-1","prompt":"private text","cwd":"C:\\workspace","model":"gpt-5.3-codex-spark","reasoning_effort":"medium","mode":"ask","session":"desktop"}"#).expect("parse command");
+        let command = parse_command(r#"{"schema_version":"spark.desktop_server.v1","kind":"start_run","caller_id":"t3code","request_id":"request-1","run_id":"run-1","prompt":"private text","cwd":"C:\\workspace","model":"gpt-5.3-codex-spark","reasoning_effort":"medium","mode":"ask","session":"desktop"}"#).expect("parse command");
         let DesktopCommand::StartRun(request) = command else {
             panic!("expected start request")
         };
@@ -477,9 +477,9 @@ mod tests {
 
     #[test]
     fn rejects_invalid_schema_and_prompt_without_echoing_input() {
-        let error = parse_command(r#"{"schema_version":"wrong","kind":"start_run","caller_id":"proofline","request_id":"request-1","run_id":"run-1","prompt":"private text","cwd":"C:\\workspace","model":"gpt-5.3-codex-spark","reasoning_effort":"medium","mode":"ask"}"#).expect_err("schema must fail");
+        let error = parse_command(r#"{"schema_version":"wrong","kind":"start_run","caller_id":"t3code","request_id":"request-1","run_id":"run-1","prompt":"private text","cwd":"C:\\workspace","model":"gpt-5.3-codex-spark","reasoning_effort":"medium","mode":"ask"}"#).expect_err("schema must fail");
         assert_eq!(error.code, "unsupported_schema");
-        let error = parse_command(r#"{"schema_version":"spark.desktop_server.v1","kind":"start_run","caller_id":"proofline","request_id":"request-1","run_id":"run-1","prompt":" ","cwd":"C:\\workspace","model":"gpt-5.3-codex-spark","reasoning_effort":"medium","mode":"ask"}"#).expect_err("empty prompt must fail");
+        let error = parse_command(r#"{"schema_version":"spark.desktop_server.v1","kind":"start_run","caller_id":"t3code","request_id":"request-1","run_id":"run-1","prompt":" ","cwd":"C:\\workspace","model":"gpt-5.3-codex-spark","reasoning_effort":"medium","mode":"ask"}"#).expect_err("empty prompt must fail");
         assert_eq!(error.code, "invalid_prompt");
         let serialized = serde_json::to_string(&DesktopFrame::protocol_error(error))
             .expect("serialize safe protocol error");
@@ -490,7 +490,7 @@ mod tests {
     fn emitter_sequences_snapshot_deltas_and_terminal() {
         let request = DesktopRunRequest {
             schema_version: DESKTOP_SERVER_SCHEMA_VERSION.to_string(),
-            caller_id: "proofline".to_string(),
+            caller_id: "t3code".to_string(),
             request_id: "request-1".to_string(),
             run_id: "run-1".to_string(),
             prompt: "private".to_string(),
@@ -527,7 +527,7 @@ mod tests {
     fn rejected_start_is_a_sequenced_terminal_frame_but_cancel_is_control_only() {
         let request = DesktopRunRequest {
             schema_version: "wrong".to_string(),
-            caller_id: "proofline".to_string(),
+            caller_id: "t3code".to_string(),
             request_id: "request-1".to_string(),
             run_id: "run-1".to_string(),
             prompt: "private".to_string(),
@@ -557,7 +557,7 @@ mod tests {
     fn initialization_failure_is_the_first_and_only_terminal_stream_frame() {
         let request = DesktopRunRequest {
             schema_version: DESKTOP_SERVER_SCHEMA_VERSION.to_string(),
-            caller_id: "proofline".to_string(),
+            caller_id: "t3code".to_string(),
             request_id: "request-1".to_string(),
             run_id: "run-1".to_string(),
             prompt: "private".to_string(),

@@ -1,4 +1,4 @@
-//! Long-lived, privacy-minimized JSONL bridge for the Proofline desktop host.
+//! Long-lived, privacy-minimized JSONL bridge for Spark Desktop hosts.
 //!
 //! This module owns the process protocol. It never serializes `AgentSnapshot::input`
 //! or writes a raw trace; live activity is deliberately mapped from the curated
@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     DEFAULT_COMPACT_AFTER_CHARS, DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS, DEFAULT_MAX_INPUT_CHARS,
     agent::{AgentRunner, take_shared_display_events},
-    config, proofline, session,
+    config, session,
 };
 
 pub(crate) use protocol::parse_command;
@@ -199,8 +199,11 @@ async fn run_desktop_request_inner(
         runner.save_session_named(&session)?;
     }
 
-    let snapshot = proofline::snapshot_default(Some(&session))?;
-    emitter.snapshot(serde_json::to_value(snapshot)?);
+    emitter.snapshot(serde_json::json!({
+        "session": session,
+        "model": request.model,
+        "reasoning_effort": request.reasoning_effort,
+    }));
 
     let events = runner.use_shared_display();
     let result = {
@@ -236,7 +239,7 @@ fn derived_session_name(run_id: &str) -> String {
         .take(6)
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    format!("proofline-{suffix}")
+    format!("spark-desktop-{suffix}")
 }
 
 fn protocol_line(line: &str) -> &str {
@@ -378,13 +381,14 @@ mod tests {
         let first = derived_session_name("run-1");
         assert_eq!(first, derived_session_name("run-1"));
         assert_ne!(first, derived_session_name("run-2"));
+        assert!(first.starts_with("spark-desktop-"));
         assert!(crate::config::is_valid_session_name(&first));
     }
 
     #[test]
     fn accepts_a_utf8_bom_on_the_first_protocol_line() {
         let command = protocol_line(
-            "\u{feff}{\"schema_version\":\"spark.desktop_server.v1\",\"kind\":\"cancel_run\",\"caller_id\":\"proofline\",\"request_id\":\"request-1\",\"run_id\":\"run-1\"}",
+            "\u{feff}{\"schema_version\":\"spark.desktop_server.v1\",\"kind\":\"cancel_run\",\"caller_id\":\"t3code\",\"request_id\":\"request-1\",\"run_id\":\"run-1\"}",
         );
         assert!(parse_command(command).is_ok());
     }
