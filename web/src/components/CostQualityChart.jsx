@@ -81,10 +81,15 @@ export function CostQualityChart({
     <div className={`chart-region${compact ? " chart-region--compact" : ""}`}>
       <div className="chart-region__heading">
         <div>
-          <h2>{contextLabel} — {yMetrics[yMetric].label} vs. {xMetrics[xMetric].label}</h2>
+          <span className="chart-region__eyebrow">{contextLabel}</span>
+          <h2>{yMetrics[yMetric].label} vs. {xMetrics[xMetric].label}</h2>
           <p>
             {description ?? "Lower is better horizontally; higher is better vertically."}
           </p>
+          <div className="chart-region__direction" aria-label="Chart direction">
+            <span>↑ {yMetrics[yMetric].label}: higher is better</span>
+            <span>← {xMetrics[xMetric].label}: lower is better</span>
+          </div>
           {meta && (
             <small>
               {meta} · {rangeKind} · Axes fit estimates

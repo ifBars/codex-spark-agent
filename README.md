@@ -36,6 +36,10 @@ Or run one task directly:
 spark chat "Inspect this repo and explain how commands are dispatched."
 ```
 
+Prefer a desktop workspace? [Spark Desktop v0.8.0](https://github.com/ifBars/t3code/releases/tag/v0.8.0)
+is the supported GUI for Codex and this harness. It is maintained as a focused
+T3Code fork and replaces the retired desktop prototypes from this repository.
+
 ## What you get
 
 - Interactive and one-shot coding sessions
@@ -53,7 +57,16 @@ Spark is intentionally smaller than the official Codex CLI. I am not trying to r
 
 [**Explore the interactive benchmark charts →**](https://ifbars.github.io/codex-spark-agent/)
 
-Switch among overall, coding, math/data, analysis, terminal/operations, writing/configuration, and frontier charts; then toggle runners and reasoning levels, change cost axes, inspect uncertainty ranges, and drill into every measured task through the scenario lens. The evidence strip exposes measured and pending scenario coverage, task-run counts, task/provider exclusions, and scoring behavior for every dataset. The experimental Frontier chart combines novel-rule transfer with a hard multi-tenant rollout repair and shows its intended sub-65% calibration band. Provider-limited attempts are excluded, so the chart stays explicitly pending instead of publishing a fabricated zero. The earlier eight-task success-only baseline remains available as historical evidence.
+Spark Bench presents one consolidated evidence catalog. Switch among compatible
+evidence cohorts and the overall, coding, math/data, analysis,
+terminal/operations, writing/configuration, and frontier charts; then toggle
+runners and reasoning levels, change cost axes, inspect uncertainty ranges, and
+drill into measured tasks through the scenario lens. Cohorts remain separate
+inside the catalog so unlike runs are never averaged into a misleading score.
+The evidence strip exposes measured and pending scenario coverage, task-run
+counts, task/provider exclusions, and scoring behavior. Provider-limited
+attempts are excluded, so the experimental Frontier chart stays explicitly
+pending instead of publishing a fabricated zero.
 
 The current measured dataset covers nine difficult scenarios with three attempts at every runner/reasoning combination. Charts plot 129 successful task runs; 33 failed task attempts are excluded before aggregation, and no provider/API failures occurred in that snapshot. Error bars are 95% intervals across available successful-only scenario means. `inventory-rebalance-plan`, `experiment-rollout-audit`, `feature-rollout-consistency-bugfix`, and `frontier-rule-transfer` are newer validated fixtures but remain explicitly pending until balanced successful reruns are available; they are not silently mixed into measured curves. The measured ordering is not forced to be monotonic, and category labels distinguish broad, developing, early, and pilot coverage.
 

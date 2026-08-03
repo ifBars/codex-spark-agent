@@ -96,15 +96,15 @@ coding surface.
 
 Luna is useful as a background research lane, not an interactive default. In
 six observed delegated tasks, the four earlier research tasks took 69 to 461
-seconds. Two fresh Proofline audits took 74 and 89 seconds and reported 43,557
-and 144,745 provider tokens respectively. The narrower six-read task used less
+seconds. Two fresh desktop architecture audits took 74 and 89 seconds and
+reported 43,557 and 144,745 provider tokens respectively. The narrower
+six-read task used less
 than one third of the broader audit's tokens, reinforcing the need for explicit
-starting files and a compact decision contract. The measured details are in
-[the Luna delegation observation](luna-delegation-observation-2026-08-01.md).
-No versioned price source was available, so a cheaper-Luna claim remains
-unverified. Keep Spark interactive; route bounded research, review, and
-planning to Luna when multi-minute latency is acceptable, and retain Terra for
-implementation until measured evidence supports a different policy.
+starting files and a compact decision contract. No versioned price source was
+available, so a cheaper-Luna claim remains unverified. Keep Spark interactive;
+route bounded research, review, and planning to Luna when multi-minute latency
+is acceptable, and retain Terra for implementation until measured evidence
+supports a different policy.
 
 ## North-star metric
 
@@ -165,25 +165,13 @@ than fabricate zero.
 
 ## 30/60/90-day sequence
 
-Proofline is the review and measurement surface for this sequence, not a second
-entry wedge. It must make Repo Brief and later worker outcomes easier to verify;
-it does not earn priority merely by looking like a complete agent application.
-The desktop investment advances only through these gates:
-
-1. a privacy-minimized, read-only Spark snapshot contract;
-2. a native measurement host with fixture/build attestation, host-owned event
-   identity and ordering, protected local storage, retention metadata,
-   explicit early purge, lazy crypto-erasure of expired artifacts on the next
-   preflight, and aggregate-only export; production preflight remains
-   non-countable until native process-start and actual first-paint boundaries
-   are implemented and tested, and timer/background expiry purge remains
-   outstanding;
-3. five real internal participant sessions using the fixed protocol in
-   [proofline-validation.md](proofline-validation.md);
-4. an external design-partner usability wave only if the internal safety,
-   evidence-comprehension, and authority-discoverability gates pass; and
-5. a live Spark run stream only for workflows that already have typed,
-   source-backed evidence and a measured user need.
+Spark Desktop is the review surface for this sequence, not a second entry
+wedge. It is maintained in the focused
+[T3Code fork](https://github.com/ifBars/t3code), while this repository owns the
+Spark runtime and streamed protocol. Desktop investment advances only through
+typed, source-backed states, explicit authority, recoverable actions, and
+measured user need. The two repositories must not grow competing desktop
+implementations.
 
 ### Days 0-30: safe local worker beta
 
@@ -195,15 +183,12 @@ The desktop investment advances only through these gates:
   partial, and estimated states.
 - Complete five customer interviews and recruit a measured beta cohort.
 - Repair benchmark provenance and authoritative response-usage accounting.
-- Ship the selected Proofline prototype plus a read-only `spark proofline
-  snapshot` contract; keep transcripts, raw traces, and unsupported evidence
-  out of the renderer boundary.
-- Add the native Proofline measurement host tracked in
-  [issue #9](https://github.com/ifBars/codex-spark-agent/issues/9); browser/Sites
-  rehearsal data is not a substitute for host-owned measurement.
-- Run the five-person Proofline internal dogfood wave tracked in
-  [issue #6](https://github.com/ifBars/codex-spark-agent/issues/6); a green build
-  or simulated agent review does not satisfy this gate.
+- Maintain the versioned streamed desktop protocol used by Spark Desktop; keep
+  transcripts, raw traces, and unsupported evidence out of renderer-owned
+  state.
+- Validate the released T3Code fork with real Codex and Spark sessions on each
+  supported desktop platform before expanding mutation or remote-control
+  surfaces.
 
 ### Days 31-60: controlled worker plane
 
@@ -212,10 +197,9 @@ The desktop investment advances only through these gates:
 - Isolate concurrent workspaces and surface ownership or conflict state.
 - Standardize compact handoffs and deterministic workflow validators.
 - Run a two-week beta with three to five design partners.
-- If the internal Proofline wave passes, connect the existing Tauri 2 shell to
-  ordered snapshot and Channel events for Repo Brief and failed-validation
-  review; otherwise fix and repeat the wave before expanding the live desktop
-  surface.
+- Extend the T3Code fork through ordered snapshot and streamed events for Repo
+  Brief and failed-validation review; keep protocol and application changes in
+  their owning repositories.
 
 ### Days 61-90: evidence platform
 

@@ -449,7 +449,8 @@ const overallCsv = [
 async function emitGenerated(path, content) {
   if (checkMode) {
     const current = await readFile(path, "utf8");
-    if (current !== content) {
+    const normalizeNewlines = (value) => value.replace(/\r\n/g, "\n");
+    if (normalizeNewlines(current) !== normalizeNewlines(content)) {
       throw new Error(`Generated artifact is out of date: ${path}`);
     }
     return;

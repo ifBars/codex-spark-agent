@@ -143,7 +143,7 @@ const datasetDefinitions = [
   },
 ];
 
-const developmentDatasetDefinitions = recentBenchmarksData.datasets.map((definition) => {
+const developmentCohortDefinitions = recentBenchmarksData.datasets.map((definition) => {
   const evidence = evidenceFor(definition.sourceEvidenceId);
   const rows = definition.rows.map(({ runner, reasoning, ...values }) =>
     point(runner, reasoning, {
@@ -182,7 +182,7 @@ const developmentDatasetDefinitions = recentBenchmarksData.datasets.map((definit
   };
 });
 
-export const datasets = [...datasetDefinitions, ...developmentDatasetDefinitions].map((dataset) => ({
+export const benchmarkCohorts = [...datasetDefinitions, ...developmentCohortDefinitions].map((dataset) => ({
   ...dataset,
   views:
     dataset.views ??
@@ -196,6 +196,14 @@ export const datasets = [...datasetDefinitions, ...developmentDatasetDefinitions
       rows: dataset.rows,
     }],
 }));
+
+export const datasets = [{
+  id: "spark-bench",
+  label: "Spark Bench",
+  description:
+    "One benchmark catalog with separate evidence cohorts so incompatible runs remain traceable instead of being averaged together.",
+  cohorts: benchmarkCohorts,
+}];
 
 export const runnerOptions = Object.values(runnerMeta);
 export const reasoningOptions = ["low", "medium", "high"];

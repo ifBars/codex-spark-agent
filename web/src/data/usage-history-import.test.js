@@ -41,10 +41,32 @@ describe("usage history importer", () => {
     expect(imported.aggregate.totalTokens.total).toBe(700);
     expect(imported.aggregate.reasoningOutputTokens.total).toBe(600);
     expect(imported.generatedAt).toBe("2025-08-01T19:50:00.000Z");
+    expect(imported.source.kind).toBe("codex_local_session_history");
+    expect(imported.source.network).toBe(false);
+    expect(imported.source.codexHomeSource).toBeNull();
+    expect(imported.scope.sinceDays).toBeNull();
+    expect(imported.scope.maxFiles).toBeNull();
+    expect(imported.scan.filesDiscovered).toBe(0);
+    expect(imported.scan.forkReplayedObservationsSkipped).toBe(0);
     expect(imported.byDay).toHaveLength(1);
     expect(imported.byModel[0].model).toBe("gpt-5.3-codex-spark");
     expect(imported.pricing).toEqual({ status: "unavailable", reason: "no_public_api_price" });
-    expect(JSON.stringify(imported)).not.toContain("source");
+    expect(imported.source.codexHomeSource).toBeNull();
+  });
+
+  it("accepts current history source kind and exposes scan fields", () => {
+    const source = fixture();
+    source.source.kind = "codex_local_jsonl";
+    const imported = sanitizeUsageHistory(source);
+    expect(imported.source.kind).toBe("codex_local_jsonl");
+    expect(imported.scan.filesDiscovered).toBe(0);
+    expect(imported.scan.forkReplayedObservationsSkipped).toBe(0);
+  });
+
+  it("accepts legacy history source kind", () => {
+    const source = fixture();
+    source.kind = "codex_local_session_history";
+    expect(sanitizeUsageHistory(source).source.kind).toBe("codex_local_session_history");
   });
 
   it("rejects raw session identifiers, prompts, paths, and auth data", () => {

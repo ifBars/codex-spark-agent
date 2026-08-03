@@ -1,9 +1,21 @@
 import { describe, expect, it } from "vitest";
 import benchmarkEvidenceData from "./benchmark-evidence.json";
-import { coverageLabel, datasets } from "./benchmarks.js";
+import { benchmarkCohorts, coverageLabel, datasets } from "./benchmarks.js";
 
 describe("expanded reasoning dataset", () => {
-  const expanded = datasets[0];
+  const expanded = benchmarkCohorts[0];
+
+  it("publishes one consolidated Spark Bench dataset", () => {
+    expect(datasets).toHaveLength(1);
+    expect(datasets[0].id).toBe("spark-bench");
+    expect(datasets[0].cohorts).toBe(benchmarkCohorts);
+    expect(benchmarkCohorts.map((cohort) => cohort.id)).toEqual([
+      "expanded-reasoning-suite",
+      "success-baseline",
+      "real-world-quick-slice",
+      "real-world-spark-extension",
+    ]);
+  });
 
   it("is the default dataset with all runner and reasoning combinations", () => {
     expect(expanded.id).toBe("expanded-reasoning-suite");
@@ -79,7 +91,7 @@ describe("expanded reasoning dataset", () => {
   });
 
   it("publishes an explicit evidence contract for every dataset", () => {
-    for (const dataset of datasets) {
+    for (const dataset of benchmarkCohorts) {
       expect(dataset.evidence.scenarioCount).toBeGreaterThan(0);
       expect(dataset.evidence.taskRuns).toBeGreaterThan(0);
       expect(dataset.evidence.taskRuns).toBe(
@@ -146,8 +158,10 @@ describe("expanded reasoning dataset", () => {
   });
 
   it("publishes recent development slices without inventing intervals", () => {
-    const paired = datasets.find((dataset) => dataset.id === "real-world-quick-slice");
-    const sparkOnly = datasets.find((dataset) => dataset.id === "real-world-spark-extension");
+    const paired = benchmarkCohorts.find((dataset) => dataset.id === "real-world-quick-slice");
+    const sparkOnly = benchmarkCohorts.find(
+      (dataset) => dataset.id === "real-world-spark-extension",
+    );
 
     expect(paired.hasIntervals).toBe(false);
     expect(paired.evidence.taskRuns).toBe(8);

@@ -7,13 +7,13 @@ mod cli;
 mod client;
 mod codex_integration;
 mod config;
+mod desktop_server;
 mod mcp;
 mod mcp_server;
 mod memory;
 mod profile;
 mod profiler;
 mod prompt_commands;
-mod proofline;
 mod repo_brief;
 mod session;
 mod setup;
@@ -58,12 +58,6 @@ fn main() -> Result<()> {
 
 async fn run_command(command: Command) -> Result<()> {
     match command {
-        Command::Proofline {
-            command: cli::ProoflineCommand::Snapshot { session },
-        } => {
-            let snapshot = proofline::snapshot_default(session.as_deref())?;
-            println!("{}", serde_json::to_string_pretty(&snapshot)?);
-        }
         Command::Login { no_browser, device } => {
             let tokens = if device {
                 auth::login_device_code().await?
@@ -276,6 +270,12 @@ async fn run_command(command: Command) -> Result<()> {
         }
         Command::McpServer => {
             mcp_server::run().await?;
+        }
+        Command::DesktopServer { stdio: true } => {
+            desktop_server::run_stdio().await?;
+        }
+        Command::DesktopServer { stdio: false } => {
+            anyhow::bail!("desktop-server requires --stdio");
         }
         Command::Brief {
             question,
