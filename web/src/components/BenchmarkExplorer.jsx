@@ -26,7 +26,6 @@ function toggleSet(current, value) {
   }
   return next;
 }
-
 export function BenchmarkExplorer() {
   const [datasetId, setDatasetId] = useState(datasets[0].id);
   const [xMetric, setXMetric] = useState("tokens");
@@ -111,7 +110,7 @@ export function BenchmarkExplorer() {
               rangeKind={dataset.rangeKind}
               contextLabel={overallView.label}
               description={overallView.description}
-              meta={`${overallView.scenarioCount ?? "Historical"} tasks · ${dataset.evidence.taskRuns} successful runs · ${coverageLabel(overallView.scenarioCount)}`}
+              meta={`${overallView.scenarioCount ?? "Historical"} tasks • ${dataset.evidence.taskRuns} successful runs • ${coverageLabel(overallView.scenarioCount)}`}
               wide
               showTooltip={false}
             />
@@ -147,7 +146,7 @@ export function BenchmarkExplorer() {
                       rangeKind={dataset.rangeKind}
                       contextLabel={view.label}
                       description={view.description}
-                      meta={`${view.scenarioCount} tasks · ${view.rows.reduce((sum, row) => sum + row.runs, 0)} successful runs · ${coverageLabel(view.scenarioCount)}`}
+                      meta={`${view.scenarioCount} tasks • ${view.rows.reduce((sum, row) => sum + row.runs, 0)} successful runs • ${coverageLabel(view.scenarioCount)}`}
                       compact
                     />
                   )}
@@ -219,3 +218,4 @@ export function BenchmarkExplorer() {
     </>
   );
 }
+

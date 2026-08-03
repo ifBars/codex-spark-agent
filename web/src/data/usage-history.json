@@ -4,6 +4,29 @@
   "availability": "unavailable",
   "reason": "No aggregate Spark usage history has been imported for this public benchmark build.",
   "generatedAt": null,
+  "source": {
+    "kind": "local_codex_session_history",
+    "network": false,
+    "codexHomeSource": "not-available"
+  },
+  "scope": {
+    "sinceDays": null,
+    "maxFiles": null
+  },
+  "scan": {
+    "filesDiscovered": 0,
+    "filesScanned": 0,
+    "filesTruncated": false,
+    "filesUnreadable": 0,
+    "malformedLines": 0,
+    "sessionsWithoutMetadata": 0,
+    "duplicateSessionFiles": 0,
+    "forkReplayedObservationsSkipped": 0,
+    "forkObservationsWithoutCumulativeEvidence": 0,
+    "cumulativeFallbackObservations": 0,
+    "counterResets": 0,
+    "partialObservations": 0
+  },
   "aggregate": null,
   "byDay": [],
   "byModel": [],
