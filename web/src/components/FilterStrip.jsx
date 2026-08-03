@@ -1,6 +1,6 @@
 import { Check, SlidersHorizontal } from "@phosphor-icons/react";
 import {
-  datasets,
+  benchmarkCohorts,
   reasoningOptions,
   runnerOptions,
   xMetrics,
@@ -25,8 +25,8 @@ function Toggle({ active, color, children, onClick }) {
 }
 
 export function FilterStrip({
-  datasetId,
-  onDatasetChange,
+  cohortId,
+  onCohortChange,
   xMetric,
   onXMetricChange,
   yMetric,
@@ -46,11 +46,11 @@ export function FilterStrip({
       </div>
 
       <label className="field-control">
-        <span>Dataset</span>
-        <select value={datasetId} onChange={(event) => onDatasetChange(event.target.value)}>
-          {datasets.map((dataset) => (
-            <option value={dataset.id} key={dataset.id}>
-              {dataset.label}
+        <span>Evidence cohort</span>
+        <select value={cohortId} onChange={(event) => onCohortChange(event.target.value)}>
+          {benchmarkCohorts.map((cohort) => (
+            <option value={cohort.id} key={cohort.id}>
+              {cohort.label}
             </option>
           ))}
         </select>

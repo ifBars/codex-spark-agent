@@ -2,8 +2,8 @@ import { useMemo, useState } from "react";
 import { ArrowRight, Flask, Info } from "@phosphor-icons/react";
 import usageHistory from "../data/usage-history.json";
 import {
+  benchmarkCohorts,
   coverageLabel,
-  datasets,
   reasoningOptions,
   runnerOptions,
 } from "../data/benchmarks.js";
@@ -27,14 +27,15 @@ function toggleSet(current, value) {
   return next;
 }
 export function BenchmarkExplorer() {
-  const [datasetId, setDatasetId] = useState(datasets[0].id);
+  const [cohortId, setCohortId] = useState(benchmarkCohorts[0].id);
   const [xMetric, setXMetric] = useState("tokens");
   const [yMetric, setYMetric] = useState("quality");
   const [enabledRunners, setEnabledRunners] = useState(new Set(runnerOptions.map((runner) => runner.id)));
   const [enabledReasoning, setEnabledReasoning] = useState(new Set(reasoningOptions));
   const [showRanges, setShowRanges] = useState(true);
 
-  const dataset = datasets.find((candidate) => candidate.id === datasetId) ?? datasets[0];
+  const dataset = benchmarkCohorts.find((candidate) => candidate.id === cohortId)
+    ?? benchmarkCohorts[0];
   const visibleViews = useMemo(
     () =>
       dataset.views.map((view) => ({
@@ -59,14 +60,14 @@ export function BenchmarkExplorer() {
         <main className="atlas-main">
           <header className="page-intro page-intro--atlas">
             <div>
-              <p className="page-intro__context">GPT-5.3 Codex Spark</p>
-              <h1>Capability Atlas</h1>
+              <p className="page-intro__context">Consolidated evidence catalog</p>
+              <h1>Spark Bench</h1>
               <p className="page-intro__summary">
-                Compare reasoning cost, quality, and completion across real-world benchmark families for the Spark harness and native Codex CLI.
+                Compare quality, token use, duration, and completion across one traceable benchmark catalog for the Spark harness and native Codex CLI.
               </p>
             </div>
             <div className="dataset-note">
-              <span>{dataset.date}</span>
+              <span>{dataset.label} · {dataset.date}</span>
               <strong>{overallView.sample ?? dataset.sample}</strong>
               <p>{overallView.description}</p>
             </div>
@@ -74,12 +75,10 @@ export function BenchmarkExplorer() {
 
           <EvidenceStrip evidence={dataset.evidence} />
 
-          <UsageEvidence history={usageHistory} />
-
           <FilterStrip
-            datasetId={datasetId}
-            onDatasetChange={(value) => {
-              setDatasetId(value);
+            cohortId={cohortId}
+            onCohortChange={(value) => {
+              setCohortId(value);
             }}
             xMetric={xMetric}
             onXMetricChange={setXMetric}
@@ -174,6 +173,8 @@ export function BenchmarkExplorer() {
             rangeKind={dataset.rangeKind}
             showRangeColumns={dataset.hasIntervals ?? true}
           />
+
+          <UsageEvidence history={usageHistory} />
         </main>
       </div>
 

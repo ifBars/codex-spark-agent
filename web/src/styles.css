@@ -617,11 +617,32 @@ a {
   letter-spacing: -0.01em;
 }
 
+.chart-region__eyebrow {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: var(--orange);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
 .chart-region__heading p,
 .ledger__heading p {
   margin: 0.3rem 0 0;
   color: var(--ink-muted);
   font-size: 0.75rem;
+}
+
+.chart-region__direction {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin-top: 0.65rem;
+  color: var(--ink-soft);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.62rem;
 }
 
 .chart-region__heading small {
