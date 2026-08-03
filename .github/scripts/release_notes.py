@@ -60,6 +60,8 @@ def read_checksum(path: Path) -> str:
 
 
 def asset_label(name: str) -> str:
+    if name.startswith("spark-bench-"):
+        return "Spark Bench static explorer"
     for target, label in TARGET_LABELS.items():
         if target in name:
             return label
@@ -93,6 +95,7 @@ def render_notes(
     assets: list[Asset],
     prior_tag: str | None,
     commits: list[str],
+    desktop_release_url: str | None,
 ) -> str:
     short_commit = commit[:12] if commit else "unknown"
     compare_link = (
@@ -115,6 +118,17 @@ def render_notes(
     else:
         lines.append("- Initial automated GitHub release for the current crate version.")
         lines.append("- Establishes version-bump driven release publishing for future updates.")
+
+    if desktop_release_url:
+        lines.extend(
+            [
+                "",
+                "## Spark Desktop",
+                "",
+                "The supported desktop app is the focused T3Code fork for Codex and Spark. "
+                f"Download [Spark Desktop]({desktop_release_url}).",
+            ]
+        )
 
     lines.extend(
         [
@@ -172,6 +186,7 @@ def main() -> None:
     parser.add_argument("--run-id", default="")
     parser.add_argument("--asset-dir", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--desktop-release-url")
     args = parser.parse_args()
 
     prior_tag, commits = commit_subjects(args.tag, args.commit)
@@ -185,6 +200,7 @@ def main() -> None:
         assets=assets,
         prior_tag=prior_tag,
         commits=commits,
+        desktop_release_url=args.desktop_release_url,
     )
     args.output.write_text(notes, encoding="utf-8", newline="\n")
 

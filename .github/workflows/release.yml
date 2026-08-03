@@ -229,6 +229,7 @@ jobs:
             --commit "$SHA" \
             --run-id "$RUN_ID" \
             --asset-dir dist \
+            --desktop-release-url "https://github.com/ifBars/t3code/releases/tag/v${VERSION}" \
             --output release-notes.md
 
       - name: Create release
