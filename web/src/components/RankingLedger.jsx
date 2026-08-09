@@ -1,16 +1,18 @@
+import { useId } from "react";
 import { formatMetric, metricRange, sentenceCase } from "../lib/format.js";
 import { xMetrics, yMetrics } from "../data/benchmarks.js";
 
-export function RankingLedger({ rows, xMetric, yMetric, hasIntervals = true }) {
+export function RankingLedger({ rows, xMetric, yMetric }) {
+  const titleId = useId();
   const ranked = [...rows].sort(
     (left, right) => right[yMetrics[yMetric].key] - left[yMetrics[yMetric].key],
   );
 
   return (
-    <aside className="ranking-ledger" aria-labelledby="ranking-title">
+    <aside className="ranking-ledger" aria-labelledby={titleId}>
       <header>
         <div>
-          <h2 id="ranking-title">Overall ranking</h2>
+          <h2 id={titleId}>Overall ranking</h2>
           <p>Sorted by {yMetrics[yMetric].label.toLowerCase()}.</p>
         </div>
       </header>
@@ -46,14 +48,6 @@ export function RankingLedger({ rows, xMetric, yMetric, hasIntervals = true }) {
           );
         })}
       </ol>
-
-      <div className="ranking-ledger__method">
-        <strong>Methodology status</strong>
-        <span>Measured task runs</span>
-        <span>Scenario-balanced means</span>
-        <span>Failed attempts excluded</span>
-        <span>{hasIntervals ? "95% confidence ranges" : "No interval published"}</span>
-      </div>
     </aside>
   );
 }

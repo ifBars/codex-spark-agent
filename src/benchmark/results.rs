@@ -849,11 +849,21 @@ fn unix_seconds_to_millis(seconds: Option<&Value>) -> Option<Value> {
 
 fn input_freshness_summary(inputs: &Value) -> Value {
     let values = input_report_modified_values(inputs);
+    let grouped_reasoning = inputs
+        .get("group_by_reasoning")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let maximum_span_ms = if grouped_reasoning {
+        6 * 60 * 60 * 1000
+    } else {
+        60 * 60 * 1000
+    };
     if values.is_empty() {
         return json!({
             "input_count": 0,
             "modified_span_ms": 0u64,
             "modified_span_label": "n/a",
+            "maximum_span_ms": maximum_span_ms,
             "mixed_input_warning": false,
         });
     }
@@ -866,7 +876,8 @@ fn input_freshness_summary(inputs: &Value) -> Value {
         "latest_modified_unix_ms": latest,
         "modified_span_ms": span,
         "modified_span_label": format_duration_ms(span),
-        "mixed_input_warning": span > 60 * 60 * 1000,
+        "maximum_span_ms": maximum_span_ms,
+        "mixed_input_warning": span > maximum_span_ms,
     })
 }
 

@@ -1,7 +1,7 @@
 import { Fragment, useId } from "react";
 import { ArrowSquareOut } from "@phosphor-icons/react";
 import { xMetrics, yMetrics } from "../data/benchmarks.js";
-import { formatMetric, sentenceCase } from "../lib/format.js";
+import { formatMetric, metricRange, sentenceCase } from "../lib/format.js";
 
 export function ResultsLedger({
   rows,
@@ -40,12 +40,12 @@ export function ResultsLedger({
               <th>{xMetrics[xMetric].shortLabel}</th>
               {showRangeColumns ? (
                 <Fragment>
-                  <th>Quality range</th>
-                  <th>Token range</th>
+                  <th>{yMetrics[yMetric].shortLabel} range</th>
+                  <th>{xMetrics[xMetric].shortLabel} range</th>
                 </Fragment>
               ) : null}
-              <th>Runs</th>
-              <th>Excluded</th>
+              <th>Passed</th>
+              <th>Failed</th>
             </tr>
           </thead>
           <tbody>
@@ -66,16 +66,20 @@ export function ResultsLedger({
                 </td>
                 {showRangeColumns ? (
                   <Fragment>
-                    <td data-label="Quality range" className="numeric">
-                      {formatMetric("quality", row.qualityMin)}–{formatMetric("quality", row.qualityMax)}
+                    <td data-label={`${yMetrics[yMetric].shortLabel} range`} className="numeric">
+                      {metricRange(row, yMetric, yMetrics)
+                        ? metricRange(row, yMetric, yMetrics).map((value) => formatMetric(yMetric, value)).join("–")
+                        : "—"}
                     </td>
-                    <td data-label="Token range" className="numeric">
-                      {formatMetric("tokens", row.tokensMin)}–{formatMetric("tokens", row.tokensMax)}
+                    <td data-label={`${xMetrics[xMetric].shortLabel} range`} className="numeric">
+                      {metricRange(row, xMetric, xMetrics)
+                        ? metricRange(row, xMetric, xMetrics).map((value) => formatMetric(xMetric, value)).join("–")
+                        : "—"}
                     </td>
                   </Fragment>
                 ) : null}
-                <td data-label="Runs" className="numeric">{row.runs}</td>
-                <td data-label="Excluded" className="numeric">{row.excludedRuns ?? 0}</td>
+                <td data-label="Passed" className="numeric">{row.runs}</td>
+                <td data-label="Failed" className="numeric">{row.excludedRuns ?? 0}</td>
               </tr>
             ))}
           </tbody>

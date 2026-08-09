@@ -162,16 +162,30 @@ spark profile-benchmark coding --reasoning-effort medium --repeat 3
 spark codex-cli-benchmark quantitative --reasoning-effort medium --repeat 3
 ```
 
-The published web views are rebuilt from reviewed scenario rows with Bun:
+Publish the reviewed reasoning sweep with Bun:
 
 ```powershell
-bun scripts/build_benchmark_views.mjs
+bun scripts/publish_reasoning_sweep.mjs `
+  --input .spark-profile/benchmarks/real-world-comparison-<stamp>.json `
+  --output-json web/src/data/reasoning-sweep.json `
+  --output-csv docs/benchmarks/reasoning-sweep-current-2026-08-09.csv `
+  --output-summary docs/benchmarks/reasoning-sweep-current-2026-08-09.md `
+  --expected-repeats 2 `
+  --expected-scenarios 12 `
+  --date "August 9, 2026"
 ```
 
-The view specification includes the category membership and measured scenario catalog used by the web task drill-down. Published comparisons use `benchmark-compare --successful-only`; failed task attempts and provider/API failures are excluded before aggregation and reported separately in the evidence contract. The view specification, evidence manifest, generated category CSV, and web JSON are checked in so the aggregation and displayed provenance are reviewable without rerunning provider benchmarks. Verify that all generated artifacts are current with:
+Generate the input with `benchmark-compare --group-by-reasoning` and do not pass
+`--successful-only`. Outcome quality averages every weighted validator score,
+including partial scores from failed tasks; pass rate reports full task success.
+Provider/API failures are filtered as infrastructure and block publication.
+The generated CSV, summary, and web JSON are checked in so the displayed data
+can be reviewed without rerunning provider benchmarks. Validate the data adapter
+with:
 
 ```powershell
-bun scripts/build_benchmark_views.mjs --check
+cd web
+bun run test:data
 ```
 
 The quick comparison script preflights native Codex before spending a Spark run and writes resumable status artifacts when the provider is unavailable. Comparison reports keep provider failures separate from task failures and record runner versions, scenario coverage, and input freshness.

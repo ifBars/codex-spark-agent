@@ -1,207 +1,217 @@
-import benchmarkEvidenceData from "./benchmark-evidence.json";
-import expandedReasoningData from "./expanded-reasoning-views.json";
-import recentBenchmarksData from "./recent-benchmarks.json";
+import reasoningSweepData from "./reasoning-sweep.json";
 
 const repositoryBlobRoot = "https://github.com/ifBars/codex-spark-agent/blob/main";
+const dataset = reasoningSweepData.dataset;
 
 const runnerMeta = {
   spark: { id: "spark", name: "Spark harness", shortName: "Spark", color: "#1769d2" },
   codex: { id: "codex", name: "Codex CLI", shortName: "Codex CLI", color: "#e34a18" },
 };
 
-function artifactUrl(path) {
-  return `${repositoryBlobRoot}/${path}`;
-}
-
-function evidenceFor(datasetId) {
-  const evidence = benchmarkEvidenceData.datasets.find((dataset) => dataset.id === datasetId);
-  if (!evidence) throw new Error(`Missing benchmark evidence for ${datasetId}`);
-  return {
-    ...evidence,
-    pendingScenarios: evidence.pendingScenarios.map((scenario) => ({
-      ...scenario,
-      url: artifactUrl(scenario.evidencePath),
-    })),
-    sources: evidence.sources.map((source) => ({
-      ...source,
-      url: artifactUrl(source.path),
-    })),
-  };
-}
-
-function point(runner, reasoning, values) {
-  const { runnerLabel, runnerName, runnerShortName, ...metrics } = values;
-  return {
-    runner,
-    runnerName: runnerName ?? runnerLabel ?? runnerMeta[runner].name,
-    runnerShortName: runnerShortName ?? runnerMeta[runner].shortName,
-    color: runnerMeta[runner].color,
-    reasoning,
-    ...metrics,
-  };
-}
-
-const measuredExpandedViews = expandedReasoningData.views.map((view) => ({
-  ...view,
-  rows: view.rows.map(({ runner, reasoning, ...values }) =>
-    point(runner, reasoning, values),
-  ),
-}));
-const expandedScenarioViews = expandedReasoningData.scenarioViews.map((view) => ({
-  ...view,
-  rows: view.rows.map(({ runner, reasoning, ...values }) =>
-    point(runner, reasoning, values),
-  ),
-}));
-
-const expandedEvidence = evidenceFor("expanded-reasoning-suite");
-const baselineEvidence = evidenceFor("success-baseline");
-const frontierScenarios = expandedEvidence.pendingScenarios.filter((scenario) =>
-  scenario.categories.includes("frontier"));
-const frontierView = {
-  id: "frontier",
-  label: "Frontier",
-  status: "pending",
-  wide: true,
-  description:
-    "Two deliberately out-of-reach transfer and consistency tasks are ready, but quota-limited attempts are excluded until a balanced successful matrix can be measured.",
-  scenarioCount: frontierScenarios.length,
-  scenarios: frontierScenarios.map((scenario) => scenario.id),
-  scenarioDetails: frontierScenarios,
-  targetCeiling: 65,
-  runCount: null,
-  sample: "2 frontier tasks · calibration pending",
-  rows: [],
-};
-const expandedViews = [...measuredExpandedViews, frontierView];
-
-const datasetDefinitions = [
+const taskTypes = [
   {
-    id: "expanded-reasoning-suite",
-    label: "Expanded reasoning suite",
-    shortLabel: "Expanded",
-    date: expandedEvidence.date,
-    sample: `${expandedEvidence.taskRuns} successful task runs`,
-    rangeKind: "95% CI across scenario means",
-    source: expandedEvidence.sources[0].url,
-    description:
-      `A ${expandedEvidence.taskRuns}-run successful-only matrix with scenario-balanced averages; ${expandedEvidence.taskFailureExclusions} failed task attempts and all provider/API failures are excluded.`,
-    evidence: expandedEvidence,
-    views: expandedViews,
-    scenarioViews: expandedScenarioViews,
-    rows: expandedViews[0].rows,
+    id: "code-changes",
+    label: "Code changes",
+    description: "Implementation and repair tasks with behavioral validation.",
+    scenarios: [
+      "config-migration",
+      "multi-module-bugfix",
+      "stateful-reconciliation-bugfix",
+      "feature-rollout-consistency-bugfix",
+    ],
   },
   {
-    id: "success-baseline",
-    label: "Eight-task baseline",
-    shortLabel: "Baseline",
-    date: baselineEvidence.date,
-    sample: `${baselineEvidence.taskRuns} successful task runs`,
-    rangeKind: "95% confidence interval",
-    source: baselineEvidence.sources[0].url,
-    description:
-      "The earlier paired matrix reports successful-row means across eight real-world tasks. It is useful for comparison, but its success-only quality scores are visibly saturated.",
-    evidence: baselineEvidence,
-    rows: [
-      point("spark", "low", {
-        quality: 99.04, qualityMin: 97.67, qualityMax: 100,
-        tokens: 80538, tokensMin: 71365, tokensMax: 89711,
-        duration: 11, durationMin: 9.3, durationMax: 12.7,
-        successRate: 100, runs: 23, excludedRuns: 1,
-      }),
-      point("spark", "medium", {
-        quality: 99.08, qualityMin: 97.77, qualityMax: 100,
-        tokens: 85762, tokensMin: 73374, tokensMax: 98150,
-        duration: 12.2, durationMin: 9.7, durationMax: 14.7,
-        successRate: 100, runs: 24, excludedRuns: 0,
-      }),
-      point("spark", "high", {
-        quality: 99.08, qualityMin: 97.77, qualityMax: 100,
-        tokens: 86065, tokensMin: 74150, tokensMax: 97980,
-        duration: 12.5, durationMin: 10.5, durationMax: 14.5,
-        successRate: 100, runs: 24, excludedRuns: 0,
-      }),
-      point("codex", "low", {
-        quality: 94.17, qualityMin: 91.31, qualityMax: 97.03,
-        tokens: 146390, tokensMin: 127094, tokensMax: 165686,
-        duration: 25.3, durationMin: 20.3, durationMax: 30.3,
-        successRate: 100, runs: 23, excludedRuns: 1,
-      }),
-      point("codex", "medium", {
-        quality: 97.22, qualityMin: 95.03, qualityMax: 99.41,
-        tokens: 149439, tokensMin: 109441, tokensMax: 189437,
-        duration: 27.3, durationMin: 21.7, durationMax: 32.9,
-        successRate: 100, runs: 23, excludedRuns: 1,
-      }),
-      point("codex", "high", {
-        quality: 97.83, qualityMin: 95.72, qualityMax: 99.94,
-        tokens: 135090, tokensMin: 119621, tokensMax: 150559,
-        duration: 21.3, durationMin: 19.1, durationMax: 23.5,
-        successRate: 100, runs: 23, excludedRuns: 1,
-      }),
+    id: "quantitative-analysis",
+    label: "Quantitative analysis",
+    description: "Tasks that require exact calculations from several inputs.",
+    scenarios: [
+      "ops-report",
+      "multi-hop-analysis",
+      "inventory-rebalance-plan",
+      "experiment-rollout-audit",
+    ],
+  },
+  {
+    id: "investigation",
+    label: "Investigation",
+    description: "Evidence gathering, cross-file reasoning, and grounded conclusions.",
+    scenarios: [
+      "technical-essay",
+      "multi-hop-analysis",
+      "policy-support-agent",
+      "experiment-rollout-audit",
+    ],
+  },
+  {
+    id: "terminal-operations",
+    label: "Terminal and operations",
+    description: "Repair and operational reporting through a working project environment.",
+    scenarios: ["terminal-repair", "ops-report", "inventory-rebalance-plan"],
+  },
+  {
+    id: "writing-configuration",
+    label: "Writing and configuration",
+    description: "Structured writing and coordinated configuration changes.",
+    scenarios: ["technical-essay", "config-migration", "policy-support-agent"],
+  },
+  {
+    id: "stateful-policy",
+    label: "Stateful systems and policy",
+    description: "Tasks where ordering, isolation, or policy constraints determine correctness.",
+    scenarios: [
+      "stateful-reconciliation-bugfix",
+      "feature-rollout-consistency-bugfix",
+      "frontier-rule-transfer",
+      "policy-support-agent",
     ],
   },
 ];
 
-const developmentCohortDefinitions = recentBenchmarksData.datasets.map((definition) => {
-  const evidence = evidenceFor(definition.sourceEvidenceId);
-  const rows = definition.rows.map(({ runner, reasoning, ...values }) =>
-    point(runner, reasoning, {
-      ...values,
-      runnerName: definition.runnerNames?.[runner],
-    }),
-  );
-  const scenarioViews = definition.scenarioViews.map((view) => ({
-    ...view,
-    scenarioCount: 1,
-    runCount: null,
-    sample: "One successful run per configuration; no interval published",
-    rows: view.rows.map(({ runner, reasoning, ...values }) =>
-      point(runner, reasoning, {
-        ...values,
-        runnerName: definition.runnerNames?.[runner],
-      }),
-    ),
-  }));
+const frontier = {
+  id: "frontier",
+  label: "Frontier",
+  description: "Harder transfer and consistency tasks, shown separately from task-type averages.",
+  scenarios: ["feature-rollout-consistency-bugfix", "frontier-rule-transfer"],
+  wide: true,
+};
 
+function artifactUrl(path) {
+  return `${repositoryBlobRoot}/${path}`;
+}
+
+function mean(values) {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function round(value, digits = 2) {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function interval(values, bounds = null) {
+  if (values.length === 0) return [null, null];
+  const average = mean(values);
+  if (values.length === 1) return [average, average];
+  const variance = values.reduce((sum, value) => sum + ((value - average) ** 2), 0)
+    / (values.length - 1);
+  const margin = 1.96 * Math.sqrt(variance / values.length);
+  const minimum = bounds ? Math.max(bounds[0], average - margin) : average - margin;
+  const maximum = bounds ? Math.min(bounds[1], average + margin) : average + margin;
+  return [round(minimum), round(maximum)];
+}
+
+function aggregateRows(scenarios) {
+  return ["spark", "codex"].flatMap((runner) =>
+    ["low", "medium", "high"].map((reasoning) => {
+      const attempts = dataset.attempts.filter(
+        (row) => row.runner === runner
+          && row.reasoning === reasoning
+          && scenarios.includes(row.scenario),
+      );
+      if (attempts.length !== scenarios.length) {
+        throw new Error(`Incomplete ${runner}/${reasoning} data for ${scenarios.join(", ")}`);
+      }
+      const scored = attempts.filter((row) => Number.isFinite(row.quality));
+      if (scored.length === 0) {
+        throw new Error(`No validated outcomes for ${runner}/${reasoning}`);
+      }
+      const passed = attempts.reduce((sum, row) => sum + row.passed, 0);
+      const totalAttempts = attempts.reduce((sum, row) => sum + row.attempts, 0);
+      const quality = mean(scored.map((row) => row.quality));
+      const tokens = mean(scored.map((row) => row.tokens));
+      const duration = mean(scored.map((row) => row.duration));
+      const [qualityMin, qualityMax] = interval(scored.map((row) => row.quality), [0, 100]);
+      const [tokensMin, tokensMax] = interval(scored.map((row) => row.tokens), [0, Infinity]);
+      const [durationMin, durationMax] = interval(scored.map((row) => row.duration), [0, Infinity]);
+      return {
+        runner,
+        runnerName: dataset.runnerNames[runner] ?? runnerMeta[runner].name,
+        runnerShortName: runnerMeta[runner].shortName,
+        color: runnerMeta[runner].color,
+        reasoning,
+        runs: passed,
+        successfulRuns: passed,
+        excludedRuns: totalAttempts - passed,
+        quality: round(quality),
+        qualityMin,
+        qualityMax,
+        commonScenarioQuality: dataset.rows.find(
+          (row) => row.runner === runner && row.reasoning === reasoning,
+        )?.commonScenarioQuality ?? null,
+        completion: round(mean(scored.map((row) => row.completion))),
+        process: round(mean(scored.map((row) => row.process))),
+        tokens: Math.round(tokens),
+        tokensMin: Math.round(tokensMin),
+        tokensMax: Math.round(tokensMax),
+        duration: round(duration),
+        durationMin,
+        durationMax,
+        successRate: round((passed / totalAttempts) * 100),
+        attemptPassRate: round((passed / totalAttempts) * 100),
+        passRate: round((passed / totalAttempts) * 100),
+      };
+    }));
+}
+
+function makeView(definition) {
   return {
     ...definition,
-    evidence,
-    source: evidence.sources[0].url,
-    rows,
-    views: [{
-      id: "overall",
-      label: "Overall",
-      description: definition.description,
-      sample: definition.sample,
-      scenarioCount: evidence.scenarioCount,
-      runCount: definition.rows[0]?.runs ?? null,
-      rows,
-    }],
-    scenarioViews,
+    scenarioCount: definition.scenarios.length,
+    hasIntervals: true,
+    rows: aggregateRows(definition.scenarios),
   };
+}
+
+const overall = makeView({
+  id: "overall",
+  label: "Overall",
+  description: "Scenario-balanced results across the complete corrected sweep.",
+  scenarios: dataset.attempts
+    .map((row) => row.scenario)
+    .filter((scenario, index, scenarios) => scenarios.indexOf(scenario) === index),
 });
 
-export const benchmarkCohorts = [...datasetDefinitions, ...developmentCohortDefinitions].map((dataset) => ({
-  ...dataset,
-  views:
-    dataset.views ??
-    [{
-      id: "overall",
-      label: "Overall",
-      description: dataset.description,
-      sample: dataset.sample,
-      scenarioCount: dataset.evidence.scenarioCount,
-      runCount: dataset.rows[0]?.runs ?? null,
-      rows: dataset.rows,
-    }],
-}));
+const views = [overall, ...taskTypes.map(makeView), makeView(frontier)];
+const source = artifactUrl(dataset.sourcePath);
+const evidence = {
+  status: "Paired reasoning sweep",
+  date: dataset.date,
+  scenarioCount: dataset.scenarioCount,
+  taskRuns: dataset.validatedAttempts,
+  attemptedTaskRuns: dataset.totalAttempts,
+  taskFailureExclusions: dataset.failedAttempts,
+  taskFailuresRetained: true,
+  providerExclusions: dataset.providerExclusions,
+  pendingScenarioCount: 0,
+  pendingScenarios: [],
+  note: "Outcome quality includes weighted validator scores from every non-infrastructure attempt. Tool-path compliance remains a separate process score.",
+  sources: [{ label: "Attempt outcomes", path: dataset.sourcePath, url: source }],
+};
+
+export const benchmarkCohorts = [{
+  id: dataset.id,
+  label: "Current reasoning sweep",
+  shortLabel: "Current",
+  date: dataset.date,
+  sample: `${dataset.totalAttempts} paired attempts`,
+  rangeKind: "95% interval across scenario means",
+  source,
+  description: `${dataset.scenarioCount} tasks at low, medium, and high reasoning, repeated ${dataset.expectedRepeats} times for each runner.`,
+  evidence,
+  views,
+  scenarioViews: [],
+  rows: overall.rows,
+  attempts: dataset.attempts,
+  commonScenarioIds: dataset.commonScenarioIds,
+  expectedRepeats: dataset.expectedRepeats,
+}];
+
+export const frontierComparison = null;
 
 export const datasets = [{
   id: "spark-bench",
   label: "Spark Bench",
-  description:
-    "One benchmark catalog with separate evidence cohorts so incompatible runs remain traceable instead of being averaged together.",
+  description: "Measured outcome quality, reliability, cost, and process behavior.",
   cohorts: benchmarkCohorts,
 }];
 
@@ -219,21 +229,25 @@ export function coverageLabel(scenarioCount) {
 export const xMetrics = {
   tokens: {
     key: "tokens", minKey: "tokensMin", maxKey: "tokensMax",
-    label: "Total API tokens", shortLabel: "Tokens",
+    label: "Average total API tokens", shortLabel: "Tokens",
   },
   duration: {
     key: "duration", minKey: "durationMin", maxKey: "durationMax",
-    label: "Duration", shortLabel: "Time",
+    label: "Average task duration", shortLabel: "Time",
   },
 };
 
 export const yMetrics = {
   quality: {
     key: "quality", minKey: "qualityMin", maxKey: "qualityMax",
-    label: "Weighted quality", shortLabel: "Quality",
+    label: "Validated outcome quality", shortLabel: "Quality",
   },
   successRate: {
     key: "successRate", minKey: null, maxKey: null,
-    label: "Full-pass rate", shortLabel: "Pass rate",
+    label: "Task pass rate", shortLabel: "Pass rate",
+  },
+  attemptPassRate: {
+    key: "attemptPassRate", minKey: null, maxKey: null,
+    label: "Task pass rate", shortLabel: "Pass rate",
   },
 };

@@ -306,6 +306,317 @@ pub(crate) fn profile_scenario_validation_checks(
                 ],
             },
         ],
+        ProfileScenarioKind::TechnicalEssay => &[
+            ProfileScenarioValidationCheck {
+                name: "required title",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'essay.md' -Raw; if ($content -notlike '*Operational Visibility Is a Product Feature*') { throw 'missing required title' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "source citations",
+                weight: 30,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'essay.md' -Raw; foreach ($term in @('[S1]','[S2]','[S3]')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "minimum length",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'essay.md' -Raw; $words = @($content -split '\\s+' | Where-Object { $_ }); if ($words.Count -lt 350) { throw \"essay too short: $($words.Count) words\" }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "section structure",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'essay.md' -Raw; $headings = @($content -split \"`r?`n\" | Where-Object { $_ -like '## *' }); if ($headings.Count -lt 2) { throw 'missing section headings' }",
+                ],
+            },
+        ],
+        ProfileScenarioKind::ConfigMigration => &[
+            ProfileScenarioValidationCheck {
+                name: "schema version",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $json = Get-Content -LiteralPath 'config/app.json' -Raw | ConvertFrom-Json; if ($json.schemaVersion -ne 2) { throw 'schemaVersion not 2' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "authentication migration",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $json = Get-Content -LiteralPath 'config/app.json' -Raw | ConvertFrom-Json; if ($json.authentication.method -ne 'password') { throw 'authentication.method not preserved' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "retry migration",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $json = Get-Content -LiteralPath 'config/app.json' -Raw | ConvertFrom-Json; if ($json.retry.maxAttempts -ne 3) { throw 'retry.maxAttempts not migrated' }; if ($json.retry.backoffMs -ne 250) { throw 'retry.backoffMs not preserved' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "stale contract removed",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $all = (Get-Content -LiteralPath 'src/config.ts' -Raw) + (Get-Content -LiteralPath 'docs/config.md' -Raw) + (Get-Content -LiteralPath 'config/app.json' -Raw); foreach ($term in @('authMode','retries: number','retry.retries')) { if ($all -like \"*$term*\") { throw \"stale term $term\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "new contract documented",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $all = (Get-Content -LiteralPath 'src/config.ts' -Raw) + (Get-Content -LiteralPath 'docs/config.md' -Raw) + (Get-Content -LiteralPath 'config/app.json' -Raw); foreach ($term in @('authentication','method','maxAttempts','schemaVersion: 2')) { if ($all -notlike \"*$term*\") { throw \"missing $term\" } }",
+                ],
+            },
+        ],
+        ProfileScenarioKind::OpsReport => &[
+            ProfileScenarioValidationCheck {
+                name: "ticket totals",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $m = Get-Content -LiteralPath 'metrics.json' -Raw | ConvertFrom-Json; if ($m.totalTickets -ne 8 -or $m.openTickets -ne 5) { throw 'ticket totals are incorrect' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "open priority count",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $m = Get-Content -LiteralPath 'metrics.json' -Raw | ConvertFrom-Json; if ($m.p1Open -ne 2) { throw 'p1Open must be 2' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "average open duration",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $m = Get-Content -LiteralPath 'metrics.json' -Raw | ConvertFrom-Json; if ([math]::Abs([double]$m.averageOpenMinutes - 51.4) -gt 0.01) { throw 'averageOpenMinutes must be 51.4' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "highest risk team",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $r = Get-Content -LiteralPath 'report.md' -Raw; $p = (($r -replace '[*`#_]', '') -replace '\\s+', ' ').Trim(); if ($p -notmatch '(?i)(highest-risk team\\s*(?:-|:)?\\s*team\\s*:\\s*billing|highest-risk team\\s*(:|-|is)?\\s*billing|billing\\s+(is\\s+)?(the\\s+)?highest-risk team|billing\\s+team\\s+is\\s+highest\\s+risk)') { throw 'billing must be highest-risk team' }; if ($p -match '(?i)(highest-risk team\\s*(?:-|:)?\\s*team\\s*:\\s*api|highest-risk team\\s*(:|-|is)?\\s*api|api\\s+(is\\s+)?(the\\s+)?highest-risk team|api\\s+team\\s+is\\s+highest\\s+risk)') { throw 'api incorrectly identified as highest-risk team' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "risk evidence",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $r = Get-Content -LiteralPath 'report.md' -Raw; if ($r -notmatch '95') { throw 'missing 95 minute risk evidence' }",
+                ],
+            },
+        ],
+        ProfileScenarioKind::MultiModuleBugfix => &[
+            ProfileScenarioValidationCheck {
+                name: "final invoice rounding",
+                weight: 33,
+                program: "bun",
+                args: &[
+                    "-e",
+                    "import { buildInvoiceLines } from './src/invoice.ts'; import { invoiceTotalCents } from './src/total.ts'; const lines = buildInvoiceLines([{ sku: 'a', quantity: 1, unitPriceCents: 20.5 }, { sku: 'b', quantity: 1, unitPriceCents: 20.5 }]); if (invoiceTotalCents(lines, 0, 0) !== 41) throw new Error('final invoice rounding failed');",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "discount before tax",
+                weight: 33,
+                program: "bun",
+                args: &[
+                    "-e",
+                    "import { buildInvoiceLines } from './src/invoice.ts'; import { invoiceTotalCents } from './src/total.ts'; const lines = buildInvoiceLines([{ sku: 'a', quantity: 1, unitPriceCents: 1000 }]); if (invoiceTotalCents(lines, 100, 1000) !== 990) throw new Error('discount before tax failed');",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "fractional precision",
+                weight: 34,
+                program: "bun",
+                args: &[
+                    "-e",
+                    "import { buildInvoiceLines } from './src/invoice.ts'; import { invoiceTotalCents } from './src/total.ts'; const lines = buildInvoiceLines([{ sku: 'a', quantity: 3, unitPriceCents: 333.34 }, { sku: 'b', quantity: 1, unitPriceCents: 10.01 }]); if (invoiceTotalCents(lines, 100, 1000) !== 1001) throw new Error('fractional precision failed');",
+                ],
+            },
+        ],
+        ProfileScenarioKind::TerminalRepair => &[
+            ProfileScenarioValidationCheck {
+                name: "configured data path",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $s = Get-Content -LiteralPath 'config/settings.json' -Raw | ConvertFrom-Json; if ($s.dataPath -ne 'data/report.csv') { throw 'settings.json dataPath is incorrect' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "command completes",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $out = bun run start; if ($LASTEXITCODE -ne 0) { throw 'bun run start failed' }; if (($out -join \"`n\") -notlike '*REPORT OK*') { throw 'missing REPORT OK' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "row count",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $out = bun run start; if ($LASTEXITCODE -ne 0) { throw 'bun run start failed' }; if (($out -join \"`n\") -notlike '*rows=5*') { throw 'missing rows=5' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "top team",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $out = bun run start; if ($LASTEXITCODE -ne 0) { throw 'bun run start failed' }; if (($out -join \"`n\") -notlike '*top=api*') { throw 'missing top=api' }",
+                ],
+            },
+        ],
+        ProfileScenarioKind::MultiHopAnalysis => &[
+            ProfileScenarioValidationCheck {
+                name: "product identification",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $a = Get-Content -LiteralPath 'answer.json' -Raw | ConvertFrom-Json; if ($a.product -ne 'Atlas') { throw 'product must be Atlas' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "region identification",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $a = Get-Content -LiteralPath 'answer.json' -Raw | ConvertFrom-Json; if ($a.region -ne 'EMEA') { throw 'region must be EMEA' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "net revenue calculation",
+                weight: 35,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $a = Get-Content -LiteralPath 'answer.json' -Raw | ConvertFrom-Json; if ([math]::Abs([decimal]$a.netRevenue - 180) -gt 0.001) { throw 'netRevenue must be 180' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "grounded explanation",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $e = Get-Content -LiteralPath 'answer.md' -Raw; foreach ($term in @('A1','A4','180')) { if ($e -notlike \"*$term*\") { throw \"answer.md missing $term\" } }",
+                ],
+            },
+        ],
+        ProfileScenarioKind::PolicySupportAgent => &[
+            ProfileScenarioValidationCheck {
+                name: "order identity",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $r = Get-Content -LiteralPath 'resolution.json' -Raw | ConvertFrom-Json; if ($r.orderId -ne '5591') { throw 'orderId must be 5591' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "refund approval",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $r = Get-Content -LiteralPath 'resolution.json' -Raw | ConvertFrom-Json; if ($r.refundApproved -ne $true) { throw 'refundApproved must be true' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "refund amount",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $r = Get-Content -LiteralPath 'resolution.json' -Raw | ConvertFrom-Json; if ([math]::Abs([decimal]$r.refundAmount - 48.5) -gt 0.001) { throw 'refundAmount must be 48.5' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "refund resolution",
+                weight: 25,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $r = Get-Content -LiteralPath 'resolution.json' -Raw | ConvertFrom-Json; if ($r.refundMethod -ne 'store_credit') { throw 'refundMethod must be store_credit' }; if ($r.reasonCode -ne 'damaged_on_arrival') { throw 'reasonCode must be damaged_on_arrival' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "policy citations",
+                weight: 20,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $c = @((Get-Content -LiteralPath 'resolution.json' -Raw | ConvertFrom-Json).policyCitations); foreach ($section in @('S3','S4')) { if ($c -notcontains $section) { throw \"policyCitations missing $section\" } }",
+                ],
+            },
+        ],
         _ => &[],
     }
 }
@@ -559,6 +870,34 @@ pub(crate) fn profile_scenario_validation_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn granular_validation_weights_cover_the_full_quality_score() {
+        let scenarios = [
+            ProfileScenarioKind::TechnicalEssay,
+            ProfileScenarioKind::ConfigMigration,
+            ProfileScenarioKind::OpsReport,
+            ProfileScenarioKind::MultiModuleBugfix,
+            ProfileScenarioKind::TerminalRepair,
+            ProfileScenarioKind::MultiHopAnalysis,
+            ProfileScenarioKind::PolicySupportAgent,
+            ProfileScenarioKind::StatefulReconciliationBugfix,
+            ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
+            ProfileScenarioKind::FrontierRuleTransfer,
+            ProfileScenarioKind::InventoryRebalancePlan,
+            ProfileScenarioKind::ExperimentRolloutAudit,
+        ];
+
+        for scenario in scenarios {
+            let checks = profile_scenario_validation_checks(scenario);
+            assert!(!checks.is_empty(), "{scenario:?} has no quality checks");
+            assert_eq!(
+                checks.iter().map(|check| check.weight).sum::<u32>(),
+                100,
+                "{scenario:?} quality weights must total 100"
+            );
+        }
+    }
 
     #[test]
     fn powershell_validators_use_the_platform_executable_name() {

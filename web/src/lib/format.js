@@ -1,7 +1,8 @@
 export function formatMetric(metric, value, compact = false) {
   if (metric === "tokens") return `${(value / 1000).toFixed(compact ? 0 : 1)}k`;
   if (metric === "duration") return `${value.toFixed(compact ? 0 : 1)}s`;
-  return `${value.toFixed(value % 1 === 0 ? 0 : 1)}${metric === "successRate" ? "%" : ""}`;
+  const isPercentage = metric === "successRate" || metric === "attemptPassRate";
+  return `${value.toFixed(value % 1 === 0 ? 0 : 1)}${isPercentage ? "%" : ""}`;
 }
 
 export function metricRange(row, metric, definitions) {

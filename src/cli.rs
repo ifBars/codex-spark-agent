@@ -868,6 +868,7 @@ impl ProfileBenchmarkSuiteKind {
                 ProfileScenarioKind::RustNotesTuiScaffold,
                 ProfileScenarioKind::StatefulReconciliationBugfix,
                 ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
+                ProfileScenarioKind::FrontierRuleTransfer,
             ],
             Self::Coding => &[
                 ProfileScenarioKind::MultiFilePatch,
@@ -996,206 +997,63 @@ mod benchmark_suite_tests {
     }
 
     #[test]
-    fn published_reasoning_views_align_with_runner_category_suites() {
-        let value: serde_json::Value = serde_json::from_str(include_str!(
-            "../docs/benchmarks/reasoning-benchmark-views-2026-07-26.json"
-        ))
-        .expect("view spec should be valid JSON");
-        let views = value["views"].as_array().expect("views array");
-        for (view_id, suite) in [
-            ("coding", ProfileBenchmarkSuiteKind::Coding),
-            ("math-data", ProfileBenchmarkSuiteKind::Quantitative),
-            ("analysis-research", ProfileBenchmarkSuiteKind::Analysis),
-            ("terminal-operations", ProfileBenchmarkSuiteKind::Operations),
-            ("writing-configuration", ProfileBenchmarkSuiteKind::Writing),
-        ] {
-            let view = views
-                .iter()
-                .find(|view| view["id"].as_str() == Some(view_id))
-                .unwrap_or_else(|| panic!("missing view {view_id}"));
-            for scenario in view["scenarios"].as_array().expect("scenario array") {
-                let name = scenario.as_str().expect("scenario name");
-                assert!(
-                    suite
-                        .scenarios()
-                        .iter()
-                        .any(|scenario| scenario.name() == name),
-                    "{view_id} scenario {name} is not in runner suite {}",
-                    suite.name()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn published_scenario_catalog_matches_measured_real_world_tasks() {
-        let value: serde_json::Value = serde_json::from_str(include_str!(
-            "../docs/benchmarks/reasoning-benchmark-views-2026-07-26.json"
-        ))
-        .expect("view spec should be valid JSON");
-        let catalog = value["scenarioCatalog"]
-            .as_array()
-            .expect("scenario catalog");
-        let catalog_ids = catalog
-            .iter()
-            .map(|scenario| scenario["id"].as_str().expect("scenario id"))
-            .collect::<HashSet<_>>();
-        assert_eq!(catalog_ids.len(), catalog.len());
-
-        let overall_ids = value["views"]
-            .as_array()
-            .expect("views array")
-            .iter()
-            .find(|view| view["id"].as_str() == Some("overall"))
-            .expect("overall view")["scenarios"]
-            .as_array()
-            .expect("overall scenarios")
-            .iter()
-            .map(|scenario| scenario.as_str().expect("scenario id"))
-            .collect::<HashSet<_>>();
-        assert_eq!(catalog_ids, overall_ids);
-
-        let real_world = ProfileBenchmarkSuiteKind::RealWorld
+    fn published_reasoning_sweep_uses_reasoning_suite_scenarios() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("web/src/data/reasoning-sweep.json");
+        let text = std::fs::read_to_string(path).expect("read published reasoning sweep");
+        let value: serde_json::Value =
+            serde_json::from_str(&text).expect("reasoning sweep should be valid JSON");
+        let dataset = &value["dataset"];
+        let reasoning = ProfileBenchmarkSuiteKind::Reasoning
             .scenarios()
             .iter()
             .map(|scenario| scenario.name())
             .collect::<HashSet<_>>();
-        for scenario in catalog {
-            let id = scenario["id"].as_str().expect("scenario id");
+        for attempt in dataset["attempts"].as_array().expect("attempt rows") {
+            let scenario = attempt["scenario"].as_str().expect("scenario name");
             assert!(
-                real_world.contains(id),
-                "{id} is not in the real-world suite"
-            );
-            assert!(
-                scenario["description"]
-                    .as_str()
-                    .is_some_and(|description| description.len() > 40),
-                "{id} needs a useful task description"
+                reasoning.contains(scenario),
+                "{scenario} is not in reasoning"
             );
         }
     }
 
     #[test]
-    fn benchmark_evidence_manifest_tracks_pending_real_world_scenarios() {
-        let evidence: serde_json::Value = serde_json::from_str(include_str!(
-            "../docs/benchmarks/reasoning-benchmark-evidence-2026-07-26.json"
-        ))
-        .expect("evidence manifest should be valid JSON");
-        let view_spec: serde_json::Value = serde_json::from_str(include_str!(
-            "../docs/benchmarks/reasoning-benchmark-views-2026-07-26.json"
-        ))
-        .expect("view spec should be valid JSON");
+    fn published_reasoning_sweep_has_a_complete_balanced_matrix() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("web/src/data/reasoning-sweep.json");
+        let text = std::fs::read_to_string(path).expect("read published reasoning sweep");
+        let value: serde_json::Value =
+            serde_json::from_str(&text).expect("reasoning sweep should be valid JSON");
+        let dataset = &value["dataset"];
+        let scenarios = dataset["scenarioCount"].as_u64().expect("scenario count");
+        let repeats = dataset["expectedRepeats"].as_u64().expect("repeat count");
+        let attempt_rows = dataset["attempts"].as_array().expect("attempt rows");
 
-        assert_eq!(evidence["schemaVersion"].as_u64(), Some(1));
-        let datasets = evidence["datasets"].as_array().expect("datasets array");
-        let ids = datasets
-            .iter()
-            .map(|dataset| dataset["id"].as_str().expect("dataset id"))
-            .collect::<HashSet<_>>();
+        assert_eq!(attempt_rows.len() as u64, scenarios * 6);
         assert_eq!(
-            ids,
-            HashSet::from([
-                "expanded-reasoning-suite",
-                "granular-pilot",
-                "success-baseline",
-                "real-world-quick-slice",
-                "real-world-spark-extension",
-            ])
+            dataset["totalAttempts"].as_u64(),
+            Some(scenarios * repeats * 6)
         );
-        assert_eq!(ids.len(), datasets.len());
+        assert_eq!(dataset["rows"].as_array().map(Vec::len), Some(6));
+    }
 
-        let expanded = datasets
+    #[test]
+    fn published_reasoning_sweep_keeps_quality_and_failure_counts_separate() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("web/src/data/reasoning-sweep.json");
+        let text = std::fs::read_to_string(path).expect("read published reasoning sweep");
+        let value: serde_json::Value =
+            serde_json::from_str(&text).expect("reasoning sweep should be valid JSON");
+        let dataset = &value["dataset"];
+        let attempts = dataset["attempts"].as_array().expect("attempt rows");
+        let failed = attempts
             .iter()
-            .find(|dataset| dataset["id"].as_str() == Some("expanded-reasoning-suite"))
-            .expect("expanded evidence");
-        assert_eq!(expanded["runSource"], view_spec["source"]);
+            .map(|row| row["failed"].as_u64().expect("failed count"))
+            .sum::<u64>();
 
-        let measured = view_spec["views"]
-            .as_array()
-            .expect("views array")
-            .iter()
-            .find(|view| view["id"].as_str() == Some("overall"))
-            .expect("overall view")["scenarios"]
-            .as_array()
-            .expect("measured scenarios")
-            .iter()
-            .map(|scenario| scenario.as_str().expect("scenario name"))
-            .collect::<HashSet<_>>();
-        let real_world = ProfileBenchmarkSuiteKind::RealWorld
-            .scenarios()
-            .iter()
-            .map(|scenario| scenario.name())
-            .collect::<HashSet<_>>();
-        let pending = expanded["pendingScenarios"]
-            .as_array()
-            .expect("pending scenarios");
-        assert_eq!(
-            pending
-                .iter()
-                .map(|scenario| scenario["id"].as_str().expect("pending scenario id"))
-                .collect::<Vec<_>>(),
-            vec![
-                "inventory-rebalance-plan",
-                "experiment-rollout-audit",
-                "feature-rollout-consistency-bugfix",
-                "frontier-rule-transfer",
-            ]
-        );
-        for scenario in pending {
-            let id = scenario["id"].as_str().expect("pending scenario id");
-            assert!(!measured.contains(id), "{id} is already measured");
-            assert!(
-                real_world.contains(id),
-                "{id} is not in the real-world suite"
-            );
-            assert!(
-                scenario["validationSignals"].as_u64().unwrap_or_default() > 0,
-                "{id} has no validation signals"
-            );
-            assert!(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join(
-                        scenario["evidencePath"]
-                            .as_str()
-                            .expect("pending evidence path")
-                    )
-                    .is_file(),
-                "{id} evidence file is missing"
-            );
-        }
-
-        for (id, expected_scenario_count) in [
-            ("real-world-quick-slice", 4),
-            ("real-world-spark-extension", 8),
-        ] {
-            let dataset = datasets
-                .iter()
-                .find(|dataset| dataset["id"].as_str() == Some(id))
-                .expect("development dataset");
-            assert_eq!(
-                dataset["expectedScenarioCount"].as_u64(),
-                Some(expected_scenario_count),
-                "{id} scenario coverage"
-            );
-            assert_eq!(dataset["taskFailuresRetained"].as_bool(), Some(false));
-            assert!(
-                dataset["pendingScenarios"]
-                    .as_array()
-                    .is_some_and(Vec::is_empty),
-                "{id} should not inherit expanded-suite pending scenarios"
-            );
-        }
-
-        for dataset in datasets {
-            for source in dataset["sources"].as_array().expect("source artifacts") {
-                let path = source["path"].as_str().expect("source path");
-                assert!(
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join(path)
-                        .is_file(),
-                    "{path} is missing"
-                );
-            }
-        }
+        assert_eq!(dataset["failedAttempts"].as_u64(), Some(failed));
+        assert!(attempts.iter().all(|row| row["quality"].as_f64().is_some()));
+        assert_eq!(dataset["providerExclusions"].as_u64(), Some(0));
     }
 }

@@ -1,0 +1,73 @@
+runner,reasoning_effort,scenario,outcome,attempts,passed,failed,validation_pass_rate,quality_score,completion_score,process_score,average_total_tokens,average_duration_seconds,tool_or_item_calls
+Spark harness,low,config-migration,validated,2,2,0,100,100,100,82,81981,23.8,18
+Spark harness,medium,config-migration,validated,2,2,0,100,100,100,87.5,96808,17.44,12
+Spark harness,high,config-migration,partial_validation,2,1,1,50,90,65,96,74759,15.09,12
+Codex CLI 0.146.0,low,config-migration,validated,2,2,0,100,100,100,100,124149,18.25,11
+Codex CLI 0.146.0,medium,config-migration,validated,2,2,0,100,100,100,100,145326,16.82,14
+Codex CLI 0.146.0,high,config-migration,validated,2,2,0,100,100,100,99.9,133218,24.35,12
+Spark harness,low,experiment-rollout-audit,validated,2,2,0,100,100,83,78.5,214233,39.83,15
+Spark harness,medium,experiment-rollout-audit,partial_validation,2,1,1,50,90,53,61.5,265867,40.23,18
+Spark harness,high,experiment-rollout-audit,validated,2,2,0,100,100,88,59.5,427101,59.82,22
+Codex CLI 0.146.0,low,experiment-rollout-audit,partial_validation,2,1,1,50,90,80,93,346965,35.76,19
+Codex CLI 0.146.0,medium,experiment-rollout-audit,partial_validation,2,1,1,50,90,80,94.7,267065,33.03,18
+Codex CLI 0.146.0,high,experiment-rollout-audit,partial_validation,2,1,1,50,90,80,94.3,254436,38.63,13
+Spark harness,low,feature-rollout-consistency-bugfix,partial_validation,2,1,1,50,90,65,95,105158,14.66,19
+Spark harness,medium,feature-rollout-consistency-bugfix,validated,2,2,0,100,100,100,90.5,107214,19.83,24
+Spark harness,high,feature-rollout-consistency-bugfix,validated,2,2,0,100,100,100,90,100092,20.49,17
+Codex CLI 0.146.0,low,feature-rollout-consistency-bugfix,validated,2,2,0,100,100,100,100,148975,16.99,12
+Codex CLI 0.146.0,medium,feature-rollout-consistency-bugfix,validated,2,2,0,100,100,100,97.2,211020,26.85,22
+Codex CLI 0.146.0,high,feature-rollout-consistency-bugfix,validated,2,2,0,100,100,100,98.7,180155,21.39,13
+Spark harness,low,frontier-rule-transfer,validation_failed,2,0,2,0,0,26,32,901754,222.64,25
+Spark harness,medium,frontier-rule-transfer,validation_failed,2,0,2,0,0,30,62.5,548023,117.92,20
+Spark harness,high,frontier-rule-transfer,validation_failed,2,0,2,0,0,15,72,600767,471.68,18
+Codex CLI 0.146.0,low,frontier-rule-transfer,validation_failed,2,0,2,0,8.5,60,95,194875,54.68,13
+Codex CLI 0.146.0,medium,frontier-rule-transfer,validation_failed,2,0,2,0,0,60,86,558441,105.6,14
+Codex CLI 0.146.0,high,frontier-rule-transfer,validation_failed,2,0,2,0,17,60,91,476431,87.34,13
+Spark harness,low,inventory-rebalance-plan,partial_validation,2,1,1,50,95,36,63.5,346942,40.89,21
+Spark harness,medium,inventory-rebalance-plan,validated,2,2,0,100,100,66,76,215978,34.39,17
+Spark harness,high,inventory-rebalance-plan,validated,2,2,0,100,100,100,71,246077,37.16,20
+Codex CLI 0.146.0,low,inventory-rebalance-plan,validated,2,2,0,100,100,100,97.6,157576,23.76,14
+Codex CLI 0.146.0,medium,inventory-rebalance-plan,validated,2,2,0,100,100,100,99.9,118606,23.21,10
+Codex CLI 0.146.0,high,inventory-rebalance-plan,validated,2,2,0,100,100,100,97.7,264337,51.54,16
+Spark harness,low,multi-hop-analysis,validated,2,2,0,100,100,100,100,50902,15.11,9
+Spark harness,medium,multi-hop-analysis,validated,2,2,0,100,100,100,100,45876,7.25,8
+Spark harness,high,multi-hop-analysis,validated,2,2,0,100,100,100,100,52096,7.14,9
+Codex CLI 0.146.0,low,multi-hop-analysis,validated,2,2,0,100,100,100,100,66733,14.85,8
+Codex CLI 0.146.0,medium,multi-hop-analysis,validated,2,2,0,100,100,100,99.9,67569,14.59,8
+Codex CLI 0.146.0,high,multi-hop-analysis,validated,2,2,0,100,100,100,99.7,68233,14.62,10
+Spark harness,low,multi-module-bugfix,validated,2,2,0,100,100,100,93,56827,12.62,10
+Spark harness,medium,multi-module-bugfix,validated,2,2,0,100,100,100,96,81553,13.77,11
+Spark harness,high,multi-module-bugfix,validated,2,2,0,100,100,100,96,84595,14.04,11
+Codex CLI 0.146.0,low,multi-module-bugfix,validated,2,2,0,100,100,100,98.7,139421,17.38,13
+Codex CLI 0.146.0,medium,multi-module-bugfix,validated,2,2,0,100,100,100,99.7,101898,16.68,11
+Codex CLI 0.146.0,high,multi-module-bugfix,validated,2,2,0,100,100,100,100,100880,16.04,11
+Spark harness,low,ops-report,partial_validation,2,1,1,50,77.5,65,99,55142,11.07,7
+Spark harness,medium,ops-report,validated,2,2,0,100,100,100,77.5,64906,11.64,8
+Spark harness,high,ops-report,validated,2,2,0,100,100,100,98,62574,10.54,7
+Codex CLI 0.146.0,low,ops-report,partial_validation,2,1,1,50,87.5,80,100,84516,12.09,9
+Codex CLI 0.146.0,medium,ops-report,partial_validation,2,1,1,50,87.5,80,91.9,81979,168.45,9
+Codex CLI 0.146.0,high,ops-report,validated,2,2,0,100,100,100,97.5,83042,24.09,8
+Spark harness,low,policy-support-agent,validated,2,2,0,100,100,100,93.5,94128,21.24,8
+Spark harness,medium,policy-support-agent,validated,2,2,0,100,100,100,97,84897,15.42,8
+Spark harness,high,policy-support-agent,validated,2,2,0,100,100,100,87.8,123277,20.7,11
+Codex CLI 0.146.0,low,policy-support-agent,validation_failed,2,0,2,0,15,60,100,57291,9.47,7
+Codex CLI 0.146.0,medium,policy-support-agent,validation_failed,2,0,2,0,15,60,100,58071,14.38,7
+Codex CLI 0.146.0,high,policy-support-agent,validation_failed,2,0,2,0,15,60,95.6,58795,16.33,8
+Spark harness,low,stateful-reconciliation-bugfix,validation_failed,2,0,2,0,55,30,90,93657,15.27,14
+Spark harness,medium,stateful-reconciliation-bugfix,validation_failed,2,0,2,0,82.5,30,92,102226,20.09,17
+Spark harness,high,stateful-reconciliation-bugfix,validated,2,2,0,100,100,100,89,126338,22.45,15
+Codex CLI 0.146.0,low,stateful-reconciliation-bugfix,validation_failed,2,0,2,0,62.5,60,97.8,137497,15.37,13
+Codex CLI 0.146.0,medium,stateful-reconciliation-bugfix,partial_validation,2,1,1,50,92.5,80,100,127794,20.42,16
+Codex CLI 0.146.0,high,stateful-reconciliation-bugfix,validation_failed,2,0,2,0,65,60,97.9,107442,16.4,12
+Spark harness,low,technical-essay,validated,2,2,0,100,100,96,73.3,123423,21.82,11
+Spark harness,medium,technical-essay,validated,2,2,0,100,100,100,85.5,80266,12.4,11
+Spark harness,high,technical-essay,validated,2,2,0,100,100,100,71.8,124140,27.76,12
+Codex CLI 0.146.0,low,technical-essay,validated,2,2,0,100,100,100,98.3,97342,18.17,9
+Codex CLI 0.146.0,medium,technical-essay,validated,2,2,0,100,100,100,99.9,128817,20.34,12
+Codex CLI 0.146.0,high,technical-essay,validated,2,2,0,100,100,100,100,136850,22.35,14
+Spark harness,low,terminal-repair,validated,2,2,0,100,100,100,94,64582,13.62,7
+Spark harness,medium,terminal-repair,validated,2,2,0,100,100,100,88.5,67653,11.58,8
+Spark harness,high,terminal-repair,validated,2,2,0,100,100,92,94,67059,10.35,7
+Codex CLI 0.146.0,low,terminal-repair,validated,2,2,0,100,100,100,95,146096,21.45,13
+Codex CLI 0.146.0,medium,terminal-repair,validated,2,2,0,100,100,100,95.9,118185,17.79,12
+Codex CLI 0.146.0,high,terminal-repair,validated,2,2,0,100,100,100,95.9,138051,20.31,13

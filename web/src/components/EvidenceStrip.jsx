@@ -1,74 +1,50 @@
-function exclusionText(evidence) {
+function failureText(evidence) {
   const parts = [];
   if (evidence.taskFailureExclusions !== null) {
-    parts.push(`${evidence.taskFailureExclusions} task`);
+    const count = evidence.taskFailureExclusions;
+    parts.push(`${count} task${count === 1 ? "" : "s"}`);
   }
   if (evidence.providerExclusions !== null) {
-    parts.push(`${evidence.providerExclusions} provider/API`);
+    const count = evidence.providerExclusions;
+    parts.push(`${count} provider/API failure${count === 1 ? "" : "s"}`);
   }
   return parts.length > 0 ? parts.join(" · ") : "Not classified";
 }
 
-export function EvidenceStrip({ evidence }) {
+export function EvidenceStrip({ evidence, idPrefix = "evidence" }) {
   const coverage = evidence.pendingScenarioCount
     ? `${evidence.scenarioCount} measured · ${evidence.pendingScenarioCount} pending`
     : `${evidence.scenarioCount} measured scenarios`;
-  const provenanceClass = evidence.pendingScenarios.length === 0
-    ? "evidence-strip__provenance evidence-strip__provenance--sources-only"
-    : "evidence-strip__provenance";
 
   return (
-    <section className="evidence-strip" aria-labelledby="evidence-status-title">
+    <section className="evidence-strip" aria-labelledby={`${idPrefix}-evidence-status-title`}>
       <div className="evidence-strip__lead">
-        <p id="evidence-status-title">Evidence status</p>
+        <p id={`${idPrefix}-evidence-status-title`}>Run details</p>
         <strong>{evidence.status}</strong>
       </div>
 
       <dl>
         <div>
-          <dt>Coverage</dt>
+          <dt>Tasks</dt>
           <dd>{coverage}</dd>
         </div>
         <div>
-          <dt>Matrix</dt>
-          <dd>{evidence.taskRuns} task runs</dd>
+          <dt>Attempts</dt>
+          <dd>
+            {evidence.attemptedTaskRuns
+              ? `${evidence.attemptedTaskRuns} attempts · ${evidence.taskRuns} passed`
+              : `${evidence.taskRuns} passing runs`}
+          </dd>
         </div>
         <div>
-          <dt>Exclusions</dt>
-          <dd>{exclusionText(evidence)}</dd>
+          <dt>Failed attempts</dt>
+          <dd>{failureText(evidence)}</dd>
         </div>
         <div>
-          <dt>Scoring</dt>
-          <dd>{evidence.taskFailuresRetained ? "Task failures retained" : "Successful rows only"}</dd>
+          <dt>Quality</dt>
+          <dd>Weighted task checks</dd>
         </div>
       </dl>
-
-      <p className="evidence-strip__note">{evidence.note}</p>
-
-      <div className={provenanceClass}>
-        {evidence.pendingScenarios.length > 0 && (
-          <div>
-            <span>Pending validation</span>
-            <p>
-              {evidence.pendingScenarios.map((scenario) => (
-                <a key={scenario.id} href={scenario.url} target="_blank" rel="noreferrer">
-                  {scenario.label} · {scenario.validationSignals} signals
-                </a>
-              ))}
-            </p>
-          </div>
-        )}
-        <div>
-          <span>Artifacts</span>
-          <p>
-            {evidence.sources.map((source) => (
-              <a key={source.path} href={source.url} target="_blank" rel="noreferrer">
-                {source.label}
-              </a>
-            ))}
-          </p>
-        </div>
-      </div>
     </section>
   );
 }

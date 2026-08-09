@@ -1114,6 +1114,7 @@ fn benchmark_suites_group_existing_and_real_world_scenarios() {
             ProfileScenarioKind::RustNotesTuiScaffold,
             ProfileScenarioKind::StatefulReconciliationBugfix,
             ProfileScenarioKind::FeatureRolloutConsistencyBugfix,
+            ProfileScenarioKind::FrontierRuleTransfer,
         ]
     );
     assert!(

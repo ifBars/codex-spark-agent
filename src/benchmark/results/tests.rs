@@ -72,6 +72,51 @@ fn indexed(mut rows: Vec<ComparisonRow>) -> Vec<ComparisonRow> {
     rows
 }
 
+fn codex_cli_row() -> CodexCliBenchmarkRow {
+    CodexCliBenchmarkRow {
+        runner: "codex-cli".to_string(),
+        suite: "real-world".to_string(),
+        scenario: "technical-essay".to_string(),
+        repeat_index: 1,
+        model: "gpt-test".to_string(),
+        command_path: String::new(),
+        command_version: "codex-cli test".to_string(),
+        reasoning_effort: "medium".to_string(),
+        score: 0.0,
+        success: true,
+        exit_code: Some(0),
+        timed_out: false,
+        duration_ms: 10_000,
+        json_events: 20,
+        non_json_stdout_lines: 0,
+        stderr_lines: 0,
+        actionable_stderr_lines: 0,
+        turns: 4,
+        completed_items: 20,
+        agent_messages: 4,
+        tool_items: 8,
+        input_tokens: 10_000,
+        cached_input_tokens: 0,
+        output_tokens: 1_000,
+        reasoning_output_tokens: 0,
+        expected_artifacts: 1,
+        present_artifacts: 1,
+        validation_exit_code: Some(0),
+        validation_score: None,
+        validation_timed_out: false,
+        browser_validation_present: false,
+        browser_validation_exit_code: None,
+        browser_validation_timed_out: false,
+        browser_screenshot: String::new(),
+        source_files: 1,
+        source_bytes: 500,
+        final_message_chars: 200,
+        run_dir: "run".to_string(),
+        provider_retry_hint: String::new(),
+        failure_points: String::new(),
+    }
+}
+
 fn external_report_json(runner: &str, scenario: &str) -> Value {
     json!({
         "rows": [{
@@ -863,6 +908,25 @@ fn comparison_input_freshness_warns_for_mixed_report_ages() {
     let html = comparison_input_table(&inputs);
     assert!(html.contains("Input freshness warning"));
     assert!(html.contains("1.0h older"));
+}
+
+#[test]
+fn grouped_reasoning_comparisons_allow_sequential_sweep_runtime() {
+    let mut inputs = json!({
+        "harness_reports": [{"modified_unix_ms": 1_000u64}],
+        "codex_cli_reports": [{"modified_unix_ms": 10_801_000u64}],
+        "opencode_reports": [],
+        "group_by_reasoning": true,
+    });
+
+    let freshness = input_freshness_summary(&inputs);
+    assert_eq!(freshness["modified_span_label"], "3.0h");
+    assert_eq!(freshness["maximum_span_ms"], 21_600_000u64);
+    assert_eq!(freshness["mixed_input_warning"], false);
+
+    inputs["codex_cli_reports"][0]["modified_unix_ms"] = json!(21_602_000u64);
+    let freshness = input_freshness_summary(&inputs);
+    assert_eq!(freshness["mixed_input_warning"], true);
 }
 
 #[test]
@@ -1863,6 +1927,45 @@ fn granular_validation_preserves_partial_quality_signal() {
 
     assert_eq!(completion, 30.0);
     assert_eq!(quality, 65.0);
+}
+
+#[test]
+fn validated_outcome_quality_ignores_harness_tool_path_penalties() {
+    let mut row = benchmark_row();
+    row.success = true;
+    row.validation_present = true;
+    row.validation_exit_code = Some(0);
+    row.expected_tool_groups = 3;
+    row.satisfied_tool_groups = 1;
+    row.expected_tool_calls = 5;
+    row.satisfied_tool_calls = 2;
+    row.source_files = 20;
+    row.source_bytes = 40_000;
+
+    assert_eq!(quality_score_with_validation(&row, None), 100.0);
+
+    row.validation_score = Some(72.5);
+    assert_eq!(
+        quality_score_with_validation(&row, row.validation_score),
+        72.5
+    );
+}
+
+#[test]
+fn validated_outcome_quality_uses_the_same_contract_for_codex() {
+    let mut row = codex_cli_row();
+    row.success = true;
+    row.validation_exit_code = Some(0);
+    row.expected_artifacts = 4;
+    row.present_artifacts = 1;
+    row.actionable_stderr_lines = 10;
+    row.source_files = 20;
+    row.source_bytes = 40_000;
+
+    assert_eq!(codex_quality_score_with_validation(&row, 45.0), 100.0);
+
+    row.validation_score = Some(72.5);
+    assert_eq!(codex_quality_score_with_validation(&row, 45.0), 72.5);
 }
 
 #[test]

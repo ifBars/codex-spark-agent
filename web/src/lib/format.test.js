@@ -6,6 +6,7 @@ describe("formatMetric", () => {
     expect(formatMetric("tokens", 105836)).toBe("105.8k");
     expect(formatMetric("duration", 15.92)).toBe("15.9s");
     expect(formatMetric("successRate", 66.67)).toBe("66.7%");
+    expect(formatMetric("attemptPassRate", 88.89)).toBe("88.9%");
   });
 });
 

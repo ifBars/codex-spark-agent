@@ -43,7 +43,6 @@ export function CostQualityChart({
   xMetric,
   yMetric,
   showRanges,
-  rangeKind,
   contextLabel,
   description,
   meta,
@@ -83,18 +82,13 @@ export function CostQualityChart({
         <div>
           <span className="chart-region__eyebrow">{contextLabel}</span>
           <h2>{yMetrics[yMetric].label} vs. {xMetrics[xMetric].label}</h2>
-          <p>
-            {description ?? "Lower is better horizontally; higher is better vertically."}
-          </p>
+          {description ? <p>{description}</p> : null}
           <div className="chart-region__direction" aria-label="Chart direction">
             <span>↑ {yMetrics[yMetric].label}: higher is better</span>
             <span>← {xMetrics[xMetric].label}: lower is better</span>
           </div>
           {meta && (
-            <small>
-              {meta} · {rangeKind} · Axes fit estimates
-              {showRanges ? "; long ranges clip at bounds" : ""}
-            </small>
+            <small>{meta}</small>
           )}
         </div>
         <div className="chart-legend" aria-label="Runner legend">
@@ -285,7 +279,7 @@ export function CostQualityChart({
                   </text>
                   <line x1="16" x2={TOOLTIP.width - 16} y1="80" y2="80" />
                   <text className="chart-tooltip__meta" x="16" y="96">
-                    {activePoint.runs} successful · {activePoint.excludedRuns ?? 0} excluded · {samePoint(visiblePinnedPoint, activePoint) ? "Pinned" : "Click to pin"}
+                    {activePoint.runs} passed · {activePoint.excludedRuns ?? 0} failed · {samePoint(visiblePinnedPoint, activePoint) ? "Pinned" : "Click to pin"}
                   </text>
                 </g>
               </g>
