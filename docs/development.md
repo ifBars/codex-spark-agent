@@ -37,18 +37,20 @@ The built-in tool set covers:
 fs.read       fs.write       fs.rename
 fs.list       fs.replace     cmd.exec
 fs.stat       fs.edit        browser.run
-fs.search
+fs.search     tool.search
 ```
 
 File tools stay under the selected workspace and skip common generated folders unless asked to inspect one directly. `cmd.exec` uses PowerShell on Windows and bounds noisy output before returning it to the model.
 
+Core workspace file and command tools are advertised on every local work turn. `tool.search` activates deferred GitHub, web, browser, subagent, and MCP capabilities only when the task needs them, keeping unrelated schemas out of Spark's request context.
+
 `browser.run` performs a stateless Playwright Chromium pass for browser inspection and local UI smoke tests. It uses Bun for its local Playwright setup and can save screenshots inside the workspace.
 
-Spark discovers MCP servers from global Codex config, `.mcp.json`, and `.spark/mcp.json`. It supports stdio servers and HTTP endpoints. Set `SPARK_DISABLE_MCP=1` to disable discovery for offline or controlled benchmark runs.
+Spark lazily discovers MCP servers from global Codex config, `.mcp.json`, and `.spark/mcp.json` when `tool.search` requests a specialist capability. It supports stdio servers and HTTP endpoints. Set `SPARK_DISABLE_MCP=1` to disable discovery for offline or controlled benchmark runs.
 
 ## Transport and compaction
 
-Responses are WebSocket-first. Spark keeps the connection alive across tool turns and chains `previous_response_id`, so continuation requests send only new input. It falls back to HTTP/SSE if the socket fails before streaming begins.
+Responses are WebSocket-first. Spark keeps the connection alive across tool turns and chains `previous_response_id`, so continuation requests send only new input. It falls back to HTTP/SSE if the socket fails before streaming begins. Spark responses also have a 120-second total deadline: a pre-output WebSocket stall retries once over HTTP with full history. Set `SPARK_RESPONSE_DEADLINE_SECONDS` to `10`–`900`, or `0` to disable this Spark-only guard.
 
 Long sessions use remote `/responses/compact` first, with a local pressure fallback when needed. Compaction boundaries are included in traces. Spark runs until it completes, is cancelled, or reaches a context/input safety guard.
 
@@ -137,6 +139,25 @@ spark codex-cli-benchmark real-world --timeout-seconds 360
 spark opencode-benchmark real-world --timeout-seconds 360 --pure
 spark benchmark-compare --suite real-world --codex-cli-report .spark-profile/codex-cli/report.json
 ```
+
+Compare two Spark harness configurations directly by labeling their saved reports:
+
+```powershell
+spark benchmark-compare --suite real-world `
+  --harness-variant baseline=.spark-profile/benchmarks/real-world-before.json `
+  --harness-variant progressive=.spark-profile/benchmarks/real-world-after.json `
+  --baseline-runner baseline
+```
+
+Harness-variant reports normalize the selected baseline to a 100-point average
+Resource Efficiency index. The paired index combines duration (70%), total input
+tokens (20%), and tool calls (10%), with damping for extreme ratios. Benchmark
+Index multiplies that resource result by a completion/quality/execution-hygiene
+gate. Execution hygiene is the former process score; it remains separate so
+token savings cannot hide failures, retries, repeated calls, or tool-loop churn.
+Uncached input is reported alongside total input but is not silently substituted
+into the index because cache-read footprint and novel input answer different
+cost and context-pressure questions.
 
 Available suites include `core`, `survey`, `scaffolding`, `editing`, `reasoning`, `coding`, `quantitative`, `analysis`, `operations`, `writing`, and `real-world`. The category suites intentionally overlap when a task exercises more than one real-world skill. Reasoning scenarios can report weighted validation checks while the normal exit code still records full completion.
 

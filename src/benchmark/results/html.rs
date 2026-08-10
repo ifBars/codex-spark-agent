@@ -94,12 +94,251 @@ fn skipped_infrastructure_retry_hint_summary(aggregate: &Value, runner: &str) ->
     }
 }
 
+fn harness_variant_only(rows: &[ComparisonRow]) -> bool {
+    let runners = rows
+        .iter()
+        .map(|row| row.runner.as_str())
+        .collect::<BTreeSet<_>>();
+    runners.len() >= 2
+        && runners
+            .iter()
+            .all(|runner| runner.starts_with("spark-harness/"))
+}
+
+fn harness_variant_comparison_to_html(
+    suite: &str,
+    rows: &[ComparisonRow],
+    aggregate: &Value,
+    inputs: &Value,
+) -> String {
+    let baseline = aggregate
+        .pointer("/headline/baseline_runner")
+        .and_then(Value::as_str)
+        .unwrap_or("undetermined");
+    let winner = aggregate
+        .pointer("/winner/runner")
+        .and_then(Value::as_str)
+        .unwrap_or("undetermined");
+    let margin = aggregate
+        .pointer("/headline/benchmark_index_margin_vs_baseline")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let runners = rows
+        .iter()
+        .map(|row| row.runner.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let matched_rows = aggregate
+        .get("matched_rows")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let matched_scenarios = if runners.is_empty() {
+        0
+    } else {
+        matched_rows / runners.len() as u64
+    };
+    let winner_index =
+        aggregate_metric(aggregate, "matched_runner_benchmark_index_averages", winner);
+    let baseline_index = aggregate_metric(
+        aggregate,
+        "matched_runner_benchmark_index_averages",
+        baseline,
+    );
+    let mut html = format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Harness Variant Comparison - {suite}</title>
+<style>
+:root {{ color-scheme: light dark; --paper: #fff; --ink: #18212f; --muted: #596579; --line: #d8dee8; --soft: #eef2f6; --accent: #2f7da1; }}
+* {{ box-sizing: border-box; }}
+body {{ margin: 0; font-family: Segoe UI, Arial, sans-serif; color: var(--ink); background: #f6f7f9; }}
+main {{ max-width: 1240px; margin: 0 auto; padding: 34px 24px 54px; }}
+h1 {{ margin: 4px 0 10px; font-size: 30px; }}
+h2 {{ margin: 30px 0 12px; font-size: 19px; }}
+p {{ line-height: 1.55; color: var(--muted); max-width: 980px; }}
+.eyebrow {{ color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; }}
+.verdict {{ border-top: 3px solid var(--ink); border-bottom: 1px solid var(--line); padding: 16px 0; margin: 22px 0; }}
+.metrics {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 18px 0 24px; }}
+.metric {{ background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 13px; }}
+.metric strong {{ display: block; font-size: 24px; font-variant-numeric: tabular-nums; }}
+.metric span {{ display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }}
+.panel {{ background: var(--paper); border: 1px solid var(--line); border-radius: 6px; overflow: auto; margin: 14px 0 24px; }}
+.note {{ background: #fffaf0; border: 1px solid #ead2a8; border-radius: 6px; padding: 12px 14px; color: #63430e; }}
+table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+th, td {{ padding: 9px 10px; border-bottom: 1px solid #e4e8ef; text-align: left; vertical-align: top; }}
+th {{ background: var(--soft); color: #344154; }}
+td.num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+.chart {{ background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 16px; overflow-x: auto; }}
+svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
+@media (prefers-color-scheme: dark) {{ :root {{ --paper: #151a22; --ink: #e6edf6; --muted: #aeb8c6; --line: #344154; --soft: #222a36; }} body {{ background: #0f141b; }} .note {{ background: #2b2417; color: #f3d49a; border-color: #5f4b27; }} }}
+@media (max-width: 760px) {{ .metrics {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+</style>
+</head>
+<body><main>
+<div class="eyebrow">Paired harness comparison</div>
+<h1>{suite} harness variants</h1>
+<p>Each scenario is compared against the selected baseline. Resource Efficiency combines paired duration (70%), total input tokens (20%), and tool calls (10%), then dampens extreme ratios. Benchmark Index quality-gates that resource result. Execution hygiene remains a separate failure and tool-loop pressure score.</p>
+<section class="verdict"><strong>{winner}</strong> leads the paired comparison by <strong>{margin:+.1}</strong> Benchmark Index points versus <strong>{baseline}</strong> across <strong>{matched_scenarios}</strong> matched scenarios.</section>
+<section class="metrics">
+<div class="metric"><strong>{winner_index:.1}</strong><span>Winning Benchmark Index</span></div>
+<div class="metric"><strong>{baseline_index:.1}</strong><span>Baseline Benchmark Index</span></div>
+<div class="metric"><strong>{matched_scenarios}</strong><span>Matched scenarios</span></div>
+<div class="metric"><strong>{margin:+.1}</strong><span>Margin versus baseline</span></div>
+</section>
+"#,
+        suite = html_escape(suite),
+        winner = html_escape(&runner_label(winner)),
+        baseline = html_escape(&runner_label(baseline)),
+    );
+    if let Some(caveat) = comparison_freshness_caveat(inputs, aggregate) {
+        let _ = write!(html, "<p class=\"note\">{}</p>", html_escape(&caveat));
+    }
+    html.push_str("<h2>Variant Summary</h2><div class=\"panel\"><table><thead><tr><th>Variant</th><th>Benchmark Index</th><th>Resource Efficiency</th><th>Quality</th><th>Execution hygiene</th><th>Average input tokens</th><th>Average uncached input</th><th>Average duration</th><th>Average tool calls</th></tr></thead><tbody>");
+    for runner in &runners {
+        let benchmark =
+            aggregate_metric(aggregate, "matched_runner_benchmark_index_averages", runner);
+        let resource = aggregate_metric(
+            aggregate,
+            "matched_runner_efficiency_index_averages",
+            runner,
+        );
+        let quality = aggregate_metric_with_fallback(
+            aggregate,
+            "matched_runner_quality_score_averages",
+            "runner_quality_score_averages",
+            runner,
+        );
+        let hygiene = aggregate_metric_with_fallback(
+            aggregate,
+            "matched_runner_execution_hygiene_score_averages",
+            "runner_execution_hygiene_score_averages",
+            runner,
+        );
+        let input_tokens = aggregate_metric_with_fallback(
+            aggregate,
+            "matched_runner_input_token_averages",
+            "runner_input_token_averages",
+            runner,
+        );
+        let uncached_tokens = aggregate_metric_with_fallback(
+            aggregate,
+            "matched_runner_uncached_input_token_averages",
+            "runner_uncached_input_token_averages",
+            runner,
+        );
+        let duration = aggregate_metric_with_fallback(
+            aggregate,
+            "matched_runner_duration_ms_averages",
+            "runner_duration_ms_averages",
+            runner,
+        );
+        let calls = aggregate_metric_with_fallback(
+            aggregate,
+            "matched_runner_tool_or_item_call_averages",
+            "runner_tool_or_item_call_averages",
+            runner,
+        );
+        let _ = write!(
+            html,
+            "<tr><td>{}</td><td class=\"num\">{benchmark:.1}</td><td class=\"num\">{resource:.1}</td><td class=\"num\">{quality:.1}</td><td class=\"num\">{hygiene:.1}</td><td class=\"num\">{input_tokens:.0}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{calls:.1}</td></tr>",
+            html_escape(&runner_label(runner)),
+            if uncached_tokens > 0.0 {
+                format!("{uncached_tokens:.0}")
+            } else {
+                "n/a".to_string()
+            },
+            format_ms(duration),
+        );
+    }
+    html.push_str("</tbody></table></div><p>Uncached input is reported separately because it distinguishes novel prompt load from cache reads; it is not silently substituted for total input in the resource index.</p>");
+    html.push_str("<h2>Benchmark Index by Scenario</h2><div class=\"chart\">");
+    html.push_str(&comparison_score_svg(rows));
+    html.push_str("</div><h2>Per-Scenario Evidence</h2><div class=\"panel\"><table><thead><tr><th>Scenario</th><th>Variant</th><th>Quality</th><th>Execution hygiene</th><th>Input tokens</th><th>Uncached input</th><th>Duration</th><th>Tool calls</th><th>Resource Index</th><th>Benchmark Index</th></tr></thead><tbody>");
+    for row in rows {
+        let _ = write!(
+            html,
+            "<tr><td>{}</td><td>{}</td><td class=\"num\">{:.1}</td><td class=\"num\">{:.1}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td></tr>",
+            html_escape(&row.scenario),
+            html_escape(&runner_label(&row.runner)),
+            row.quality_score,
+            row.process_score,
+            row.input_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            row.uncached_input_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            row.duration_ms
+                .map(|value| format_ms(value as f64))
+                .unwrap_or_else(|| "n/a".to_string()),
+            row.tool_or_item_calls
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "n/a".to_string()),
+            optional_metric(row.efficiency_index),
+            optional_metric(row.benchmark_index),
+        );
+    }
+    html.push_str("</tbody></table></div>");
+    html.push_str(&harness_variant_input_table(inputs));
+    html.push_str("</main></body></html>");
+    html
+}
+
+fn harness_variant_input_table(inputs: &Value) -> String {
+    let Some(variants) = inputs.get("harness_variants").and_then(Value::as_array) else {
+        return String::new();
+    };
+    let mut html = String::from(
+        "<h2>Input Reports</h2><div class=\"panel\"><table><thead><tr><th>Label</th><th>Report</th><th>Rows</th><th>Scenarios</th><th>Modified</th></tr></thead><tbody>",
+    );
+    for variant in variants {
+        let label = variant
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or("variant");
+        let report = variant.get("report").unwrap_or(&Value::Null);
+        let path = report.get("path").and_then(Value::as_str).unwrap_or("n/a");
+        let rows = report
+            .get("row_count")
+            .and_then(Value::as_u64)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "n/a".to_string());
+        let scenarios = report
+            .get("scenarios")
+            .and_then(Value::as_array)
+            .map(|values| values.len().to_string())
+            .unwrap_or_else(|| "n/a".to_string());
+        let modified = report
+            .get("modified_unix_ms")
+            .and_then(Value::as_u64)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "n/a".to_string());
+        let _ = write!(
+            html,
+            "<tr><td>{}</td><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td></tr>",
+            html_escape(label),
+            html_escape(path),
+            rows,
+            scenarios,
+            modified
+        );
+    }
+    html.push_str("</tbody></table></div>");
+    html
+}
+
 pub(super) fn comparison_rows_to_html(
     suite: &str,
     rows: &[ComparisonRow],
     aggregate: &Value,
     inputs: &Value,
 ) -> String {
+    if harness_variant_only(rows) {
+        return harness_variant_comparison_to_html(suite, rows, aggregate, inputs);
+    }
     let winner = aggregate
         .pointer("/winner/runner")
         .and_then(Value::as_str)
@@ -355,7 +594,7 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
 <div class="metric"><strong>{}</strong><span>Spark Benchmark Index on matched scenarios</span></div>
 <div class="metric"><strong>{}</strong><span>Codex CLI baseline index on matched scenarios</span></div>
 <div class="metric"><strong>{}</strong><span>OpenCode Benchmark Index on matched scenarios</span></div>
-<div class="metric"><strong>{}</strong><span>Spark process score on matched scenarios</span></div>
+<div class="metric"><strong>{}</strong><span>Spark execution hygiene on matched scenarios</span></div>
 </section>
 "#,
         html_escape(suite),
@@ -387,7 +626,7 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
          <tr><td>Average duration</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>\
          <tr><td>Average tool/items</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td></tr>\
          <tr><td>Average input tokens</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>Token counts are reported when the runner exposes them.</td></tr>\
-         <tr><td>Process score</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>Process penalties are applied after the efficiency index so retries and pressure remain visible.</td></tr>\
+         <tr><td>Execution hygiene</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>Failure recovery, repeated calls, tool-only streaks, and post-completion activity remain visible independently from resource efficiency.</td></tr>\
          </tbody></table></div>",
         spark_index_text,
         codex_index_text,
@@ -439,7 +678,7 @@ svg {{ width: 100%; height: auto; display: block; min-width: 720px; }}
     html.push_str("<h2>Benchmark Index Comparison</h2><div class=\"chart\">");
     html.push_str(&comparison_model_strip(rows));
     html.push_str(&comparison_score_svg(rows));
-    html.push_str("</div><h2>Run Rows</h2><div class=\"ledger\"><table><thead><tr><th>Runner</th><th>Model</th><th>Command</th><th>Scenario</th><th>Attempts</th><th>Benchmark Index</th><th>Completion</th><th>Quality</th><th>Process</th><th>LLM review</th><th>Legacy score</th><th>Validation</th><th>Success</th><th>Duration</th><th>Source footprint</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
+    html.push_str("</div><h2>Run Rows</h2><div class=\"ledger\"><table><thead><tr><th>Runner</th><th>Model</th><th>Command</th><th>Scenario</th><th>Attempts</th><th>Benchmark Index</th><th>Completion</th><th>Quality</th><th>Execution hygiene</th><th>LLM review</th><th>Legacy score</th><th>Validation</th><th>Success</th><th>Duration</th><th>Source footprint</th><th>Items/Tools</th><th>Failure points</th></tr></thead><tbody>");
     for row in rows {
         let validation = row
             .validation_exit_code

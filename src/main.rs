@@ -11,6 +11,7 @@ mod desktop_server;
 mod mcp;
 mod mcp_server;
 mod memory;
+mod model_context;
 mod profile;
 mod profiler;
 mod prompt_commands;
@@ -34,10 +35,12 @@ use anyhow::Result;
 use cli::Command;
 
 const DEFAULT_MODEL: &str = "gpt-5.3-codex-spark";
-const DEFAULT_COMPACT_AFTER_CHARS: usize = 160_000;
-const DEFAULT_MAX_INPUT_CHARS: usize = 500_000;
+const DEFAULT_COMPACT_AFTER_CHARS: usize =
+    model_context::default_compact_after_chars(model_context::DEFAULT_CONTEXT_WINDOW_TOKENS);
+const DEFAULT_MAX_INPUT_CHARS: usize =
+    model_context::default_max_input_chars(model_context::DEFAULT_CONTEXT_WINDOW_TOKENS);
 const APPROX_CHARS_PER_TOKEN: usize = 4;
-const DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS: usize = 12;
+const DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS: usize = 0;
 const DEFAULT_SCENARIO_TARGET_TOKENS: usize = 45_000;
 const MAX_SCENARIO_TARGET_TOKENS: usize = 120_000;
 const MAX_SCENARIO_REPEAT: usize = 50;
@@ -175,24 +178,21 @@ async fn run_command(command: Command) -> Result<()> {
             };
             let cwd = std::fs::canonicalize(&cwd)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
-            let compact_after_chars = trace::commands::resolve_char_threshold(
-                "compact-after",
+            let auth = config::load_auth()?;
+            let limits = model_context::resolve_input_limits(
+                &auth,
+                &model,
                 compact_after_chars,
                 compact_after_tokens,
-                DEFAULT_COMPACT_AFTER_CHARS,
-            )?;
-            let max_input_chars = trace::commands::resolve_char_threshold(
-                "max-input",
                 max_input_chars,
                 max_input_tokens,
-                DEFAULT_MAX_INPUT_CHARS,
-            )?;
+            )
+            .await?;
             let explicit_session = session.is_some();
             let session_name =
                 session.or_else(|| interactive.then(session::timestamp_session_name));
             let start_new_session = new_session || (interactive && !explicit_session);
             session::prepare_default_session_store(session_name.as_deref())?;
-            let auth = config::load_auth()?;
             let mut runner = agent::AgentRunner::new_with_reasoning_effort(
                 auth,
                 cwd.clone(),
@@ -200,9 +200,9 @@ async fn run_command(command: Command) -> Result<()> {
                 reasoning_effort,
                 trace,
                 profile,
-                compact_after_chars,
+                limits.compact_after_chars,
                 compact_after_tool_only_turns,
-                max_input_chars,
+                limits.max_input_chars,
                 interactive,
                 session_name.clone(),
                 start_new_session,
@@ -463,18 +463,16 @@ async fn run_command(command: Command) -> Result<()> {
         } => {
             let cwd = std::fs::canonicalize(&cwd)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
-            let compact_after_chars = trace::commands::resolve_char_threshold(
-                "compact-after",
+            let auth = config::load_auth()?;
+            let limits = model_context::resolve_input_limits(
+                &auth,
+                &model,
                 compact_after_chars,
                 compact_after_tokens,
-                DEFAULT_COMPACT_AFTER_CHARS,
-            )?;
-            let max_input_chars = trace::commands::resolve_char_threshold(
-                "max-input",
                 max_input_chars,
                 max_input_tokens,
-                DEFAULT_MAX_INPUT_CHARS,
-            )?;
+            )
+            .await?;
             profile::runner::run_profile_scenarios(
                 &[scenario],
                 profile::runner::ProfileRunOptions {
@@ -485,9 +483,9 @@ async fn run_command(command: Command) -> Result<()> {
                     repeat,
                     no_trace,
                     no_profile,
-                    compact_after_chars,
+                    compact_after_chars: limits.compact_after_chars,
                     compact_after_tool_only_turns,
-                    max_input_chars,
+                    max_input_chars: limits.max_input_chars,
                     benchmark_suite: None,
                 },
             )
@@ -511,18 +509,16 @@ async fn run_command(command: Command) -> Result<()> {
         } => {
             let cwd = std::fs::canonicalize(&cwd)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
-            let compact_after_chars = trace::commands::resolve_char_threshold(
-                "compact-after",
+            let auth = config::load_auth()?;
+            let limits = model_context::resolve_input_limits(
+                &auth,
+                &model,
                 compact_after_chars,
                 compact_after_tokens,
-                DEFAULT_COMPACT_AFTER_CHARS,
-            )?;
-            let max_input_chars = trace::commands::resolve_char_threshold(
-                "max-input",
                 max_input_chars,
                 max_input_tokens,
-                DEFAULT_MAX_INPUT_CHARS,
-            )?;
+            )
+            .await?;
             let scenarios = selected_benchmark_scenarios(suite, &scenarios)?;
             profile::runner::run_profile_scenarios(
                 &scenarios,
@@ -534,9 +530,9 @@ async fn run_command(command: Command) -> Result<()> {
                     repeat,
                     no_trace,
                     no_profile,
-                    compact_after_chars,
+                    compact_after_chars: limits.compact_after_chars,
                     compact_after_tool_only_turns,
-                    max_input_chars,
+                    max_input_chars: limits.max_input_chars,
                     benchmark_suite: Some(suite.name().to_string()),
                 },
             )
@@ -568,7 +564,7 @@ async fn run_command(command: Command) -> Result<()> {
                 },
             )?;
             println!(
-                "benchmark_report suite={} rows={} avg_completion={} avg_quality={} avg_process={} json={} csv={} html={}",
+                "benchmark_report suite={} rows={} avg_completion={} avg_quality={} avg_execution_hygiene={} json={} csv={} html={}",
                 suite.name(),
                 report.rows,
                 report
@@ -583,7 +579,7 @@ async fn run_command(command: Command) -> Result<()> {
                     .unwrap_or(0.0),
                 report
                     .aggregate
-                    .get("average_process_score")
+                    .get("average_execution_hygiene_score")
                     .and_then(serde_json::Value::as_f64)
                     .unwrap_or(0.0),
                 report.json_path.display(),
@@ -717,6 +713,8 @@ async fn run_command(command: Command) -> Result<()> {
             limit,
             all_runs,
             harness_report,
+            harness_variant,
+            baseline_runner,
             codex_cli_report,
             opencode_report,
             usage_history_report,
@@ -729,10 +727,12 @@ async fn run_command(command: Command) -> Result<()> {
         } => {
             ensure_benchmark_comparison_inputs(
                 &harness_report,
+                &harness_variant,
                 &codex_cli_report,
                 &opencode_report,
                 &usage_history_report,
             )?;
+            let harness_variants = parse_harness_variant_reports(&harness_variant)?;
             let cwd = std::fs::canonicalize(&cwd)
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or(cwd));
             let output_dir = if output_dir.is_absolute() {
@@ -747,6 +747,8 @@ async fn run_command(command: Command) -> Result<()> {
                     limit,
                     all_runs,
                     harness_reports: harness_report,
+                    harness_variants,
+                    baseline_runner,
                     codex_cli_reports: codex_cli_report,
                     opencode_reports: opencode_report,
                     usage_history_reports: usage_history_report,
@@ -831,20 +833,46 @@ async fn run_command(command: Command) -> Result<()> {
 
 fn ensure_benchmark_comparison_inputs(
     harness_reports: &[std::path::PathBuf],
+    harness_variants: &[String],
     codex_cli_reports: &[std::path::PathBuf],
     opencode_reports: &[std::path::PathBuf],
     usage_history_reports: &[std::path::PathBuf],
 ) -> Result<()> {
     if harness_reports.is_empty()
+        && harness_variants.is_empty()
         && codex_cli_reports.is_empty()
         && opencode_reports.is_empty()
         && usage_history_reports.is_empty()
     {
         anyhow::bail!(
-            "benchmark-compare requires at least one of --harness-report, --codex-cli-report, --opencode-report, or --usage-history-report"
+            "benchmark-compare requires at least one of --harness-report, --harness-variant, --codex-cli-report, --opencode-report, or --usage-history-report"
         );
     }
     Ok(())
+}
+
+fn parse_harness_variant_reports(
+    values: &[String],
+) -> Result<Vec<benchmark::results::HarnessVariantReport>> {
+    values
+        .iter()
+        .map(|value| {
+            let (label, path) = value.split_once('=').ok_or_else(|| {
+                anyhow::anyhow!("invalid --harness-variant '{value}'; expected LABEL=REPORT")
+            })?;
+            let label = label.trim();
+            let path = path.trim();
+            if label.is_empty() || path.is_empty() {
+                anyhow::bail!(
+                    "invalid --harness-variant '{value}'; label and report path must be non-empty"
+                );
+            }
+            Ok(benchmark::results::HarnessVariantReport {
+                label: label.to_string(),
+                path: std::path::PathBuf::from(path),
+            })
+        })
+        .collect()
 }
 
 fn selected_benchmark_scenarios(

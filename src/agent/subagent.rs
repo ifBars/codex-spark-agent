@@ -270,6 +270,7 @@ impl AgentRunner {
             subagent_team: Default::default(),
             delegated_write_ownership: (mode == AgentMode::Work).then(|| options.ownership.clone()),
             mcp_registry: None,
+            active_deferred_tools: Default::default(),
             local_filesystem_only: false,
             local_filesystem_tool_budget: None,
         };

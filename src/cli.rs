@@ -127,19 +127,19 @@ pub(crate) enum Command {
         /// Start the named session from an empty history, replacing any saved state after the next save.
         #[arg(long)]
         new_session: bool,
-        /// Compact older tool outputs once request JSON exceeds this many characters.
+        /// Override the default compaction threshold (90% of the model context window), in JSON characters.
         #[arg(long)]
         compact_after_chars: Option<usize>,
-        /// Compact older tool outputs once estimated input exceeds this many tokens.
+        /// Override the default compaction threshold (90% of the model context window), in estimated tokens.
         #[arg(long)]
         compact_after_tokens: Option<usize>,
-        /// Force compaction after this many consecutive tool-only turns. Use 0 to disable.
+        /// Optional tool-only-turn compaction trigger. Disabled by default; use 0 to disable.
         #[arg(long, default_value_t = DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS)]
         compact_after_tool_only_turns: usize,
-        /// Refuse to send request JSON above this many characters.
+        /// Override the model-context input guard, in JSON characters.
         #[arg(long)]
         max_input_chars: Option<usize>,
-        /// Refuse to send a request once estimated input exceeds this many tokens.
+        /// Override the model-context input guard, in estimated tokens.
         #[arg(long)]
         max_input_tokens: Option<usize>,
     },
@@ -178,9 +178,9 @@ pub(crate) enum Command {
     },
     /// List saved chat sessions.
     Sessions,
-    /// List or refresh repo-local Spark skill cache.
+    /// List or refresh built-in and repo-local Spark skill cache.
     Skills {
-        /// Rebuild cached summaries from .agents/skills.
+        /// Rebuild cached summaries from built-in and .agents/skills sources.
         #[arg(long)]
         refresh: bool,
     },
@@ -290,19 +290,19 @@ pub(crate) enum Command {
         /// Disable printed profile JSON for this scenario.
         #[arg(long)]
         no_profile: bool,
-        /// Compact older context once request JSON exceeds this many characters.
+        /// Override the default compaction threshold (90% of the model context window), in JSON characters.
         #[arg(long)]
         compact_after_chars: Option<usize>,
-        /// Compact older context once estimated input exceeds this many tokens.
+        /// Override the default compaction threshold (90% of the model context window), in estimated tokens.
         #[arg(long)]
         compact_after_tokens: Option<usize>,
-        /// Force compaction after this many consecutive tool-only turns. Use 0 to disable.
+        /// Optional tool-only-turn compaction trigger. Disabled by default; use 0 to disable.
         #[arg(long, default_value_t = DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS)]
         compact_after_tool_only_turns: usize,
-        /// Refuse to send request JSON above this many characters.
+        /// Override the model-context input guard, in JSON characters.
         #[arg(long)]
         max_input_chars: Option<usize>,
-        /// Refuse to send a request once estimated input exceeds this many tokens.
+        /// Override the model-context input guard, in estimated tokens.
         #[arg(long)]
         max_input_tokens: Option<usize>,
     },
@@ -335,19 +335,19 @@ pub(crate) enum Command {
         /// Disable printed profile JSON for this benchmark run.
         #[arg(long)]
         no_profile: bool,
-        /// Compact older context once request JSON exceeds this many characters.
+        /// Override the default compaction threshold (90% of the model context window), in JSON characters.
         #[arg(long)]
         compact_after_chars: Option<usize>,
-        /// Compact older context once estimated input exceeds this many tokens.
+        /// Override the default compaction threshold (90% of the model context window), in estimated tokens.
         #[arg(long)]
         compact_after_tokens: Option<usize>,
-        /// Force compaction after this many consecutive tool-only turns. Use 0 to disable.
+        /// Optional tool-only-turn compaction trigger. Disabled by default; use 0 to disable.
         #[arg(long, default_value_t = DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS)]
         compact_after_tool_only_turns: usize,
-        /// Refuse to send request JSON above this many characters.
+        /// Override the model-context input guard, in JSON characters.
         #[arg(long)]
         max_input_chars: Option<usize>,
-        /// Refuse to send a request once estimated input exceeds this many tokens.
+        /// Override the model-context input guard, in estimated tokens.
         #[arg(long)]
         max_input_tokens: Option<usize>,
     },
@@ -458,6 +458,15 @@ pub(crate) enum Command {
         /// Optional Spark harness run manifest or saved benchmark report JSON. Repeat to merge inputs.
         #[arg(long)]
         harness_report: Vec<PathBuf>,
+        /// Labeled Spark harness report for paired before/after comparisons, as LABEL=REPORT.
+        /// Repeat with at least two labels. The first label is the default baseline when Codex CLI
+        /// is absent.
+        #[arg(long, value_name = "LABEL=REPORT")]
+        harness_variant: Vec<String>,
+        /// Runner to normalize as the 100-point resource baseline. Accepts a complete runner id or
+        /// a harness-variant label. Defaults to Codex CLI when present, otherwise the first variant.
+        #[arg(long)]
+        baseline_runner: Option<String>,
         /// Optional Codex CLI benchmark JSON report(s) to compare against. Repeat to merge reports.
         /// Supply at least one benchmark or usage-history report input overall.
         #[arg(long)]

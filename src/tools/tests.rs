@@ -11,11 +11,12 @@ fn builtin_tools_do_not_include_synthetic_completion_tool() {
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
 
-    assert_eq!(names.len(), 18);
+    assert_eq!(names.len(), 19);
     assert!(!names.iter().any(|name| name == "agent.complete"));
     assert!(names.iter().any(|name| name == "fs.stat"));
     assert!(names.iter().any(|name| name == "fs.rename"));
     assert!(names.iter().any(|name| name == "cmd.exec"));
+    assert!(names.iter().any(|name| name == "gh.read"));
     assert!(names.iter().any(|name| name == "browser.run"));
     assert!(names.iter().any(|name| name == "web.search"));
     assert!(names.iter().any(|name| name == "subagent.run"));
@@ -41,6 +42,7 @@ fn ask_mode_advertises_only_readonly_tools() {
             "fs.list",
             "fs.stat",
             "fs.search",
+            "gh.read",
             "web.search",
             "subagent.run",
             "subagent.spawn",

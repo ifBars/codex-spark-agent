@@ -6,16 +6,16 @@ mod profile_scenarios;
 
 use crate::cli::{Cli, Command, ProfileBenchmarkSuiteKind, TraceSort};
 use crate::client::output_text_delta;
+use crate::json_count_map_summary;
 use crate::profile::scenarios::validate_scenario_repeat;
 use crate::prompt_commands;
 use crate::session::{is_active_session, timestamp_session_name};
 use crate::skill::commands::{contains_skill_mention, mentioned_skill_names};
 use crate::trace::commands::{
-    TraceListRecord, latest_trace_dir, list_trace_dirs, resolve_char_threshold, sort_trace_records,
-    trace_export_record, trace_filter_label, trace_has_all_diagnostics,
-    trace_matches_metric_filters, trace_runs_root, trace_sort_metric, trace_sort_name,
+    TraceListRecord, latest_trace_dir, list_trace_dirs, sort_trace_records, trace_export_record,
+    trace_filter_label, trace_has_all_diagnostics, trace_matches_metric_filters, trace_runs_root,
+    trace_sort_metric, trace_sort_name,
 };
-use crate::{DEFAULT_COMPACT_AFTER_CHARS, json_count_map_summary};
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -293,6 +293,10 @@ fn benchmark_compare_help_describes_harness_report_inputs() {
     assert!(help.contains(
         "Exit nonzero after writing artifacts when inputs or provider skips make the headline directional"
     ));
+    assert!(help.contains(
+        "Labeled Spark harness report for paired before/after comparisons, as LABEL=REPORT"
+    ));
+    assert!(help.contains("Runner to normalize as the 100-point resource baseline"));
 }
 
 #[test]
@@ -322,9 +326,10 @@ fn benchmark_compare_accepts_usage_history_without_a_codex_report() {
 
 #[test]
 fn benchmark_compare_requires_at_least_one_input_at_execution() {
-    assert!(crate::ensure_benchmark_comparison_inputs(&[], &[], &[], &[]).is_err());
+    assert!(crate::ensure_benchmark_comparison_inputs(&[], &[], &[], &[], &[]).is_err());
     assert!(
         crate::ensure_benchmark_comparison_inputs(
+            &[],
             &[],
             &[],
             &[],
@@ -332,6 +337,50 @@ fn benchmark_compare_requires_at_least_one_input_at_execution() {
         )
         .is_ok()
     );
+}
+
+#[test]
+fn benchmark_compare_accepts_labeled_harness_variants() {
+    let cli = <Cli as clap::Parser>::try_parse_from([
+        "spark",
+        "benchmark-compare",
+        "--harness-variant",
+        "baseline=before.json",
+        "--harness-variant",
+        "progressive=after.json",
+        "--baseline-runner",
+        "baseline",
+    ])
+    .expect("parse labeled harness variants");
+
+    let Command::BenchmarkCompare {
+        harness_variant,
+        baseline_runner,
+        ..
+    } = cli.command
+    else {
+        panic!("expected benchmark-compare command");
+    };
+    assert_eq!(
+        harness_variant,
+        vec![
+            "baseline=before.json".to_string(),
+            "progressive=after.json".to_string()
+        ]
+    );
+    assert_eq!(baseline_runner.as_deref(), Some("baseline"));
+
+    let parsed = crate::parse_harness_variant_reports(&harness_variant)
+        .expect("parse harness variant values");
+    assert_eq!(parsed[0].label, "baseline");
+    assert_eq!(parsed[0].path, PathBuf::from("before.json"));
+    assert_eq!(parsed[1].label, "progressive");
+}
+
+#[test]
+fn harness_variant_parser_rejects_unlabeled_reports() {
+    let result = crate::parse_harness_variant_reports(&["before.json".to_string()]);
+    assert!(result.is_err());
 }
 
 #[test]
@@ -1431,31 +1480,6 @@ fn latest_trace_dir_uses_highest_run_suffix() {
     let latest = latest_trace_dir(&root).expect("latest trace");
 
     assert_eq!(latest.file_name().unwrap(), "run-2");
-}
-
-#[test]
-fn token_thresholds_resolve_to_estimated_chars() {
-    let chars = resolve_char_threshold(
-        "compact-after",
-        None,
-        Some(32_000),
-        DEFAULT_COMPACT_AFTER_CHARS,
-    )
-    .expect("resolve threshold");
-
-    assert_eq!(chars, 128_000);
-}
-
-#[test]
-fn char_thresholds_conflict_with_token_thresholds() {
-    let error = resolve_char_threshold("max-input", Some(1), Some(1), 10)
-        .expect_err("conflicting thresholds");
-
-    assert!(
-        error
-            .to_string()
-            .contains("pass either --max-input-chars or --max-input-tokens")
-    );
 }
 
 #[test]

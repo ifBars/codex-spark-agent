@@ -1,17 +1,28 @@
 use serde_json::{Value, json};
+use std::time::Instant;
+
+use futures_util::future::join_all;
 
 use crate::agent::AgentRunner;
 use crate::mcp::McpRegistry;
 use crate::profiler::tool_signature;
 use crate::tools::{
-    ToolResult, invoke_with_read_roots, is_local_filesystem_tool, is_readonly_tool,
+    ToolResult, invoke_local_read_with_read_roots, invoke_with_read_roots,
+    is_local_filesystem_tool, is_readonly_tool,
 };
+
+const MAX_PARALLEL_LOCAL_READS: usize = 8;
 
 #[derive(Debug, Clone)]
 pub(super) struct CachedToolObservation {
     pub(super) result: ToolResult,
     pub(super) first_turn: usize,
     pub(super) hits: usize,
+}
+
+pub(super) struct TimedToolResult {
+    pub(super) result: ToolResult,
+    pub(super) duration_ms: u64,
 }
 
 impl AgentRunner {
@@ -46,6 +57,10 @@ impl AgentRunner {
         }
         if tool_name.starts_with("subagent.") {
             return Box::pin(self.invoke_subagent_tool(tool_name, args)).await;
+        }
+        if tool_name == "tool.search" {
+            self.ensure_mcp_registry().await;
+            return self.search_and_activate_tools(args);
         }
         if let Some(message) = self.delegated_tool_scope_error(tool_name, &args) {
             return ToolResult {
@@ -87,6 +102,127 @@ impl AgentRunner {
         }
         result
     }
+
+    /// Executes one model-emitted batch of independent local reads concurrently while preserving
+    /// the call order expected by the Responses API. Mutation, shell, network, browser, MCP, and
+    /// subagent tools intentionally stay on the serial path in the agent loop.
+    pub(super) async fn invoke_parallel_local_reads(
+        &mut self,
+        calls: &[(String, Value)],
+    ) -> Vec<TimedToolResult> {
+        debug_assert!(
+            calls
+                .iter()
+                .all(|(tool_name, _)| is_parallel_local_read(tool_name))
+        );
+
+        let mut results = (0..calls.len()).map(|_| None).collect::<Vec<_>>();
+        let mut pending = Vec::new();
+
+        for (index, (tool_name, args)) in calls.iter().enumerate() {
+            if self.local_filesystem_only
+                && let Some(budget) = &mut self.local_filesystem_tool_budget
+                && !budget.try_consume()
+            {
+                let message = "local filesystem evidence budget reached; synthesize from the evidence already gathered";
+                results[index] = Some(TimedToolResult {
+                    result: ToolResult {
+                        ok: false,
+                        data: json!({
+                            "error_kind": "tool_budget_reached",
+                            "tool": tool_name,
+                            "max": budget.max,
+                            "used": budget.used,
+                            "remaining": 0,
+                            "message": message,
+                        }),
+                        error: Some(message.to_string()),
+                    },
+                    duration_ms: 0,
+                });
+                continue;
+            }
+
+            let signature = tool_signature(tool_name, args);
+            if let Some(cached) = self.readonly_tool_cache.get_mut(&signature) {
+                cached.hits += 1;
+                self.profiler
+                    .record_readonly_tool_cache_hit(self.request_seq, tool_name, args);
+                results[index] = Some(TimedToolResult {
+                    result: cached_readonly_result(tool_name, args, cached),
+                    duration_ms: 0,
+                });
+                continue;
+            }
+
+            pending.push((index, signature, tool_name.clone(), args.clone()));
+        }
+
+        let cwd = self.cwd.clone();
+        let read_roots = self.read_roots.clone();
+        let mode = self.mode;
+        let mut completed = Vec::with_capacity(pending.len());
+        for wave in pending.chunks(MAX_PARALLEL_LOCAL_READS) {
+            let joined = join_all(wave.iter().map(|(_, _, tool_name, args)| {
+                let cwd = cwd.clone();
+                let read_roots = read_roots.clone();
+                let tool_name = tool_name.clone();
+                let args = args.clone();
+                tokio::task::spawn_blocking(move || {
+                    let started = Instant::now();
+                    let result = invoke_local_read_with_read_roots(
+                        &cwd,
+                        &read_roots,
+                        mode,
+                        &tool_name,
+                        args,
+                    );
+                    TimedToolResult {
+                        result,
+                        duration_ms: started.elapsed().as_millis() as u64,
+                    }
+                })
+            }))
+            .await;
+            completed.extend(joined.into_iter().map(|joined| match joined {
+                Ok(timed) => timed,
+                Err(error) => TimedToolResult {
+                    result: ToolResult {
+                        ok: false,
+                        data: json!({
+                            "error_kind": "parallel_tool_join",
+                            "message": error.to_string(),
+                        }),
+                        error: Some(format!("parallel local read task failed: {error}")),
+                    },
+                    duration_ms: 0,
+                },
+            }));
+        }
+
+        for ((index, signature, _, _), timed) in pending.into_iter().zip(completed) {
+            if should_cache_readonly_result(&timed.result) {
+                self.readonly_tool_cache.insert(
+                    signature,
+                    CachedToolObservation {
+                        result: timed.result.clone(),
+                        first_turn: self.request_seq,
+                        hits: 0,
+                    },
+                );
+            }
+            results[index] = Some(timed);
+        }
+
+        results
+            .into_iter()
+            .map(|result| result.expect("every parallel read has a result"))
+            .collect()
+    }
+}
+
+pub(in crate::agent) fn is_parallel_local_read(tool_name: &str) -> bool {
+    is_local_filesystem_tool(tool_name)
 }
 
 pub(in crate::agent) fn is_cacheable_readonly_tool(tool_name: &str) -> bool {
@@ -219,6 +355,47 @@ mod tests {
         assert_eq!(
             runner.profile_summary()["local_filesystem_tool_budget"],
             json!({"max": 16, "used": 16, "remaining": 0})
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_local_reads_preserve_order_cache_results_and_budget() {
+        let dir = TempDir::new().expect("tempdir");
+        std::fs::write(dir.path().join("first.txt"), "first").expect("first fixture");
+        std::fs::write(dir.path().join("second.txt"), "second").expect("second fixture");
+        let mut runner = AgentRunner::new(
+            auth_tokens(),
+            dir.path().to_path_buf(),
+            crate::DEFAULT_MODEL.to_string(),
+            false,
+            false,
+            crate::DEFAULT_COMPACT_AFTER_CHARS,
+            crate::DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS,
+            crate::DEFAULT_MAX_INPUT_CHARS,
+            false,
+            None,
+            false,
+            None,
+            crate::tools::AgentMode::Ask,
+        )
+        .expect("runner");
+        runner.enforce_local_filesystem_only();
+        runner.set_local_filesystem_tool_budget(3);
+        let calls = vec![
+            ("fs.read".to_string(), json!({"path": "first.txt"})),
+            ("fs.read".to_string(), json!({"path": "second.txt"})),
+        ];
+
+        let first = runner.invoke_parallel_local_reads(&calls).await;
+        assert_eq!(first[0].result.data["path"], "first.txt");
+        assert_eq!(first[1].result.data["path"], "second.txt");
+
+        let cached = runner.invoke_parallel_local_reads(&calls).await;
+        assert_eq!(cached[0].result.data["cached_observation"], true);
+        assert_eq!(cached[1].result.data["error_kind"], "tool_budget_reached");
+        assert_eq!(
+            runner.profile_summary()["local_filesystem_tool_budget"],
+            json!({"max": 3, "used": 3, "remaining": 0})
         );
     }
 }

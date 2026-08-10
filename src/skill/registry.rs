@@ -1,13 +1,41 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::builtins;
+
 #[derive(Debug, Clone)]
 pub struct SkillSource {
     pub name: String,
-    pub path: PathBuf,
+    location: SkillSourceLocation,
+}
+
+#[derive(Debug, Clone)]
+enum SkillSourceLocation {
+    BuiltIn(&'static str),
+    RepoLocal(PathBuf),
+}
+
+impl SkillSource {
+    fn read(&self) -> Result<String> {
+        match &self.location {
+            SkillSourceLocation::BuiltIn(raw) => Ok((*raw).to_string()),
+            SkillSourceLocation::RepoLocal(path) => std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read {}", path.display())),
+        }
+    }
+
+    fn display_path(&self, cwd: &Path) -> String {
+        match &self.location {
+            SkillSourceLocation::BuiltIn(_) => format!("builtin:{}", self.name),
+            SkillSourceLocation::RepoLocal(path) => display_rel(cwd, path),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,8 +53,7 @@ pub struct CompiledSkill {
 pub fn list_status(cwd: &Path) -> Result<Vec<SkillStatus>> {
     let mut statuses = Vec::new();
     for source in discover_sources(cwd)? {
-        let raw = std::fs::read_to_string(&source.path)
-            .with_context(|| format!("failed to read {}", source.path.display()))?;
+        let raw = source.read()?;
         let metadata = parse_frontmatter(&raw);
         let source_hash = sha256_hex(raw.as_bytes());
         let cache_path = cache_path(cwd, &source.name)?;
@@ -36,10 +63,11 @@ pub fn list_status(cwd: &Path) -> Result<Vec<SkillStatus>> {
             Err(_) => "missing",
         }
         .to_string();
+        let source_path = source.display_path(cwd);
         statuses.push(SkillStatus {
             name: source.name,
             description: metadata.description.unwrap_or_default(),
-            source_path: display_rel(cwd, &source.path),
+            source_path,
             cache_status,
         });
     }
@@ -66,8 +94,7 @@ pub fn compile_or_load_with_summary(
     summary_override: Option<String>,
 ) -> Result<CompiledSkill> {
     let source = find_source(cwd, name)?;
-    let raw = std::fs::read_to_string(&source.path)
-        .with_context(|| format!("failed to read {}", source.path.display()))?;
+    let raw = source.read()?;
     let source_hash = sha256_hex(raw.as_bytes());
     let cache_path = cache_path(cwd, &source.name)?;
 
@@ -86,8 +113,7 @@ pub fn compile_or_load_with_summary(
 
 pub fn load_cached_if_fresh(cwd: &Path, name: &str) -> Result<Option<CompiledSkill>> {
     let source = find_source(cwd, name)?;
-    let raw = std::fs::read_to_string(&source.path)
-        .with_context(|| format!("failed to read {}", source.path.display()))?;
+    let raw = source.read()?;
     let source_hash = sha256_hex(raw.as_bytes());
     let cache_path = cache_path(cwd, &source.name)?;
     let Ok(cached) = read_cached(&cache_path) else {
@@ -98,12 +124,32 @@ pub fn load_cached_if_fresh(cwd: &Path, name: &str) -> Result<Option<CompiledSki
 
 pub fn source_text(cwd: &Path, name: &str) -> Result<(SkillSource, String)> {
     let source = find_source(cwd, name)?;
-    let raw = std::fs::read_to_string(&source.path)
-        .with_context(|| format!("failed to read {}", source.path.display()))?;
+    let raw = source.read()?;
     Ok((source, raw))
 }
 
 pub fn discover_sources(cwd: &Path) -> Result<Vec<SkillSource>> {
+    let mut sources = builtins::all()
+        .iter()
+        .map(|skill| {
+            (
+                skill.name.to_string(),
+                SkillSource {
+                    name: skill.name.to_string(),
+                    location: SkillSourceLocation::BuiltIn(skill.raw),
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for source in discover_repo_sources(cwd)? {
+        sources.insert(source.name.clone(), source);
+    }
+
+    Ok(sources.into_values().collect())
+}
+
+pub fn discover_repo_sources(cwd: &Path) -> Result<Vec<SkillSource>> {
     let skills_dir = cwd.join(".agents").join("skills");
     if !skills_dir.exists() {
         return Ok(Vec::new());
@@ -124,7 +170,7 @@ pub fn discover_sources(cwd: &Path) -> Result<Vec<SkillSource>> {
         let metadata = parse_frontmatter(&raw);
         sources.push(SkillSource {
             name: metadata.name.unwrap_or(folder_name),
-            path,
+            location: SkillSourceLocation::RepoLocal(path),
         });
     }
     sources.sort_by(|left, right| left.name.cmp(&right.name));
@@ -135,7 +181,7 @@ fn find_source(cwd: &Path, name: &str) -> Result<SkillSource> {
     discover_sources(cwd)?
         .into_iter()
         .find(|source| source.name == name)
-        .with_context(|| format!("skill `{name}` not found under .agents/skills"))
+        .with_context(|| format!("skill `{name}` is not built in or present under .agents/skills"))
 }
 
 fn compile_source(
@@ -174,7 +220,7 @@ fn compile_source(
     Ok(CompiledSkill {
         name: source.name.clone(),
         description,
-        source_path: display_rel(cwd, &source.path),
+        source_path: source.display_path(cwd),
         source_hash,
         compiled_at: now_secs(),
         summary,
@@ -378,5 +424,51 @@ description: Demo skill
         assert_eq!(first.triggers, vec!["Rust work", "Code review"]);
         assert!(first.summary.contains("Workflow:"));
         assert!(dir.path().join(".spark/skills/demo.json").exists());
+    }
+
+    #[test]
+    fn discovers_and_compiles_builtin_github_skill_without_repo_skills() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let sources = discover_sources(dir.path()).expect("discover skills");
+        let github = sources
+            .iter()
+            .find(|source| source.name == "github")
+            .expect("built-in github skill");
+        assert_eq!(github.display_path(dir.path()), "builtin:github");
+
+        let compiled = compile_or_load(dir.path(), "github", false).expect("compile github");
+        assert_eq!(compiled.source_path, "builtin:github");
+        assert!(compiled.description.contains("GitHub CLI"));
+        assert!(
+            compiled
+                .summary
+                .contains("Treat every pre-existing modification")
+        );
+        assert!(compiled.summary.contains("gh pr create --dry-run"));
+        assert!(!compiled.summary.contains("[skill summary truncated]"));
+        assert!(
+            compiled
+                .triggers
+                .iter()
+                .any(|trigger| trigger.contains("pull requests"))
+        );
+    }
+
+    #[test]
+    fn repo_local_skill_overrides_builtin_with_the_same_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let skill_dir = dir.path().join(".agents").join("skills").join("github");
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: github\ndescription: Local GitHub policy\n---\n\n# Local\n",
+        )
+        .expect("write local skill");
+
+        let compiled = compile_or_load(dir.path(), "github", false).expect("compile local github");
+
+        assert_eq!(compiled.description, "Local GitHub policy");
+        assert_eq!(compiled.source_path, ".agents/skills/github/SKILL.md");
     }
 }

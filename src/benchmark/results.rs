@@ -155,6 +155,8 @@ pub(crate) struct BenchmarkComparisonOptions {
     pub(crate) limit: usize,
     pub(crate) all_runs: bool,
     pub(crate) harness_reports: Vec<PathBuf>,
+    pub(crate) harness_variants: Vec<HarnessVariantReport>,
+    pub(crate) baseline_runner: Option<String>,
     pub(crate) codex_cli_reports: Vec<PathBuf>,
     pub(crate) opencode_reports: Vec<PathBuf>,
     pub(crate) usage_history_reports: Vec<PathBuf>,
@@ -163,6 +165,12 @@ pub(crate) struct BenchmarkComparisonOptions {
     pub(crate) group_by_model: bool,
     pub(crate) successful_only: bool,
     pub(crate) output_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HarnessVariantReport {
+    pub(crate) label: String,
+    pub(crate) path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -302,6 +310,7 @@ pub(crate) fn write_benchmark_report(
 pub(crate) fn write_benchmark_comparison(
     options: BenchmarkComparisonOptions,
 ) -> Result<BenchmarkComparisonOutput> {
+    validate_harness_variant_inputs(&options)?;
     let usage_history_rows = read_usage_history_report_rows(
         &options.cwd,
         options.suite.name(),
@@ -309,9 +318,12 @@ pub(crate) fn write_benchmark_comparison(
     )?;
     let usage_only = !usage_history_rows.is_empty()
         && options.harness_reports.is_empty()
+        && options.harness_variants.is_empty()
         && options.codex_cli_reports.is_empty()
         && options.opencode_reports.is_empty();
-    let harness_rows = if usage_only {
+    let harness_rows = if usage_only
+        || (!options.harness_variants.is_empty() && options.harness_reports.is_empty())
+    {
         Vec::new()
     } else if options.harness_reports.is_empty() {
         collect_benchmark_rows(&BenchmarkReportOptions {
@@ -330,8 +342,35 @@ pub(crate) fn write_benchmark_comparison(
         )?
     };
     let harness_rows = filter_harness_request_failure_rows(&options.cwd, harness_rows);
+    let mut variant_rows = Vec::<ComparisonRow>::new();
+    let mut variant_skipped_request_failures = 0usize;
+    let mut variant_skipped_request_failure_scenarios = BTreeMap::<String, usize>::new();
+    let mut variant_skipped_request_failure_retry_hints = BTreeMap::<String, String>::new();
+    let mut variant_runners = Vec::<String>::new();
+    for variant in &options.harness_variants {
+        let rows = collect_benchmark_rows_from_harness_input_paths(
+            &options.cwd,
+            options.suite,
+            std::slice::from_ref(&variant.path),
+        )?;
+        let filtered = filter_harness_request_failure_rows(&options.cwd, rows);
+        let runner = format!("spark-harness/{}", runner_variant_slug(&variant.label));
+        variant_runners.push(runner.clone());
+        variant_rows.extend(filtered.rows.iter().map(|row| {
+            let mut comparison = comparison_row_from_harness(row);
+            comparison.runner = runner.clone();
+            comparison
+        }));
+        variant_skipped_request_failures += filtered.skipped_request_failures;
+        merge_count_map(
+            &mut variant_skipped_request_failure_scenarios,
+            filtered.skipped_request_failure_scenarios,
+        );
+        variant_skipped_request_failure_retry_hints
+            .extend(filtered.skipped_request_failure_retry_hints);
+    }
     if harness_rows.rows.is_empty() && !usage_only {
-        if harness_rows.skipped_request_failures > 0 {
+        if variant_rows.is_empty() && harness_rows.skipped_request_failures > 0 {
             let skipped_scenarios = skipped_infrastructure_scenarios_text(
                 &harness_rows.skipped_request_failure_scenarios,
             );
@@ -341,11 +380,13 @@ pub(crate) fn write_benchmark_comparison(
                 skipped_scenarios
             );
         }
-        anyhow::bail!(
-            "no harness traces found for benchmark suite '{}' under {}",
-            options.suite.name(),
-            commands::trace_runs_root(&options.cwd).display()
-        );
+        if variant_rows.is_empty() {
+            anyhow::bail!(
+                "no harness traces found for benchmark suite '{}' under {}",
+                options.suite.name(),
+                commands::trace_runs_root(&options.cwd).display()
+            );
+        }
     }
     let codex_external_rows = read_external_agent_report_rows_with_skips(
         &options.cwd,
@@ -353,7 +394,7 @@ pub(crate) fn write_benchmark_comparison(
         "Codex CLI",
     )?;
     let codex_rows = codex_external_rows.rows;
-    if codex_rows.is_empty() && !usage_only {
+    if codex_rows.is_empty() && !usage_only && variant_runners.len() < 2 {
         if codex_external_rows.skipped_infrastructure_failures > 0 {
             let skipped_scenarios = skipped_infrastructure_scenarios_text(
                 &codex_external_rows.skipped_infrastructure_scenarios,
@@ -381,6 +422,7 @@ pub(crate) fn write_benchmark_comparison(
 
     let mut rows = Vec::new();
     rows.extend(harness_rows.rows.iter().map(comparison_row_from_harness));
+    rows.extend(variant_rows);
     rows.extend(
         codex_rows
             .iter()
@@ -411,7 +453,15 @@ pub(crate) fn write_benchmark_comparison(
         anyhow::bail!("no successful task rows remain after excluding failed benchmark attempts");
     }
     let mut rows = average_comparison_attempts(rows);
-    let baseline_runner = comparison_baseline_runner(&rows, "codex-cli");
+    let baseline_runner = if usage_only {
+        "codex-cli".to_string()
+    } else {
+        resolve_comparison_baseline_runner(
+            &rows,
+            options.baseline_runner.as_deref(),
+            variant_runners.first().map(String::as_str),
+        )?
+    };
     apply_comparison_indices(&mut rows, &baseline_runner);
     rows.sort_by(|left, right| {
         scenario_order(options.suite, &left.scenario)
@@ -423,10 +473,17 @@ pub(crate) fn write_benchmark_comparison(
         options.suite.name(),
         &rows,
         ComparisonDiagnostics {
-            skipped_spark_infrastructure_failures: harness_rows.skipped_request_failures,
-            skipped_spark_infrastructure_scenarios: harness_rows.skipped_request_failure_scenarios,
+            skipped_spark_infrastructure_failures: harness_rows.skipped_request_failures
+                + variant_skipped_request_failures,
+            skipped_spark_infrastructure_scenarios: merged_count_maps(
+                harness_rows.skipped_request_failure_scenarios,
+                variant_skipped_request_failure_scenarios,
+            ),
             skipped_spark_infrastructure_retry_hints: harness_rows
-                .skipped_request_failure_retry_hints,
+                .skipped_request_failure_retry_hints
+                .into_iter()
+                .chain(variant_skipped_request_failure_retry_hints)
+                .collect(),
             skipped_codex_infrastructure_failures: codex_external_rows
                 .skipped_infrastructure_failures,
             skipped_codex_infrastructure_scenarios: codex_external_rows
@@ -440,6 +497,7 @@ pub(crate) fn write_benchmark_comparison(
             skipped_opencode_infrastructure_retry_hints: opencode_external_rows
                 .skipped_infrastructure_retry_hints,
         },
+        &baseline_runner,
     );
     if let Some(diagnostics) = aggregate
         .get_mut("diagnostics")
@@ -456,7 +514,7 @@ pub(crate) fn write_benchmark_comparison(
     let csv_path = options.output_dir.join(format!("{stem}.csv"));
     let html_path = options.output_dir.join(format!("{stem}.html"));
     redact_comparison_rows(&mut rows);
-    let inputs = comparison_input_metadata(&options);
+    let inputs = comparison_input_metadata(&options, &baseline_runner);
     annotate_comparison_validity(&mut aggregate, &inputs);
 
     std::fs::write(
@@ -501,9 +559,21 @@ fn retain_successful_comparison_attempts(
     before - rows.len()
 }
 
-fn comparison_input_metadata(options: &BenchmarkComparisonOptions) -> Value {
+fn comparison_input_metadata(options: &BenchmarkComparisonOptions, baseline_runner: &str) -> Value {
+    let harness_variants = options
+        .harness_variants
+        .iter()
+        .map(|variant| {
+            json!({
+                "label": variant.label,
+                "runner": format!("spark-harness/{}", runner_variant_slug(&variant.label)),
+                "report": input_report_metadata(&options.cwd, &variant.path),
+            })
+        })
+        .collect::<Vec<_>>();
     let mut inputs = json!({
         "harness_reports": input_report_metadata_list(&options.cwd, &options.harness_reports),
+        "harness_variants": harness_variants,
         "codex_cli_reports": input_report_metadata_list(&options.cwd, &options.codex_cli_reports),
         "opencode_reports": input_report_metadata_list(&options.cwd, &options.opencode_reports),
         "usage_history_reports": input_report_metadata_list(
@@ -517,18 +587,22 @@ fn comparison_input_metadata(options: &BenchmarkComparisonOptions) -> Value {
             .unwrap_or(Value::Null),
         "harness_source": if !options.usage_history_reports.is_empty()
             && options.harness_reports.is_empty()
+            && options.harness_variants.is_empty()
             && options.codex_cli_reports.is_empty()
             && options.opencode_reports.is_empty()
         {
             "usage-history-only"
-        } else if options.harness_reports.is_empty() {
+        } else if options.harness_reports.is_empty() && options.harness_variants.is_empty() {
             "latest-trace-scan"
+        } else if !options.harness_variants.is_empty() {
+            "labeled-harness-variants"
         } else {
             "explicit-report-inputs"
         },
         "group_by_model": options.group_by_model,
         "group_by_reasoning": options.group_by_reasoning,
         "successful_only": options.successful_only,
+        "baseline_runner": baseline_runner,
     });
     let freshness = input_freshness_summary(&inputs);
     if let Some(object) = inputs.as_object_mut() {
@@ -882,7 +956,7 @@ fn input_freshness_summary(inputs: &Value) -> Value {
 }
 
 fn input_report_modified_values(inputs: &Value) -> Vec<u64> {
-    [
+    let mut values = [
         "/harness_reports",
         "/codex_cli_reports",
         "/opencode_reports",
@@ -895,7 +969,20 @@ fn input_report_modified_values(inputs: &Value) -> Vec<u64> {
             .iter()
             .filter_map(|report| report.get("modified_unix_ms").and_then(Value::as_u64))
     })
-    .collect()
+    .collect::<Vec<_>>();
+    values.extend(
+        inputs
+            .get("harness_variants")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|variant| {
+                variant
+                    .pointer("/report/modified_unix_ms")
+                    .and_then(Value::as_u64)
+            }),
+    );
+    values
 }
 
 fn collect_benchmark_rows_from_manifest_paths(
@@ -1372,6 +1459,12 @@ fn aggregate_rows(suite: &str, rows: &[BenchmarkRunRow]) -> Value {
             json!(request_failure_scenarios),
         );
     }
+    let total_input_tokens = aggregate_complete_usage_total(rows, "input_tokens");
+    let total_cached_input_tokens = aggregate_complete_usage_total(rows, "cached_input_tokens");
+    let total_cache_write_input_tokens =
+        aggregate_complete_usage_total(rows, "cache_write_input_tokens");
+    let total_uncached_input_tokens = aggregate_complete_usage_total(rows, "uncached_input_tokens");
+    let total_output_tokens = aggregate_complete_usage_total(rows, "output_tokens");
 
     json!({
         "suite": suite,
@@ -1380,13 +1473,31 @@ fn aggregate_rows(suite: &str, rows: &[BenchmarkRunRow]) -> Value {
         "average_completion_score": round1(average_completion),
         "average_quality_score": round1(average_quality),
         "average_process_score": round1(average_process),
+        "average_execution_hygiene_score": round1(average_process),
         "average_task_quality_score": round1(average_task_quality),
         "average_efficiency_score": round1(average_efficiency),
+        "average_runtime_efficiency_score": round1(average_efficiency),
         "average_harness_pressure_score": round1(average_harness_pressure),
         "min_score": rows.iter().map(|row| row.score).fold(100.0, f64::min),
         "max_score": rows.iter().map(|row| row.score).fold(0.0, f64::max),
         "successful_runs": rows.iter().filter(|row| row.success).count(),
+        "total_requests": rows.iter().map(|row| row.requests).sum::<u64>(),
         "total_tools": rows.iter().map(|row| row.tool_calls).sum::<u64>(),
+        "total_tool_calls": rows.iter().map(|row| row.tool_calls).sum::<u64>(),
+        "total_tool_only_turns": rows.iter().map(|row| row.tool_only_turns).sum::<u64>(),
+        "total_duration_ms": rows.iter().map(|row| row.total_duration_ms).sum::<u64>(),
+        "total_input_tokens": total_input_tokens,
+        "total_cached_input_tokens": total_cached_input_tokens,
+        "total_cache_write_input_tokens": total_cache_write_input_tokens,
+        "total_uncached_input_tokens": total_uncached_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "response_usage_totals": {
+            "input_tokens": total_input_tokens,
+            "cached_input_tokens": total_cached_input_tokens,
+            "cache_write_input_tokens": total_cache_write_input_tokens,
+            "uncached_input_tokens": total_uncached_input_tokens,
+            "output_tokens": total_output_tokens,
+        },
         "total_source_files": rows.iter().map(|row| row.source_files).sum::<u64>(),
         "total_source_bytes": rows.iter().map(|row| row.source_bytes).sum::<u64>(),
         "total_tool_failures": rows.iter().map(|row| row.tool_failures).sum::<u64>(),
@@ -1396,6 +1507,12 @@ fn aggregate_rows(suite: &str, rows: &[BenchmarkRunRow]) -> Value {
         "max_tool_only_streak": rows.iter().map(|row| row.max_tool_only_streak).max().unwrap_or(0),
         "max_context_window_pct": rows.iter().map(|row| row.max_context_window_pct).fold(0.0, f64::max),
         "diagnostics": diagnostics,
+    })
+}
+
+fn aggregate_complete_usage_total(rows: &[BenchmarkRunRow], metric: &str) -> Option<u64> {
+    rows.iter().try_fold(0u64, |total, row| {
+        complete_usage_total(&row.response_usage, metric).map(|value| total.saturating_add(value))
     })
 }
 
@@ -1572,6 +1689,24 @@ fn rows_to_html(suite: &str, rows: &[BenchmarkRunRow], aggregate: &Value) -> Str
         .get("average_efficiency_score")
         .and_then(Value::as_f64)
         .unwrap_or(0.0);
+    let total_input_tokens = aggregate
+        .get("total_input_tokens")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let total_uncached_input_tokens = aggregate
+        .get("total_uncached_input_tokens")
+        .and_then(Value::as_u64)
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let total_requests = aggregate
+        .get("total_requests")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let total_tool_failures = aggregate
+        .get("total_tool_failures")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let max_streak = aggregate
         .get("max_tool_only_streak")
         .and_then(Value::as_u64)
@@ -1612,13 +1747,19 @@ td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
 <body>
 <main>
 <h1>Spark Benchmark Report: {suite}</h1>
-<p>Generated from saved benchmark traces. This report shows bounded component scores only; Benchmark Index is available in Codex-baselined comparison reports.</p>
+<p>Generated from saved benchmark traces. Execution hygiene measures failure and tool-loop pressure. Bounded runtime uses coarse duration thresholds. Resource Efficiency and the quality-gated Benchmark Index require a paired baseline comparison.</p>
 {request_failure_note}
 <section class="kpis">
 <div class="kpi"><strong>{avg_completion:.1}</strong><span>Completion</span></div>
 <div class="kpi"><strong>{avg_quality:.1}</strong><span>Quality</span></div>
-<div class="kpi"><strong>{avg_efficiency:.1}</strong><span>Efficiency</span></div>
-<div class="kpi"><strong>{avg_pressure:.1}</strong><span>Process</span></div>
+<div class="kpi"><strong>{avg_efficiency:.1}</strong><span>Bounded runtime</span></div>
+<div class="kpi"><strong>{avg_pressure:.1}</strong><span>Execution hygiene</span></div>
+</section>
+<section class="kpis">
+<div class="kpi"><strong>{total_input_tokens}</strong><span>Total input tokens</span></div>
+<div class="kpi"><strong>{total_uncached_input_tokens}</strong><span>Uncached input tokens</span></div>
+<div class="kpi"><strong>{total_requests}</strong><span>Requests</span></div>
+<div class="kpi"><strong>{total_tool_failures}</strong><span>Tool failures</span></div>
 </section>
 "#,
         suite = html_escape(suite),
@@ -1626,7 +1767,11 @@ td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
         avg_completion = avg_completion,
         avg_quality = avg_quality,
         avg_efficiency = avg_efficiency,
-        avg_pressure = avg_pressure
+        avg_pressure = avg_pressure,
+        total_input_tokens = total_input_tokens,
+        total_uncached_input_tokens = total_uncached_input_tokens,
+        total_requests = total_requests,
+        total_tool_failures = total_tool_failures
     );
     html.push_str("<h2>Completion by Scenario</h2><div class=\"panel\">");
     html.push_str(&score_svg(rows));
@@ -1635,10 +1780,10 @@ td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
     html.push_str("</div>");
     let _ = write!(
         html,
-        "<p class=\"muted\">Total truncations: {truncations}. Benchmark Index is omitted here because no Codex baseline is present. Max tool-only streak: {max_streak}.</p>",
+        "<p class=\"muted\">Total truncations: {truncations}. Resource and Benchmark indices are omitted because this standalone report has no paired baseline. Max tool-only streak: {max_streak}.</p>",
         max_streak = max_streak
     );
-    html.push_str("<h2>Run Details</h2><div class=\"panel\"><table><thead><tr><th>Scenario</th><th>Completion</th><th>Quality</th><th>Efficiency</th><th>Process</th><th>Legacy score</th><th>Validation</th><th>Browser</th><th>Duration</th><th>Source</th><th>Requests</th><th>Tools</th><th>Max context</th><th>Extra calls</th><th>Tool-only</th><th>Diagnostics</th><th>Failure points</th></tr></thead><tbody>");
+    html.push_str("<h2>Run Details</h2><div class=\"panel\"><table><thead><tr><th>Scenario</th><th>Completion</th><th>Quality</th><th>Bounded runtime</th><th>Execution hygiene</th><th>Legacy score</th><th>Validation</th><th>Browser</th><th>Duration</th><th>Source</th><th>Requests</th><th>Tools</th><th>Max context</th><th>Extra calls</th><th>Tool-only</th><th>Diagnostics</th><th>Failure points</th></tr></thead><tbody>");
     for row in rows {
         let validation = if row.validation_present {
             row.validation_exit_code
@@ -2552,6 +2697,96 @@ fn runner_variant_slug(value: &str) -> String {
         .replace(['/', '\\', ' '], "-")
 }
 
+fn validate_harness_variant_inputs(options: &BenchmarkComparisonOptions) -> Result<()> {
+    if options.harness_variants.is_empty() {
+        return Ok(());
+    }
+    if options.harness_variants.len() < 2 {
+        anyhow::bail!(
+            "paired harness comparison requires at least two --harness-variant LABEL=REPORT inputs"
+        );
+    }
+    if !options.harness_reports.is_empty()
+        || !options.codex_cli_reports.is_empty()
+        || !options.opencode_reports.is_empty()
+        || !options.usage_history_reports.is_empty()
+    {
+        anyhow::bail!(
+            "--harness-variant is a dedicated paired harness mode and cannot be combined with other report input types"
+        );
+    }
+    if options.group_by_model || options.group_by_reasoning {
+        anyhow::bail!(
+            "--harness-variant cannot be combined with --group-by-model or --group-by-reasoning; variant labels already define the runner groups"
+        );
+    }
+    let mut labels = BTreeSet::<String>::new();
+    for variant in &options.harness_variants {
+        let slug = runner_variant_slug(&variant.label);
+        if slug.is_empty() {
+            anyhow::bail!("harness variant labels must contain a visible character");
+        }
+        if !labels.insert(slug.clone()) {
+            anyhow::bail!(
+                "duplicate harness variant label '{}' after normalization to '{slug}'",
+                variant.label
+            );
+        }
+    }
+    Ok(())
+}
+
+fn resolve_comparison_baseline_runner(
+    rows: &[ComparisonRow],
+    requested: Option<&str>,
+    first_variant_runner: Option<&str>,
+) -> Result<String> {
+    let available = rows
+        .iter()
+        .map(|row| row.runner.clone())
+        .collect::<BTreeSet<_>>();
+    if let Some(requested) = requested.map(str::trim).filter(|value| !value.is_empty()) {
+        let direct = requested.to_string();
+        let variant = format!("spark-harness/{}", runner_variant_slug(requested));
+        if available.contains(&direct) {
+            return Ok(direct);
+        }
+        if available.contains(&variant) {
+            return Ok(variant);
+        }
+        anyhow::bail!(
+            "baseline runner '{requested}' is not present; available runners: {}",
+            available.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+    if available.contains("codex-cli") {
+        return Ok(comparison_baseline_runner(rows, "codex-cli"));
+    }
+    if let Some(first_variant_runner) = first_variant_runner
+        && available.contains(first_variant_runner)
+    {
+        return Ok(first_variant_runner.to_string());
+    }
+    anyhow::bail!(
+        "benchmark comparison needs a baseline runner; pass --baseline-runner with one of: {}",
+        available.into_iter().collect::<Vec<_>>().join(", ")
+    )
+}
+
+fn merge_count_map(target: &mut BTreeMap<String, usize>, source: BTreeMap<String, usize>) {
+    for (key, count) in source {
+        *target.entry(key).or_default() += count;
+    }
+}
+
+fn merged_count_maps(
+    mut left: BTreeMap<String, usize>,
+    right: BTreeMap<String, usize>,
+) -> BTreeMap<String, usize> {
+    merge_count_map(&mut left, right);
+    left
+}
+
 fn comparison_baseline_runner(rows: &[ComparisonRow], preferred_runner: &str) -> String {
     if rows.iter().any(|row| row.runner == preferred_runner) {
         return preferred_runner.to_string();
@@ -2701,6 +2936,7 @@ fn aggregate_comparison_with_diagnostics(
     suite: &str,
     rows: &[ComparisonRow],
     diagnostics: ComparisonDiagnostics,
+    baseline_runner: &str,
 ) -> Value {
     let scoring_rows = rows
         .iter()
@@ -2719,6 +2955,7 @@ fn aggregate_comparison_with_diagnostics(
     let mut runner_duration_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_item_call_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_input_token_scores = BTreeMap::<String, Vec<f64>>::new();
+    let mut runner_uncached_input_token_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_source_file_scores = BTreeMap::<String, Vec<f64>>::new();
     let mut runner_source_byte_scores = BTreeMap::<String, Vec<f64>>::new();
     let matched_rows = matched_comparison_rows(&scoring_rows);
@@ -2786,6 +3023,12 @@ fn aggregate_comparison_with_diagnostics(
                 .or_default()
                 .push(input_tokens as f64);
         }
+        if let Some(uncached_input_tokens) = row.uncached_input_tokens {
+            runner_uncached_input_token_scores
+                .entry(row.runner.clone())
+                .or_default()
+                .push(uncached_input_tokens as f64);
+        }
         runner_source_file_scores
             .entry(row.runner.clone())
             .or_default()
@@ -2813,6 +3056,7 @@ fn aggregate_comparison_with_diagnostics(
     let runner_duration_ms_averages = average_map(runner_duration_scores);
     let runner_tool_or_item_call_averages = average_map(runner_item_call_scores);
     let runner_input_token_averages = average_map(runner_input_token_scores);
+    let runner_uncached_input_token_averages = average_map(runner_uncached_input_token_scores);
     let runner_source_file_averages = average_map(runner_source_file_scores);
     let runner_source_byte_averages = average_map(runner_source_byte_scores);
     let matched_rows_by_runner = comparison_rows_by_runner(&matched_rows);
@@ -2826,14 +3070,13 @@ fn aggregate_comparison_with_diagnostics(
     let winner_entry = winner_pool
         .iter()
         .max_by(|left, right| compare_runner_rows(left.1, right.1));
-    let baseline_runner = comparison_baseline_runner(&scoring_rows, "codex-cli");
     let headline = winner_entry.map(|(winner_runner, winner_rows)| {
         let winner_benchmark_index =
             average_optional_comparison_field(winner_rows, |row| row.benchmark_index);
         let baseline_benchmark_index = matched_runner_benchmark_index_averages
-            .get(&baseline_runner)
+            .get(baseline_runner)
             .copied()
-            .or_else(|| runner_benchmark_index_averages.get(&baseline_runner).copied());
+            .or_else(|| runner_benchmark_index_averages.get(baseline_runner).copied());
         let benchmark_index_margin_vs_baseline = winner_benchmark_index
             .zip(baseline_benchmark_index)
             .map(|(winner, baseline)| round1(winner - baseline));
@@ -2854,6 +3097,7 @@ fn aggregate_comparison_with_diagnostics(
                 "average_completion_score": average_comparison_field(rows, |row| row.completion_score),
                 "average_quality_score": average_comparison_field(rows, |row| row.quality_score),
                 "average_process_score": average_comparison_field(rows, |row| row.process_score),
+                "average_execution_hygiene_score": average_comparison_field(rows, |row| row.process_score),
                 "average_score": average_comparison_field(rows, |row| row.score),
                 "average_task_quality_score": average_comparison_field(rows, |row| row.task_quality_score),
                 "average_efficiency_score": average_comparison_field(rows, |row| row.efficiency_score),
@@ -2861,6 +3105,7 @@ fn aggregate_comparison_with_diagnostics(
                 "average_duration_ms": average_optional_comparison_field(rows, |row| row.duration_ms.map(|value| value as f64)),
                 "average_tool_or_item_calls": average_optional_comparison_field(rows, |row| row.tool_or_item_calls.map(|value| value as f64)),
                 "average_input_tokens": average_optional_comparison_field(rows, |row| row.input_tokens.map(|value| value as f64)),
+                "average_uncached_input_tokens": average_optional_comparison_field(rows, |row| row.uncached_input_tokens.map(|value| value as f64)),
                 "average_source_files": average_comparison_field(rows, |row| row.source_files as f64),
                 "average_source_bytes": average_comparison_field(rows, |row| row.source_bytes as f64),
             })
@@ -2907,7 +3152,11 @@ fn aggregate_comparison_with_diagnostics(
         })
         .collect::<Vec<_>>();
 
-    json!({
+    let matched_runner_uncached_input_token_averages =
+        comparison_optional_average_map(&matched_rows_by_runner, |row| {
+            row.uncached_input_tokens.map(|value| value as f64)
+        });
+    let mut aggregate = json!({
         "suite": suite,
         "rows": rows.len(),
         "scored_rows": scoring_rows.len(),
@@ -2947,7 +3196,34 @@ fn aggregate_comparison_with_diagnostics(
         "scenario_winners": scenario_winners,
         "unmatched_scenarios": unmatched_scenarios,
         "diagnostics": comparison_diagnostics,
-    })
+    });
+    if let Some(object) = aggregate.as_object_mut() {
+        let runner_hygiene = object
+            .get("runner_process_score_averages")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let matched_runner_hygiene = object
+            .get("matched_runner_process_score_averages")
+            .cloned()
+            .unwrap_or(Value::Null);
+        object.insert(
+            "runner_execution_hygiene_score_averages".to_string(),
+            runner_hygiene,
+        );
+        object.insert(
+            "matched_runner_execution_hygiene_score_averages".to_string(),
+            matched_runner_hygiene,
+        );
+        object.insert(
+            "runner_uncached_input_token_averages".to_string(),
+            json!(runner_uncached_input_token_averages),
+        );
+        object.insert(
+            "matched_runner_uncached_input_token_averages".to_string(),
+            json!(matched_runner_uncached_input_token_averages),
+        );
+    }
+    aggregate
 }
 
 fn matched_comparison_rows(rows: &[ComparisonRow]) -> Vec<&ComparisonRow> {

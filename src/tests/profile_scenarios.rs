@@ -2370,6 +2370,16 @@ fn experiment_rollout_audit_validation_is_exact_and_granular() {
     assert!(prompt.contains("deduplicate rows"));
     assert!(prompt.contains("half-open 72-hour window") || prompt.contains("72-hour"));
     assert!(prompt.contains("Do not hand-count"));
+    assert_eq!(prompt.matches("Use fs.write").count(), 2);
+    assert!(prompt.contains("After both final writes"));
+
+    let policy = std::fs::read_to_string(root.join("policy.md")).expect("read policy");
+    assert!(policy.contains(
+        "`assignmentRows` is the raw number of data rows in `assignments.csv` before deduplication"
+    ));
+    assert!(policy.contains(
+        "`eventRows` is the raw number of data rows in `events.csv` before deduplication"
+    ));
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -21,6 +21,7 @@ mod goal;
 mod run_loop;
 mod subagent;
 mod team;
+mod tool_surface;
 pub(in crate::agent) mod trace;
 
 #[cfg(test)]
@@ -161,6 +162,7 @@ pub struct AgentRunner {
     /// shell/browser/MCP execution for that worker.
     pub(in crate::agent) delegated_write_ownership: Option<Vec<String>>,
     pub(in crate::agent) mcp_registry: Option<McpRegistry>,
+    pub(in crate::agent) active_deferred_tools: HashSet<String>,
     pub(in crate::agent) local_filesystem_only: bool,
     pub(in crate::agent) local_filesystem_tool_budget: Option<LocalFilesystemToolBudget>,
 }
@@ -286,6 +288,7 @@ impl AgentRunner {
             subagent_team: SubagentTeam::from_environment(),
             delegated_write_ownership: None,
             mcp_registry: None,
+            active_deferred_tools: HashSet::new(),
             local_filesystem_only: false,
             local_filesystem_tool_budget: None,
         })

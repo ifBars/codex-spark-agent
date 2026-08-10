@@ -33,10 +33,28 @@ pub struct AgentProfiler {
     total_input_chars: usize,
     input_chars_by_request: Vec<usize>,
     #[serde(default)]
+    max_request_footprint_chars: usize,
+    #[serde(default)]
+    total_request_footprint_chars: usize,
+    #[serde(default)]
+    request_footprint_chars_by_request: Vec<usize>,
+    #[serde(default)]
+    request_input_chars_by_request: Vec<usize>,
+    #[serde(default)]
+    instruction_chars_by_request: Vec<usize>,
+    #[serde(default)]
+    tool_schema_chars_by_request: Vec<usize>,
+    #[serde(default)]
+    tool_count_by_request: Vec<usize>,
+    #[serde(default)]
     response_usage: usage::ResponseUsageTotals,
     total_request_duration_ms: u64,
     max_request_duration_ms: u64,
     request_duration_ms_by_request: Vec<u64>,
+    #[serde(default)]
+    response_deadlines_exceeded: usize,
+    #[serde(default)]
+    response_deadline_turns: Vec<usize>,
     #[serde(default)]
     tool_only_turn_numbers: Vec<usize>,
     response_text_chars: usize,
@@ -62,6 +80,27 @@ impl AgentProfiler {
         self.input_chars_by_request.push(input_chars);
     }
 
+    pub fn record_request_footprint(
+        &mut self,
+        request_input_chars: usize,
+        instruction_chars: usize,
+        tool_schema_chars: usize,
+        tool_count: usize,
+    ) {
+        let total = request_input_chars
+            .saturating_add(instruction_chars)
+            .saturating_add(tool_schema_chars);
+        self.max_request_footprint_chars = self.max_request_footprint_chars.max(total);
+        self.total_request_footprint_chars =
+            self.total_request_footprint_chars.saturating_add(total);
+        self.request_footprint_chars_by_request.push(total);
+        self.request_input_chars_by_request
+            .push(request_input_chars);
+        self.instruction_chars_by_request.push(instruction_chars);
+        self.tool_schema_chars_by_request.push(tool_schema_chars);
+        self.tool_count_by_request.push(tool_count);
+    }
+
     pub fn record_request_duration(&mut self, turn: usize, duration_ms: u64) {
         self.total_request_duration_ms = self.total_request_duration_ms.saturating_add(duration_ms);
         self.max_request_duration_ms = self.max_request_duration_ms.max(duration_ms);
@@ -73,6 +112,22 @@ impl AgentProfiler {
                 "duration_ms": duration_ms,
             }));
         }
+    }
+
+    pub fn record_response_deadline(
+        &mut self,
+        turn: usize,
+        deadline_ms: u64,
+        retry_over_http: bool,
+    ) {
+        self.response_deadlines_exceeded += 1;
+        self.response_deadline_turns.push(turn);
+        self.push_signal(json!({
+            "kind": "response_deadline_exceeded",
+            "turn": turn,
+            "deadline_ms": deadline_ms,
+            "retry_over_http": retry_over_http,
+        }));
     }
 
     pub(crate) fn record_response_usage(&mut self, raw: &Value) {
@@ -221,7 +276,7 @@ impl AgentProfiler {
     pub fn record_compaction(&mut self, report: &Value) {
         self.compactions += 1;
         match report.get("method").and_then(Value::as_str) {
-            Some("responses_compact") => self.remote_compactions += 1,
+            Some("responses_compact" | "responses_compaction_v2") => self.remote_compactions += 1,
             Some("local_fallback") => self.fallback_compactions += 1,
             _ => {}
         }
@@ -262,7 +317,17 @@ impl AgentProfiler {
 
     pub fn to_json(&self) -> Value {
         let diagnostics = self.diagnostics();
-        json!({
+        let request_footprint = json!({
+            "max_chars": self.max_request_footprint_chars,
+            "max_approx_tokens": approx_token_count_from_chars(self.max_request_footprint_chars),
+            "average_chars": if self.request_footprint_chars_by_request.is_empty() { 0 } else { self.total_request_footprint_chars / self.request_footprint_chars_by_request.len() },
+            "chars_by_request": self.request_footprint_chars_by_request,
+            "request_input_chars_by_request": self.request_input_chars_by_request,
+            "instruction_chars_by_request": self.instruction_chars_by_request,
+            "tool_schema_chars_by_request": self.tool_schema_chars_by_request,
+            "tool_count_by_request": self.tool_count_by_request,
+        });
+        let mut summary = json!({
             "requests": self.requests,
             "tool_calls": self.tool_calls,
             "tool_results": self.tool_results,
@@ -291,6 +356,7 @@ impl AgentProfiler {
             "average_input_chars": if self.requests == 0 { 0 } else { self.total_input_chars / self.requests },
             "input_chars_by_request": self.input_chars_by_request,
             "approx_input_tokens_by_request": self.input_chars_by_request.iter().copied().map(approx_token_count_from_chars).collect::<Vec<_>>(),
+            "request_footprint": request_footprint,
             "response_usage": self.response_usage.to_json(),
             "total_request_duration_ms": self.total_request_duration_ms,
             "max_request_duration_ms": self.max_request_duration_ms,
@@ -307,7 +373,18 @@ impl AgentProfiler {
             "max_tool_duration_ms_by_tool": self.max_tool_duration_ms_by_tool,
             "diagnostics": diagnostics,
             "recent_signals": self.signals,
-        })
+        });
+        if let Some(object) = summary.as_object_mut() {
+            object.insert(
+                "response_deadlines_exceeded".to_string(),
+                json!(self.response_deadlines_exceeded),
+            );
+            object.insert(
+                "response_deadline_turns".to_string(),
+                json!(self.response_deadline_turns),
+            );
+        }
+        summary
     }
 
     pub fn status_line(&self) -> String {

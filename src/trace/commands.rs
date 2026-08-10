@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::{APPROX_CHARS_PER_TOKEN, cli::TraceSort};
+use crate::cli::TraceSort;
 
 pub(crate) fn trace_runs_root(cwd: &Path) -> PathBuf {
     cwd.join(".spark-runs")
@@ -87,22 +87,6 @@ pub(crate) fn trace_sort_name(sort: TraceSort) -> &'static str {
         TraceSort::CompactionRegrowth => "compaction-regrowth",
         TraceSort::Context => "context",
         TraceSort::RequestMs => "request-ms",
-    }
-}
-
-pub(crate) fn resolve_char_threshold(
-    name: &str,
-    chars: Option<usize>,
-    tokens: Option<usize>,
-    default_chars: usize,
-) -> Result<usize> {
-    match (chars, tokens) {
-        (Some(_), Some(_)) => {
-            anyhow::bail!("pass either --{name}-chars or --{name}-tokens, not both")
-        }
-        (Some(chars), None) => Ok(chars),
-        (None, Some(tokens)) => Ok(tokens.saturating_mul(APPROX_CHARS_PER_TOKEN)),
-        (None, None) => Ok(default_chars),
     }
 }
 

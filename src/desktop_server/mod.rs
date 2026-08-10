@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     DEFAULT_COMPACT_AFTER_CHARS, DEFAULT_COMPACT_AFTER_TOOL_ONLY_TURNS, DEFAULT_MAX_INPUT_CHARS,
     agent::{AgentRunner, take_shared_display_events},
-    config, session,
+    config, session, skill,
 };
 
 pub(crate) use protocol::parse_command;
@@ -180,7 +180,7 @@ async fn run_desktop_request_inner(
     let auth = config::load_auth()?;
     let mut runner = AgentRunner::new_with_reasoning_effort(
         auth,
-        cwd,
+        cwd.clone(),
         request.model.clone(),
         request.reasoning_effort.clone(),
         /* trace */ false,
@@ -206,6 +206,7 @@ async fn run_desktop_request_inner(
     }));
 
     let events = runner.use_shared_display();
+    skill::commands::load_skill_mentions(&mut runner, &cwd, &request.prompt).await?;
     let result = {
         let mut run = std::pin::pin!(runner.run_with_cancel(&request.prompt, cancellation.clone()));
         let mut ticker = tokio::time::interval(EVENT_DRAIN_INTERVAL);

@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 
 const POST_COMPACTION_NOTICE_START: &str = "[spark post-compaction verification]";
 const POST_COMPACTION_NOTICE_END: &str = "[/spark post-compaction verification]";
+const RETAINED_USER_MESSAGE_TOKEN_BUDGET: usize = 32_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::agent) struct PostCompactionVerificationNotice {
@@ -209,12 +210,35 @@ pub(in crate::agent) fn install_remote_compaction_history(
     prompt_input: &[Value],
     remote_output: Vec<Value>,
 ) -> Vec<Value> {
-    let mut replacement = process_remote_compaction_output(remote_output);
+    let processed = process_remote_compaction_output(remote_output);
+    let compaction_items = processed
+        .iter()
+        .filter(|item| is_compaction_summary(item))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !compaction_items.is_empty() {
+        let retention_source = if prompt_input.iter().any(is_real_user_message) {
+            prompt_input
+        } else {
+            processed.as_slice()
+        };
+        let mut replacement = retained_user_messages_for_remote_compaction_v2(
+            retention_source,
+            RETAINED_USER_MESSAGE_TOKEN_BUDGET,
+        );
+        replacement.extend(compaction_items);
+        return replacement;
+    }
+
+    let mut replacement = processed;
     if !replacement.is_empty() {
         return replacement;
     }
 
-    replacement = retained_user_messages_for_remote_compaction_v2(prompt_input, 20_000);
+    replacement = retained_user_messages_for_remote_compaction_v2(
+        prompt_input,
+        RETAINED_USER_MESSAGE_TOKEN_BUDGET,
+    );
     if replacement.is_empty() {
         replacement = prompt_input
             .iter()
@@ -226,6 +250,13 @@ pub(in crate::agent) fn install_remote_compaction_history(
         replacement.reverse();
     }
     replacement
+}
+
+fn is_compaction_summary(item: &Value) -> bool {
+    matches!(
+        item.get("type").and_then(Value::as_str),
+        Some("compaction" | "context_compaction")
+    )
 }
 
 pub(in crate::agent) fn process_remote_compaction_output(items: Vec<Value>) -> Vec<Value> {
@@ -372,7 +403,27 @@ fn approx_token_count(text: &str) -> usize {
 
 fn truncate_text_tokens(text: &str, max_tokens: usize) -> String {
     let max_chars = max_tokens.saturating_mul(4);
-    text.chars().take(max_chars).collect()
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    const MARKER: &str = "\n[spark retained message middle omitted]\n";
+    let marker_chars = MARKER.chars().count();
+    if max_chars <= marker_chars {
+        return text.chars().take(max_chars).collect();
+    }
+    let content_chars = max_chars - marker_chars;
+    let head_chars = content_chars / 2;
+    let tail_chars = content_chars - head_chars;
+    let head = text.chars().take(head_chars).collect::<String>();
+    let tail = text
+        .chars()
+        .rev()
+        .take(tail_chars)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    format!("{head}{MARKER}{tail}")
 }
 
 pub(in crate::agent) fn compact_output_item(

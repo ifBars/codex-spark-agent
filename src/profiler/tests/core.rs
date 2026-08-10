@@ -245,6 +245,42 @@ fn profiler_records_request_duration_and_slow_diagnostics() {
 }
 
 #[test]
+fn profiler_records_full_request_footprint_components() {
+    let mut profiler = AgentProfiler::default();
+
+    profiler.record_request(1_200);
+    profiler.record_request_footprint(300, 1_000, 2_700, 11);
+
+    let summary = profiler.to_json();
+    let footprint = &summary["request_footprint"];
+    assert_eq!(footprint["max_chars"], 4_000);
+    assert_eq!(footprint["max_approx_tokens"], 1_000);
+    assert_eq!(footprint["request_input_chars_by_request"], json!([300]));
+    assert_eq!(footprint["instruction_chars_by_request"], json!([1_000]));
+    assert_eq!(footprint["tool_schema_chars_by_request"], json!([2_700]));
+    assert_eq!(footprint["tool_count_by_request"], json!([11]));
+}
+
+#[test]
+fn profiler_records_response_deadline_recovery() {
+    let mut profiler = AgentProfiler::default();
+
+    profiler.record_response_deadline(4, 120_000, true);
+
+    let summary = profiler.to_json();
+    assert_eq!(summary["response_deadlines_exceeded"], 1);
+    assert_eq!(summary["response_deadline_turns"], json!([4]));
+    assert_eq!(summary["recent_signals"][0]["retry_over_http"], true);
+    assert!(
+        summary["diagnostics"]
+            .as_array()
+            .expect("diagnostics")
+            .iter()
+            .any(|diagnostic| diagnostic["kind"] == "response_deadline_exceeded")
+    );
+}
+
+#[test]
 fn profiler_records_input_size_sequence_and_errors() {
     let mut profiler = AgentProfiler::default();
 
@@ -322,7 +358,7 @@ fn profiler_diagnoses_weak_compaction() {
     let mut profiler = AgentProfiler::default();
 
     profiler.record_compaction(&json!({
-        "method": "responses_compact",
+        "method": "responses_compaction_v2",
         "before_chars": 100_000,
         "after_chars": 75_000
     }));

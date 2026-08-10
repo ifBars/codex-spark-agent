@@ -1,6 +1,9 @@
 use anyhow::Result;
 
-use crate::{APPROX_CHARS_PER_TOKEN, MAX_SCENARIO_TARGET_TOKENS, cli::ProfileScenarioKind};
+use crate::{
+    APPROX_CHARS_PER_TOKEN, DEFAULT_COMPACT_AFTER_CHARS, MAX_SCENARIO_TARGET_TOKENS,
+    cli::ProfileScenarioKind,
+};
 
 fn exploration_scenario_prompts(scenario: ProfileScenarioKind) -> Option<Vec<String>> {
     let (name, codebase, tasks) = match scenario {
@@ -442,10 +445,10 @@ pub(crate) fn profile_scenario_prompts(
              Required actions:\n\
              1. Read brief.md and policy.md.\n\
              2. Read data/assignments.csv, data/exclusions.csv, and data/events.csv.\n\
-             3. Use a short Bun or PowerShell script from the benchmark workspace root to canonicalize assignments and events, attribute orders, apply refunds, and calculate both variants; do not hand-count the CSV or use Bash-only heredoc syntax.\n\
-             4. Write audit.json with the exact schema and rounded values requested in the brief.\n\
-             5. Write memo.md explaining every launch gate, the decisive guardrail, and the important data-quality exclusions.\n\
-             6. Re-read both fully qualified outputs and verify denominators, order deduplication, refund attribution, and the final decision.\n\
+             3. Use a short Bun or PowerShell script from the benchmark workspace root to canonicalize assignments and events, attribute orders, apply refunds, and print the calculated values; do not hand-count the CSV, use Bash-only heredoc syntax, or have the script write the final artifacts.\n\
+             4. Use fs.write to write audit.json with the exact schema and rounded values requested in the brief.\n\
+             5. Use fs.write to write memo.md explaining every launch gate, the decisive guardrail, and the important data-quality exclusions.\n\
+             6. After both final writes, re-read both fully qualified outputs and verify denominators, order deduplication, refund attribution, and the final decision.\n\
              Finish with the decision and the four uplift/guardrail values."
                 .to_string(),
         ]),
@@ -835,10 +838,10 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
              Required actions:\n\
              1. Read brief.md and policy.md.\n\
              2. Read data/assignments.csv, data/exclusions.csv, and data/events.csv.\n\
-             3. Use a short Bun or PowerShell script from the benchmark workspace root to deduplicate rows, resolve assignment eligibility, attribute 72-hour orders, apply refunds, and calculate the requested metrics. Do not hand-count rows or use Bash-only heredoc syntax.\n\
-             4. Write audit.json with the exact schema and rounding from the brief.\n\
-             5. Write memo.md explaining which launch gates pass, which fail, the decisive guardrail, and the important data-quality exclusions.\n\
-             6. Re-read both fully qualified outputs and verify every denominator, order/refund join, uplift, and the final decision once before finishing.\n\
+             3. Use a short Bun or PowerShell script from the benchmark workspace root to deduplicate rows, resolve assignment eligibility, attribute 72-hour orders, apply refunds, and print the requested metrics. Do not hand-count rows, use Bash-only heredoc syntax, or have the script write the final artifacts.\n\
+             4. Use fs.write to write audit.json with the exact schema and rounding from the brief.\n\
+             5. Use fs.write to write memo.md explaining which launch gates pass, which fail, the decisive guardrail, and the important data-quality exclusions.\n\
+             6. After both final writes, re-read both fully qualified outputs and verify every denominator, order/refund join, uplift, and the final decision once before finishing.\n\
              Finish with the decision, conversion uplift, revenue-per-eligible uplift, and refund-rate delta."
                 .to_string()
         }
@@ -936,7 +939,11 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
 
 pub(crate) fn natural_compaction_scenario_prompts(target_tokens: usize) -> Result<Vec<String>> {
     let turn_count = 3usize;
-    let target_chars = target_tokens.saturating_mul(APPROX_CHARS_PER_TOKEN);
+    let max_chars = MAX_SCENARIO_TARGET_TOKENS.saturating_mul(APPROX_CHARS_PER_TOKEN);
+    let target_chars = target_tokens
+        .saturating_mul(APPROX_CHARS_PER_TOKEN)
+        .max(DEFAULT_COMPACT_AFTER_CHARS.saturating_add(4_000))
+        .min(max_chars);
     let target_chars_per_turn = target_chars.div_ceil(turn_count);
     let mut prompts = Vec::with_capacity(turn_count);
 

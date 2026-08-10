@@ -119,6 +119,31 @@ pub fn analyze_trace(dir: &Path) -> Result<Value> {
                 .map(|input| input.len())
                 .unwrap_or(raw.len());
             profiler.record_request(input_chars);
+            if let Some(footprint) = value.get("footprint") {
+                let request_input_chars = footprint
+                    .get("request_input_chars")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(input_chars as u64)
+                    as usize;
+                let instruction_chars = footprint
+                    .get("instruction_chars")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as usize;
+                let tool_schema_chars = footprint
+                    .get("tool_schema_chars")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as usize;
+                let tool_count = footprint
+                    .get("tool_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as usize;
+                profiler.record_request_footprint(
+                    request_input_chars,
+                    instruction_chars,
+                    tool_schema_chars,
+                    tool_count,
+                );
+            }
             let turn_entry = timeline_turn(&mut timeline, turn);
             turn_entry.insert("request_input_chars".to_string(), json!(input_chars));
             turn_entry.insert(

@@ -52,11 +52,11 @@ impl AgentRunner {
             trim_codex_generated_tail_to_fit(self.input.clone(), self.max_input_chars)?;
         let compaction_started = std::time::Instant::now();
         match self.client.responses_compact(&compact_input, tools).await {
-            Ok((remote_output, raw)) => {
+            Ok(response) => {
                 let duration_ms = compaction_started.elapsed().as_millis() as u64;
                 let (mut replacement, pressure_report) = compact_remote_history_to_threshold(
                     &compact_input,
-                    remote_output,
+                    response.output,
                     self.compact_after_chars,
                 )?;
                 let verification_notice =
@@ -64,7 +64,8 @@ impl AgentRunner {
                 let after = serde_json::to_string(&replacement)?.len();
                 self.input = replacement;
                 Ok(Some(json!({
-                    "method": "responses_compact",
+                    "method": response.method,
+                    "v2_error": response.v2_error,
                     "forced": force,
                     "trigger": trigger,
                     "duration_ms": duration_ms,
@@ -77,7 +78,7 @@ impl AgentRunner {
                     "post_compaction_required_actions": verification_notice
                         .map(|notice| notice.required_actions)
                         .unwrap_or(0),
-                    "raw": raw,
+                    "raw": response.raw,
                 })))
             }
             Err(error) => {

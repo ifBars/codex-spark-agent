@@ -19,6 +19,7 @@ use crate::tools::ToolDescriptor;
 const CODEX_RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_WS_URL: &str = "wss://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_COMPACT_URL: &str = "https://chatgpt.com/backend-api/codex/responses/compact";
+const CODEX_MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models";
 const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
 const WEBSOCKET_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 // The ChatGPT Codex WebSocket gates protocol support using this header. Keep it
@@ -47,6 +48,27 @@ pub struct Response {
     pub output: Vec<ResponseItem>,
     #[serde(flatten)]
     pub extra: Value,
+}
+
+#[derive(Debug)]
+pub(crate) struct CompactionResponse {
+    pub(crate) output: Vec<Value>,
+    pub(crate) raw: Value,
+    pub(crate) method: &'static str,
+    pub(crate) v2_error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsResponse {
+    #[serde(default)]
+    models: Vec<ModelMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelMetadata {
+    slug: String,
+    context_window: Option<usize>,
+    max_context_window: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +169,53 @@ impl SparkClient {
             self.system_prompt.as_deref(),
             self.memory_context.as_deref(),
         )
+    }
+
+    pub(crate) fn request_instruction_chars(&self) -> usize {
+        self.instructions().len()
+    }
+
+    pub(crate) fn request_tool_schema_chars(&self, tools: &[ToolDescriptor]) -> Result<usize> {
+        serde_json::to_string(&tools.iter().map(tool_to_wire).collect::<Vec<_>>())
+            .map(|encoded| encoded.len())
+            .context("failed to encode Responses tool schemas")
+    }
+
+    pub(crate) async fn model_context_window_tokens(&self) -> Result<usize> {
+        let mut request = self
+            .http
+            .get(CODEX_MODELS_URL)
+            .query(&[("client_version", CODEX_WEBSOCKET_PROTOCOL_VERSION)])
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.auth.access_token),
+            )
+            .header("originator", "spark");
+        if let Some(account_id) = &self.auth.account_id {
+            request = request.header("ChatGPT-Account-Id", account_id);
+        }
+
+        let response = tokio::time::timeout(Duration::from_secs(5), request.send())
+            .await
+            .context("model metadata request timed out")?
+            .context("model metadata request failed")?;
+        let status = response.status();
+        let raw_text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            anyhow::bail!("model metadata request failed ({status}): {raw_text}");
+        }
+        let response: ModelsResponse = serde_json::from_str(&raw_text)
+            .with_context(|| format!("failed to parse model metadata response: {raw_text}"))?;
+        let model = response
+            .models
+            .into_iter()
+            .find(|candidate| candidate.slug == self.model)
+            .with_context(|| format!("model metadata did not include {}", self.model))?;
+        model
+            .context_window
+            .or(model.max_context_window)
+            .filter(|tokens| *tokens > 0)
+            .with_context(|| format!("model metadata for {} has no context window", self.model))
     }
 
     pub async fn responses_create_with_event_handler(
@@ -447,11 +516,65 @@ SKILL.md:
         &self,
         input: &[Value],
         tools: &[ToolDescriptor],
-    ) -> Result<(Vec<Value>, Value)> {
+    ) -> Result<CompactionResponse> {
         if input.is_empty() {
-            return Ok((Vec::new(), json!({ "output": [] })));
+            return Ok(CompactionResponse {
+                output: Vec::new(),
+                raw: json!({ "output": [] }),
+                method: "responses_compaction_v2",
+                v2_error: None,
+            });
         }
 
+        match self.responses_compact_v2(input, tools).await {
+            Ok((output, raw)) => {
+                return Ok(CompactionResponse {
+                    output,
+                    raw,
+                    method: "responses_compaction_v2",
+                    v2_error: None,
+                });
+            }
+            Err(v2_error) => {
+                let v2_error = format!("{v2_error:#}");
+                let (output, raw) = self.responses_compact_legacy(input, tools).await?;
+                return Ok(CompactionResponse {
+                    output,
+                    raw,
+                    method: "responses_compact",
+                    v2_error: Some(v2_error),
+                });
+            }
+        }
+    }
+
+    async fn responses_compact_v2(
+        &self,
+        input: &[Value],
+        tools: &[ToolDescriptor],
+    ) -> Result<(Vec<Value>, Value)> {
+        let body = compaction_v2_body(
+            &self.model,
+            &self.instructions(),
+            self.reasoning_effort.as_str(),
+            input,
+            tools,
+        );
+        let (_, raw) = self
+            .send_streaming_body(body, "Spark compaction v2 request", |_| {})
+            .await?;
+        let output = compact_output_items(&raw)?;
+        if !output.iter().any(is_compaction_item) {
+            anyhow::bail!("compaction v2 response did not include a compaction item: {raw}");
+        }
+        Ok((output, raw))
+    }
+
+    async fn responses_compact_legacy(
+        &self,
+        input: &[Value],
+        tools: &[ToolDescriptor],
+    ) -> Result<(Vec<Value>, Value)> {
         let body = json!({
             "model": self.model,
             "instructions": self.instructions(),
@@ -657,6 +780,35 @@ fn compact_output_items(raw: &Value) -> Result<Vec<Value>> {
         return Ok(items.clone());
     }
     anyhow::bail!("compact response did not include output items: {raw}");
+}
+
+fn is_compaction_item(item: &Value) -> bool {
+    matches!(
+        item.get("type").and_then(Value::as_str),
+        Some("compaction" | "context_compaction")
+    )
+}
+
+fn compaction_v2_body(
+    model: &str,
+    instructions: &str,
+    reasoning_effort: &str,
+    input: &[Value],
+    tools: &[ToolDescriptor],
+) -> Value {
+    let mut compact_input = input.to_vec();
+    compact_input.push(json!({ "type": "compaction_trigger" }));
+    json!({
+        "model": model,
+        "instructions": instructions,
+        "input": compact_input,
+        "tools": tools.iter().map(tool_to_wire).collect::<Vec<_>>(),
+        "tool_choice": "auto",
+        "parallel_tool_calls": true,
+        "reasoning": { "effort": reasoning_effort },
+        "store": false,
+        "stream": true,
+    })
 }
 
 pub fn output_text_delta(event: &Value) -> Option<&str> {
@@ -1005,6 +1157,8 @@ fn wire_tool_name_to_local(name: &str) -> String {
         "fs_edit" => "fs.edit",
         "fs_rename" => "fs.rename",
         "cmd_exec" => "cmd.exec",
+        "gh_read" => "gh.read",
+        "tool_search" => "tool.search",
         "browser_run" => "browser.run",
         "subagent_run" => "subagent.run",
         other => other,
@@ -1068,6 +1222,10 @@ Persist until the task is handled end-to-end within the current turn whenever fe
 Start from the user's concrete anchor. When a user gives explicit paths, files, symptoms, benchmark rows, or a narrow workspace scope, inspect those first instead of listing the repository root. If exact files are named, read those files directly before any root listing or discovery command; only discover around them when an exact path fails or the instruction is ambiguous. When a user names a project, library, or repo ambiguously, first take a small look at the current workspace before assuming they mean a public product or SDK.
 
 Gather enough evidence before writing. Prefer bounded file reads and targeted searches over broad output. Batch independent tool calls in the same turn when possible, especially reads, searches, and writes for a known set of files.
+
+Core workspace tools are loaded by default. Specialist web, GitHub, browser, subagent, and MCP capabilities are deferred to keep each request focused. Use `tool.search` only when the current task genuinely needs one of those capabilities; do not search for tools when the supplied local evidence is sufficient.
+
+For example-driven or demonstration-only tasks, derive one compact rule table before editing: account separately for every output field, check the candidate rule against every supplied example, and reject ad hoc constants or case-specific guesses. Prefer one coherent implementation over piecemeal trial-and-error. When the prompt says the supplied local evidence is the complete specification, do not search the web or unrelated sources for an answer.
 
 Use hosted web search for current external facts when local files are insufficient, and cite sources when web search informs the answer.
 
@@ -1153,9 +1311,10 @@ mod tests {
 
     use super::{
         DEFAULT_SPARK_AGENT_REASONING_EFFORT, ReasoningDisplayUpdate, Response, SparkClient,
-        WebSearchDisplayUpdate, output_items_for_next_input, reasoning_display_update,
-        response_from_stream, response_text, spark_system_prompt, spark_system_prompt_with_context,
-        tool_to_wire, web_search_display_update, websocket_request_body,
+        WebSearchDisplayUpdate, compaction_v2_body, is_compaction_item,
+        output_items_for_next_input, reasoning_display_update, response_from_stream, response_text,
+        spark_system_prompt, spark_system_prompt_with_context, tool_to_wire,
+        web_search_display_update, websocket_request_body,
     };
 
     fn test_auth_tokens() -> AuthTokens {
@@ -1182,6 +1341,24 @@ mod tests {
 
         custom_client.set_reasoning_effort("low");
         assert_eq!(custom_client.reasoning_effort(), "low");
+    }
+
+    #[test]
+    fn compaction_v2_appends_trigger_to_normal_responses_input() {
+        let body = compaction_v2_body(
+            "gpt-test",
+            "instructions",
+            "medium",
+            &[json!({"role": "user", "content": "hello"})],
+            &[],
+        );
+        let input = body["input"].as_array().expect("input array");
+
+        assert_eq!(input.len(), 2);
+        assert_eq!(input[1]["type"], "compaction_trigger");
+        assert_eq!(body["model"], "gpt-test");
+        assert_eq!(body["reasoning"]["effort"], "medium");
+        assert!(is_compaction_item(&json!({"type": "compaction"})));
     }
 
     #[test]
@@ -1242,6 +1419,8 @@ mod tests {
         assert!(prompt.contains("AGENTS.md content included in the current input"));
         assert!(prompt.contains("Keep edits focused on the requested behavior"));
         assert!(prompt.contains("Adapt effort to quality risk"));
+        assert!(prompt.contains("derive one compact rule table before editing"));
+        assert!(prompt.contains("do not search the web or unrelated sources"));
         assert!(prompt.contains("High-risk tasks are scaffolding runnable projects"));
         assert!(prompt.contains("Low-risk tasks are exact-path reads"));
         assert!(prompt.contains("do not assume the write is correct"));
@@ -1352,6 +1531,45 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, "browser.run");
         assert_eq!(calls[0].2["url"], "https://example.com");
+    }
+
+    #[test]
+    fn github_wire_tool_name_maps_back_to_local_name() {
+        let response = Response {
+            id: Some("resp_test".to_string()),
+            output: vec![super::ResponseItem::FunctionCall {
+                call_id: "call_github".to_string(),
+                name: "gh_read".to_string(),
+                arguments: json!({"args": ["pr", "view", "23"]}),
+                extra: json!({}),
+            }],
+            extra: json!({}),
+        };
+
+        let calls = super::function_calls(&response);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "gh.read");
+        assert_eq!(calls[0].2["args"][0], "pr");
+    }
+
+    #[test]
+    fn deferred_tool_search_wire_name_maps_back_to_local_name() {
+        let response = Response {
+            id: Some("resp_test".to_string()),
+            output: vec![super::ResponseItem::FunctionCall {
+                call_id: "call_tool_search".to_string(),
+                name: "tool_search".to_string(),
+                arguments: json!({"query": "public web search"}),
+                extra: json!({}),
+            }],
+            extra: json!({}),
+        };
+
+        let calls = super::function_calls(&response);
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1, "tool.search");
     }
 
     #[test]

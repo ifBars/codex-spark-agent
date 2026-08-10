@@ -76,6 +76,16 @@ impl AgentProfiler {
             }));
         }
 
+        if self.response_deadlines_exceeded > 0 {
+            diagnostics.push(json!({
+                "level": "warning",
+                "kind": "response_deadline_exceeded",
+                "message": "One or more Spark responses exceeded the per-response deadline. Inspect the deadline turns and transport fallback before changing the limit.",
+                "count": self.response_deadlines_exceeded,
+                "turns": self.response_deadline_turns,
+            }));
+        }
+
         if self.repeated_tool_calls > 2 {
             diagnostics.push(json!({
                 "level": "warning",

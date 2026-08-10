@@ -32,6 +32,7 @@ pub(crate) fn is_readonly_tool(tool_name: &str) -> bool {
             | "fs.list"
             | "fs.stat"
             | "fs.search"
+            | "gh.read"
             | "web.search"
             | "subagent.run"
             | "subagent.spawn"

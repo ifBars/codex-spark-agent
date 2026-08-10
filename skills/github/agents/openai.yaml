@@ -1,0 +1,4 @@
+interface:
+  display_name: "Git and GitHub"
+  short_description: "Safe Git and GitHub CLI workflows"
+  default_prompt: "Use $github to inspect this repository and choose the safest Git or GitHub workflow."

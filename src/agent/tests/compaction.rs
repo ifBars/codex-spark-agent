@@ -155,7 +155,7 @@ fn remote_compaction_summary_compacts_replayed_large_user_message() {
         }),
     ];
 
-    let (replacement, pressure) = compact_remote_history_to_threshold(&[], remote_output, 160_000)
+    let (replacement, pressure) = compact_remote_history_to_threshold(&[], remote_output, 100_000)
         .expect("compact remote history");
     let pressure = pressure.expect("local pressure report");
     let final_chars = serde_json::to_string(&replacement)
@@ -163,7 +163,7 @@ fn remote_compaction_summary_compacts_replayed_large_user_message() {
         .len();
 
     assert_eq!(pressure["made_progress"], true);
-    assert!(final_chars < 160_000);
+    assert!(final_chars < 100_000);
     assert_eq!(replacement[1]["type"], "compaction");
     let retained = message_text_from_value(&replacement[0]);
     assert!(retained.contains("important instruction"));

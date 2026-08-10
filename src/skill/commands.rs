@@ -2,7 +2,10 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use crate::{agent, skill::registry};
+use crate::{
+    agent,
+    skill::{builtins, registry},
+};
 
 pub(crate) async fn handle_skill_command(
     runner: &mut agent::AgentRunner,
@@ -66,7 +69,7 @@ pub(crate) async fn load_skill_mentions(
     text: &str,
 ) -> Result<Vec<String>> {
     let mut loaded = Vec::new();
-    for name in mentioned_skill_names(cwd, text)? {
+    for name in skill_names_for_prompt(cwd, text)? {
         let already_loaded = runner.loaded_skills().contains(&name);
         load_skill_into_runner(runner, cwd, &name, false).await?;
         if !already_loaded {
@@ -74,6 +77,18 @@ pub(crate) async fn load_skill_mentions(
         }
     }
     Ok(loaded)
+}
+
+pub(crate) fn skill_names_for_prompt(cwd: &PathBuf, text: &str) -> Result<Vec<String>> {
+    let mut names = mentioned_skill_names(cwd, text)?;
+    names.extend(
+        builtins::implicit_skill_names(text)
+            .into_iter()
+            .map(str::to_string),
+    );
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 pub(crate) fn mentioned_skill_names(cwd: &PathBuf, text: &str) -> Result<Vec<String>> {
@@ -139,5 +154,36 @@ pub(crate) async fn compile_skill_cached(
             );
             registry::compile_or_load(cwd, name, true)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_builtin_github_mentions_without_repo_skills() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let mentions = mentioned_skill_names(
+            &dir.path().to_path_buf(),
+            "Use @github to inspect the current pull request.",
+        )
+        .expect("mentions");
+
+        assert_eq!(mentions, vec!["github"]);
+    }
+
+    #[test]
+    fn implicitly_loads_github_for_pull_request_review_prompts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let names = skill_names_for_prompt(
+            &dir.path().to_path_buf(),
+            "Review PR 42 on one of my GitHub repos and check its CI comments.",
+        )
+        .expect("skills");
+
+        assert_eq!(names, vec!["github"]);
     }
 }

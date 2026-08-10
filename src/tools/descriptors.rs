@@ -162,6 +162,26 @@ pub fn builtin_tools() -> Vec<ToolDescriptor> {
             hosted_config: None,
         },
         ToolDescriptor {
+            name: "gh.read".to_string(),
+            description: "Run a bounded, non-interactive, read-only GitHub CLI operation in the current workspace. Pass the arguments that follow `gh`, for example [\"pr\",\"view\",\"42\",\"--json\",\"title,files,reviews,statusCheckRollup\",\"--repo\",\"owner/repo\"]. Prefer this over web.search for identifiable GitHub repositories, pull requests, issues, Actions runs, workflows, and releases. Mutating verbs, GraphQL or non-GET API calls, browser-opening flags, and token output are rejected.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 48
+                    },
+                    "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 30000}
+                },
+                "required": ["args"],
+                "additionalProperties": false
+            }),
+            hosted_type: None,
+            hosted_config: None,
+        },
+        ToolDescriptor {
             name: "browser.run".to_string(),
             description: "Run a stateless Playwright Chromium browser pass from the workspace. Opens a URL, optionally performs simple CSS-selector actions, and returns bounded page text, ARIA snapshot, console/page errors, status, final URL, and an optional screenshot path. Use for local web UI smoke checks and browser-backed inspection; prefer cmd.exec for arbitrary scripts.".to_string(),
             input_schema: json!({

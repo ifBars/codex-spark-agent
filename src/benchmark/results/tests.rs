@@ -11,7 +11,12 @@ fn read_external_agent_report_rows(
 }
 
 fn aggregate_comparison(suite: &str, rows: &[ComparisonRow]) -> Value {
-    aggregate_comparison_with_diagnostics(suite, rows, ComparisonDiagnostics::default())
+    aggregate_comparison_with_diagnostics(
+        suite,
+        rows,
+        ComparisonDiagnostics::default(),
+        "codex-cli",
+    )
 }
 
 fn empty_comparison_inputs() -> Value {
@@ -355,6 +360,47 @@ fn harness_usage_requires_complete_provider_response_coverage() {
 }
 
 #[test]
+fn standalone_report_separates_execution_hygiene_from_resource_totals() {
+    let mut row = benchmark_row();
+    row.completion_score = 100.0;
+    row.quality_score = 100.0;
+    row.process_score = 87.0;
+    row.harness_pressure_score = 87.0;
+    row.efficiency_score = 99.0;
+    row.requests = 6;
+    row.tool_calls = 8;
+    row.tool_failures = 2;
+    row.response_usage = json!({
+        "source": "provider_responses",
+        "completed_responses": 2,
+        "responses_with_usage": 2,
+        "complete": true,
+        "input_tokens": {"total": 12_000, "reported_responses": 2, "complete": true},
+        "cached_input_tokens": {"total": 9_000, "reported_responses": 2, "complete": true},
+        "cache_write_input_tokens": {"total": 0, "reported_responses": 2, "complete": true},
+        "uncached_input_tokens": {"total": 3_000, "reported_responses": 2, "complete": true},
+        "output_tokens": {"total": 500, "reported_responses": 2, "complete": true}
+    });
+    let rows = vec![row];
+    let aggregate = aggregate_rows("real-world", &rows);
+
+    assert_eq!(aggregate["average_process_score"], 87.0);
+    assert_eq!(aggregate["average_execution_hygiene_score"], 87.0);
+    assert_eq!(aggregate["average_runtime_efficiency_score"], 99.0);
+    assert_eq!(aggregate["total_input_tokens"], 12_000);
+    assert_eq!(aggregate["total_uncached_input_tokens"], 3_000);
+    assert_eq!(aggregate["total_requests"], 6);
+    assert_eq!(aggregate["total_tool_calls"], 8);
+
+    let html = rows_to_html("real-world", &rows, &aggregate);
+    assert!(html.contains("Execution hygiene"));
+    assert!(html.contains("Bounded runtime"));
+    assert!(html.contains("Total input tokens"));
+    assert!(html.contains("Uncached input tokens"));
+    assert!(!html.contains(">Process<"));
+}
+
+#[test]
 fn grouped_usage_is_explicit_for_partial_or_mixed_rows() {
     let mut reported = comparison_row("spark-harness", "matched");
     reported.usage_source = "provider_responses".to_string();
@@ -466,6 +512,8 @@ fn benchmark_comparison_records_input_report_provenance() {
         limit: 50,
         all_runs: false,
         harness_reports: vec![harness_path.clone()],
+        harness_variants: Vec::new(),
+        baseline_runner: None,
         codex_cli_reports: vec![codex_path.clone()],
         opencode_reports: Vec::new(),
         usage_history_reports: Vec::new(),
@@ -522,6 +570,165 @@ fn benchmark_comparison_records_input_report_provenance() {
 }
 
 #[test]
+fn labeled_harness_variants_reward_lower_tokens_without_hiding_hygiene() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let measured_usage = |input_tokens: u64, uncached_input_tokens: u64| {
+        json!({
+            "source": "provider_responses",
+            "completed_responses": 4,
+            "responses_with_usage": 4,
+            "complete": true,
+            "input_tokens": {"total": input_tokens, "reported_responses": 4, "complete": true},
+            "cached_input_tokens": {"total": input_tokens.saturating_sub(uncached_input_tokens), "reported_responses": 4, "complete": true},
+            "cache_write_input_tokens": {"total": 0, "reported_responses": 4, "complete": true},
+            "uncached_input_tokens": {"total": uncached_input_tokens, "reported_responses": 4, "complete": true},
+            "output_tokens": {"total": 1_000, "reported_responses": 4, "complete": true},
+            "reasoning_output_tokens": {"total": 0, "reported_responses": 4, "complete": true},
+            "total_tokens": {"total": input_tokens + 1_000, "reported_responses": 4, "complete": true}
+        })
+    };
+    let mut baseline = benchmark_row();
+    baseline.scenario = "precise-patch".to_string();
+    baseline.completion_score = 100.0;
+    baseline.quality_score = 100.0;
+    baseline.process_score = 100.0;
+    baseline.task_quality_score = 100.0;
+    baseline.efficiency_score = 100.0;
+    baseline.harness_pressure_score = 100.0;
+    baseline.score = 100.0;
+    baseline.tool_calls = 10;
+    baseline.total_duration_ms = 10_000;
+    baseline.response_usage = measured_usage(100_000, 20_000);
+
+    let mut progressive = baseline.clone();
+    progressive.run_id = "run-2".to_string();
+    progressive.trace_dir = ".spark-runs/run-2".to_string();
+    progressive.process_score = 90.0;
+    progressive.harness_pressure_score = 90.0;
+    progressive.response_usage = measured_usage(50_000, 21_000);
+
+    let baseline_path = dir.path().join("baseline.json");
+    let progressive_path = dir.path().join("progressive.json");
+    std::fs::write(
+        &baseline_path,
+        serde_json::to_string(&json!({
+            "suite": "real-world",
+            "generated_at_unix_ms": 10,
+            "rows": [baseline],
+            "aggregate": {}
+        }))
+        .expect("baseline json"),
+    )
+    .expect("write baseline");
+    std::fs::write(
+        &progressive_path,
+        serde_json::to_string(&json!({
+            "suite": "real-world",
+            "generated_at_unix_ms": 20,
+            "rows": [progressive],
+            "aggregate": {}
+        }))
+        .expect("progressive json"),
+    )
+    .expect("write progressive");
+
+    let output = write_benchmark_comparison(BenchmarkComparisonOptions {
+        cwd: dir.path().to_path_buf(),
+        suite: ProfileBenchmarkSuiteKind::RealWorld,
+        limit: 50,
+        all_runs: false,
+        harness_reports: Vec::new(),
+        harness_variants: vec![
+            HarnessVariantReport {
+                label: "baseline".to_string(),
+                path: baseline_path,
+            },
+            HarnessVariantReport {
+                label: "progressive".to_string(),
+                path: progressive_path,
+            },
+        ],
+        baseline_runner: Some("baseline".to_string()),
+        codex_cli_reports: Vec::new(),
+        opencode_reports: Vec::new(),
+        usage_history_reports: Vec::new(),
+        llm_judge_report: None,
+        group_by_reasoning: false,
+        group_by_model: false,
+        successful_only: false,
+        output_dir: dir.path().join("out"),
+    })
+    .expect("write harness variant comparison");
+
+    let report: Value =
+        serde_json::from_str(&std::fs::read_to_string(&output.json_path).expect("read comparison"))
+            .expect("comparison json");
+    let baseline_index =
+        report["aggregate"]["matched_runner_benchmark_index_averages"]["spark-harness/baseline"]
+            .as_f64()
+            .expect("baseline index");
+    let progressive_index =
+        report["aggregate"]["matched_runner_benchmark_index_averages"]["spark-harness/progressive"]
+            .as_f64()
+            .expect("progressive index");
+    assert_eq!(baseline_index, 100.0);
+    assert!(progressive_index > baseline_index);
+    assert_eq!(
+        report["aggregate"]["matched_runner_execution_hygiene_score_averages"]["spark-harness/progressive"],
+        90.0
+    );
+    assert_eq!(
+        report["aggregate"]["matched_runner_uncached_input_token_averages"]["spark-harness/progressive"],
+        21_000.0
+    );
+    assert_eq!(
+        report["inputs"]["baseline_runner"],
+        "spark-harness/baseline"
+    );
+    assert_eq!(
+        report["inputs"]["harness_source"],
+        "labeled-harness-variants"
+    );
+
+    let html = std::fs::read_to_string(&output.html_path).expect("variant html");
+    assert!(html.contains("Paired harness comparison"));
+    assert!(html.contains("Execution hygiene"));
+    assert!(html.contains("Uncached input"));
+    assert!(html.contains("baseline.json"));
+    assert!(html.contains("progressive.json"));
+}
+
+#[test]
+fn harness_variant_mode_requires_a_paired_dedicated_comparison() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let options = BenchmarkComparisonOptions {
+        cwd: dir.path().to_path_buf(),
+        suite: ProfileBenchmarkSuiteKind::RealWorld,
+        limit: 50,
+        all_runs: false,
+        harness_reports: Vec::new(),
+        harness_variants: vec![HarnessVariantReport {
+            label: "only".to_string(),
+            path: PathBuf::from("only.json"),
+        }],
+        baseline_runner: None,
+        codex_cli_reports: Vec::new(),
+        opencode_reports: Vec::new(),
+        usage_history_reports: Vec::new(),
+        llm_judge_report: None,
+        group_by_reasoning: false,
+        group_by_model: false,
+        successful_only: false,
+        output_dir: dir.path().join("out"),
+    };
+
+    let error = write_benchmark_comparison(options)
+        .expect_err("one harness variant must not produce a comparison")
+        .to_string();
+    assert!(error.contains("at least two --harness-variant"));
+}
+
+#[test]
 fn comparison_includes_usage_history_rows_and_metadata() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut harness_row = benchmark_row();
@@ -575,6 +782,8 @@ fn comparison_includes_usage_history_rows_and_metadata() {
         limit: 50,
         all_runs: false,
         harness_reports: vec![harness_path],
+        harness_variants: Vec::new(),
+        baseline_runner: None,
         codex_cli_reports: vec![codex_path],
         opencode_reports: Vec::new(),
         usage_history_reports: vec![usage_path.clone()],
@@ -660,6 +869,8 @@ fn usage_history_schema_mismatch_is_rejected() {
         limit: 50,
         all_runs: false,
         harness_reports: Vec::new(),
+        harness_variants: Vec::new(),
+        baseline_runner: None,
         codex_cli_reports: Vec::new(),
         opencode_reports: Vec::new(),
         usage_history_reports: vec![usage_path],
@@ -757,6 +968,8 @@ fn usage_history_rejects_flat_or_incomplete_nested_reports() {
         limit: 50,
         all_runs: false,
         harness_reports: Vec::new(),
+        harness_variants: Vec::new(),
+        baseline_runner: None,
         codex_cli_reports: Vec::new(),
         opencode_reports: Vec::new(),
         usage_history_reports: vec![usage_path.clone()],
@@ -786,6 +999,8 @@ fn usage_history_rejects_flat_or_incomplete_nested_reports() {
         limit: 50,
         all_runs: false,
         harness_reports: Vec::new(),
+        harness_variants: Vec::new(),
+        baseline_runner: None,
         codex_cli_reports: Vec::new(),
         opencode_reports: Vec::new(),
         usage_history_reports: vec![usage_path],
@@ -824,6 +1039,8 @@ fn usage_only_comparison_is_evidence_not_a_winner() {
         limit: 50,
         all_runs: false,
         harness_reports: Vec::new(),
+        harness_variants: Vec::new(),
+        baseline_runner: None,
         codex_cli_reports: Vec::new(),
         opencode_reports: Vec::new(),
         usage_history_reports: vec![usage_path],
@@ -944,6 +1161,7 @@ fn comparison_html_places_freshness_caveat_near_headline() {
             skipped_spark_infrastructure_retry_hints: BTreeMap::new(),
             ..ComparisonDiagnostics::default()
         },
+        "codex-cli",
     );
     let mut inputs = json!({
         "harness_reports": [{"modified_unix_ms": 1_000u64}],
@@ -1566,6 +1784,7 @@ fn comparison_aggregate_reports_skipped_external_infrastructure_rows() {
             )]),
             skipped_opencode_infrastructure_retry_hints: BTreeMap::new(),
         },
+        "codex-cli",
     );
 
     assert_eq!(
@@ -1663,6 +1882,7 @@ fn comparison_html_reports_partial_external_infrastructure_skips() {
             )]),
             skipped_opencode_infrastructure_retry_hints: BTreeMap::new(),
         },
+        "codex-cli",
     );
 
     let html = comparison_rows_to_html("real-world", &rows, &aggregate, &empty_comparison_inputs());
@@ -1711,6 +1931,7 @@ fn comparison_html_groups_mixed_retry_hints_by_hint() {
             ]),
             ..ComparisonDiagnostics::default()
         },
+        "codex-cli",
     );
 
     let html = comparison_rows_to_html("real-world", &rows, &aggregate, &empty_comparison_inputs());

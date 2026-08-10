@@ -30,17 +30,19 @@ spark chat "Review this repository and suggest the highest-impact fix."
 
 - Interactive and one-shot coding sessions
 - Native filesystem, shell, Git, web, and MCP tools
-- Repo skills and multi-agent workflows
+- Built-in Git/GitHub guidance, repo skills, and multi-agent workflows
 - Trace inspection, usage history, and context compaction
 - SparkBench for measured quality, cost, and latency comparisons
 
 Run `spark --help` for the complete CLI. See the [development guide](docs/development.md) for source builds, tests, configuration, and architecture.
 
+Git and GitHub requests automatically load the built-in GitHub workflow; it can also be selected with `--skill github`, `/skill github`, or an `@github` mention. The read-only `gh.read` tool uses the local GitHub CLI in both Ask and Work modes, while authorized mutations use `gh` through Work-mode command execution. The workflow preserves dirty worktrees, resolves the exact repository, and covers issues, pull requests, Actions, reviews, merges, and releases. A repo-local `.agents/skills/github/SKILL.md` can override the built-in policy.
+
 ## Spark Bench
 
 [Spark Bench](https://ifbars.github.io/codex-spark-agent/) compares the Spark harness and native Codex CLI across one paired task matrix. The current sweep contains 144 attempts across 12 tasks, three reasoning levels, and two repeats.
 
-Outcome quality comes from weighted task validators. Failed attempts remain in quality and pass-rate totals, while provider failures block publication. Tool use and recovery behavior are reported separately as process quality.
+Outcome quality comes from weighted task validators. Failed attempts remain in quality and pass-rate totals, while provider failures block publication. Failure recovery, repeated calls, tool-only streaks, and post-completion activity are reported separately as execution hygiene. Paired reports compute resource efficiency from duration, total input tokens, and tool calls, then quality-gate that result into the Benchmark Index.
 
 [Review the current CSV](docs/benchmarks/reasoning-sweep-current-2026-08-09.csv) · [Read the benchmark summary](docs/benchmarks/reasoning-sweep-current-2026-08-09.md)
 

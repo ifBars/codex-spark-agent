@@ -178,7 +178,7 @@ fn choose_skill_source(cwd: &Path, options: &SetupOptions) -> Result<Option<Path
     if options.non_interactive {
         return Ok(None);
     }
-    let existing_repo_skills = skill::registry::discover_sources(cwd)?.len();
+    let existing_repo_skills = skill::registry::discover_repo_sources(cwd)?.len();
     let should_migrate = confirm_or_default(
         "Migrate skills into this repo's .agents/skills?",
         existing_repo_skills == 0,
