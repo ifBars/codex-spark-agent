@@ -20,7 +20,9 @@ spark setup
 spark chat
 ```
 
-Spark uses ChatGPT/Codex OAuth. You can also run a single task directly:
+Spark uses ChatGPT/Codex OAuth. If Spark has no saved login, it can reuse the
+ChatGPT tokens from `CODEX_HOME/auth.json` (or the default Codex home) without
+copying credentials into prompts. You can also run a single task directly:
 
 ```text
 spark chat "Review this repository and suggest the highest-impact fix."
@@ -39,6 +41,11 @@ Run `spark --help` for the complete CLI. See the [development guide](docs/develo
 Git and GitHub requests automatically load the built-in GitHub workflow; it can also be selected with `--skill github`, `/skill github`, or an `@github` mention. The read-only `gh.read` tool uses the local GitHub CLI in both Ask and Work modes, while authorized mutations use `gh` through Work-mode command execution. The workflow preserves dirty worktrees, resolves the exact repository, and covers issues, pull requests, Actions, reviews, merges, and releases. A repo-local `.agents/skills/github/SKILL.md` can override the built-in policy.
 
 Code-review requests automatically load the focused `code-review` workflow. It uses a per-file evidence ledger and boundary, failure, concurrency, retry, isolation, and lifecycle sweeps; reviews over supplied local patch artifacts skip the broader GitHub operations workflow. Select it explicitly with `--skill code-review`, `/skill code-review`, or an `@code-review` mention.
+
+Trusted host applications can run one structured task through
+`spark automation --stdio`. The versioned protocol accepts an output schema,
+explicit read roots, scoped HTTP MCP servers, and a restricted tool policy,
+then returns one JSON response for the host to validate and publish.
 
 ## Spark Bench
 
