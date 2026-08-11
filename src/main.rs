@@ -1,6 +1,7 @@
 mod account_usage;
 mod agent;
 mod auth;
+mod automation;
 mod benchmark;
 mod chat;
 mod cli;
@@ -276,6 +277,12 @@ async fn run_command(command: Command) -> Result<()> {
         }
         Command::DesktopServer { stdio: false } => {
             anyhow::bail!("desktop-server requires --stdio");
+        }
+        Command::Automation { stdio: true } => {
+            automation::run_stdio().await?;
+        }
+        Command::Automation { stdio: false } => {
+            anyhow::bail!("automation requires --stdio");
         }
         Command::Brief {
             question,

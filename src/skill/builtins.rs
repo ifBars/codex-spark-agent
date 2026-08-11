@@ -9,20 +9,70 @@ const GITHUB: &str = include_str!(concat!(
     "/skills/github/SKILL.md"
 ));
 
-const SKILLS: &[BuiltInSkill] = &[BuiltInSkill {
-    name: "github",
-    raw: GITHUB,
-}];
+const CODE_REVIEW: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/skills/code-review/SKILL.md"
+));
+
+const SKILLS: &[BuiltInSkill] = &[
+    BuiltInSkill {
+        name: "code-review",
+        raw: CODE_REVIEW,
+    },
+    BuiltInSkill {
+        name: "github",
+        raw: GITHUB,
+    },
+];
 
 pub(super) fn all() -> &'static [BuiltInSkill] {
     SKILLS
 }
 
 pub(super) fn implicit_skill_names(text: &str) -> Vec<&'static str> {
-    github_prompt(text)
-        .then_some("github")
-        .into_iter()
-        .collect()
+    let code_review = code_review_prompt(text);
+    let supplied_review_artifacts = code_review
+        && [".patch", "review.json", "review.md"]
+            .iter()
+            .any(|marker| text.to_ascii_lowercase().contains(marker));
+    let mut names = Vec::new();
+    if code_review {
+        names.push("code-review");
+    }
+    if github_prompt(text) && !supplied_review_artifacts {
+        names.push("github");
+    }
+    names
+}
+
+fn code_review_prompt(text: &str) -> bool {
+    let normalized = text.to_ascii_lowercase();
+    const PHRASES: &[&str] = &[
+        "code review",
+        "review the pr",
+        "review this pr",
+        "review the pull request",
+        "review this pull request",
+        "review the diff",
+        "review this diff",
+        "review this change",
+        "review this patch",
+    ];
+    if PHRASES.iter().any(|phrase| normalized.contains(phrase)) {
+        return true;
+    }
+
+    normalized.contains("review")
+        && [
+            "function",
+            "implementation",
+            "changed file",
+            "edge case",
+            "regression",
+            "defect",
+        ]
+        .iter()
+        .any(|context| normalized.contains(context))
 }
 
 fn github_prompt(text: &str) -> bool {
@@ -100,7 +150,20 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_code_review_does_not_activate_github_skill() {
-        assert!(implicit_skill_names("Review this parser function for edge cases.").is_empty());
+    fn ordinary_code_review_activates_focused_skill_without_github() {
+        assert_eq!(
+            implicit_skill_names("Review this parser function for edge cases."),
+            vec!["code-review"]
+        );
+    }
+
+    #[test]
+    fn supplied_diff_review_avoids_unrelated_github_workflow() {
+        assert_eq!(
+            implicit_skill_names(
+                "Review the PR from diff.patch and write findings to review.json."
+            ),
+            vec!["code-review"]
+        );
     }
 }

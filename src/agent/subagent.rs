@@ -270,9 +270,11 @@ impl AgentRunner {
             subagent_team: Default::default(),
             delegated_write_ownership: (mode == AgentMode::Work).then(|| options.ownership.clone()),
             mcp_registry: None,
+            eager_mcp_tools: false,
             active_deferred_tools: Default::default(),
             local_filesystem_only: false,
             local_filesystem_tool_budget: None,
+            tool_access: crate::tools::ToolAccessPolicy::unrestricted(),
         };
         child.refresh_memory_context()?;
         child.set_system_prompt(Some(format!("{}{}", spec.system_prompt, ownership_prompt)));

@@ -685,11 +685,119 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tool": "fs.read",
+                "path": "diff-extra.patch",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "diff-concurrency.patch",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/audit.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/batchOrders.ts",
+            }),
+            json!({
+                "tool": "fs.read",
                 "path": "src/checkout.ts",
             }),
             json!({
                 "tool": "fs.read",
+                "path": "src/invites.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/orders.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/payments.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/reportCache.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/reportQuery.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/rollout.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/runtimeSettings.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/sessionExpiry.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/useSocketMessages.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "src/webhookDelivery.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/audit.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/batchOrders.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
                 "path": "tests/checkout.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/invites.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/orders.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/payments.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/reportCache.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/reportQuery.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/rollout.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/runtimeSettings.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/sessionExpiry.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/useSocketMessages.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/webhookDelivery.test.ts",
+            }),
+            json!({
+                "tool": "fs.write",
+                "path": "review.json",
             }),
             json!({
                 "tool": "fs.write",
@@ -719,7 +827,15 @@ pub(crate) fn profile_scenario_expected_tool_calls(scenario: ProfileScenarioKind
             }),
             json!({
                 "tool": "fs.read",
+                "path": "src/billingWeek.ts",
+            }),
+            json!({
+                "tool": "fs.read",
                 "path": "tests/billingWindow.test.ts",
+            }),
+            json!({
+                "tool": "fs.read",
+                "path": "tests/billingWeek.test.ts",
             }),
             json!({
                 "tool": "fs.write",

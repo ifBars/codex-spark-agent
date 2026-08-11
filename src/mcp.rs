@@ -63,6 +63,15 @@ struct McpServerConfig {
     url: Option<String>,
     #[serde(default)]
     http_headers: HashMap<String, String>,
+    #[serde(default, alias = "bearerTokenEnvVar")]
+    bearer_token_env_var: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct McpHttpServer {
+    pub(crate) name: String,
+    pub(crate) url: String,
+    pub(crate) bearer_token_env_var: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -148,6 +157,32 @@ impl McpRegistry {
             }
         }
         registry
+    }
+
+    pub(crate) async fn from_http_servers(servers: Vec<McpHttpServer>) -> Result<Self> {
+        let mut registry = Self::default();
+        let mut names = std::collections::HashSet::new();
+        for server in servers {
+            validate_explicit_http_server(&server, &mut names)?;
+            let config = McpServerConfig {
+                enabled: Some(true),
+                command: None,
+                args: Vec::new(),
+                cwd: None,
+                env: HashMap::new(),
+                url: Some(server.url),
+                http_headers: HashMap::new(),
+                bearer_token_env_var: server.bearer_token_env_var,
+            };
+            tokio::time::timeout(
+                MCP_DISCOVERY_TIMEOUT,
+                registry.discover_server(&server.name, config),
+            )
+            .await
+            .with_context(|| format!("MCP server `{}` discovery timed out", server.name))?
+            .with_context(|| format!("MCP server `{}` is unavailable", server.name))?;
+        }
+        Ok(registry)
     }
 
     pub(crate) fn warnings(&self) -> &[String] {
@@ -237,12 +272,51 @@ impl McpRegistry {
                         env: config.env.clone(),
                         url: config.url.clone(),
                         http_headers: config.http_headers.clone(),
+                        bearer_token_env_var: config.bearer_token_env_var.clone(),
                     },
                 },
             );
         }
         Ok(())
     }
+}
+
+fn validate_explicit_http_server(
+    server: &McpHttpServer,
+    names: &mut std::collections::HashSet<String>,
+) -> Result<()> {
+    if server.name.is_empty()
+        || !server
+            .name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        anyhow::bail!("MCP server name must contain only letters, numbers, underscores, or dashes");
+    }
+    if !names.insert(server.name.clone()) {
+        anyhow::bail!("duplicate MCP server name `{}`", server.name);
+    }
+    let url = url::Url::parse(&server.url)
+        .with_context(|| format!("MCP server `{}` has an invalid URL", server.name))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        anyhow::bail!("MCP server `{}` must use http or https", server.name);
+    }
+    if let Some(name) = server.bearer_token_env_var.as_deref() {
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            anyhow::bail!("MCP bearer token environment variable name is invalid");
+        }
+        let token = std::env::var(name).with_context(|| {
+            format!("MCP bearer token environment variable `{name}` is not set")
+        })?;
+        if token.trim().is_empty() {
+            anyhow::bail!("MCP bearer token environment variable `{name}` is empty");
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn mcp_disabled_by_env() -> bool {
@@ -619,6 +693,16 @@ async fn http_json_rpc(
                 .with_context(|| format!("invalid MCP HTTP header value for `{name}`"))?,
         );
     }
+    if let Some(name) = config.bearer_token_env_var.as_deref() {
+        let token = std::env::var(name).with_context(|| {
+            format!("MCP bearer token environment variable `{name}` is not set")
+        })?;
+        headers.insert(
+            reqwest::header::AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {token}"))
+                .context("invalid MCP bearer token header value")?,
+        );
+    }
     let response = tokio::time::timeout(
         MCP_TIMEOUT,
         client.post(url).headers(headers).json(&body).send(),
@@ -771,8 +855,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use super::{
-        configured_server_statuses, load_mcp_servers, local_mcp_tool_name, mcp_state_path,
-        parse_json_rpc_result, parse_sse_json, reset_server_enabled, set_server_enabled,
+        McpHttpServer, McpServerConfig, configured_server_statuses, load_mcp_servers,
+        local_mcp_tool_name, mcp_state_path, parse_json_rpc_result, parse_sse_json,
+        reset_server_enabled, set_server_enabled, validate_explicit_http_server,
     };
     use serde_json::json;
 
@@ -890,5 +975,41 @@ mod tests {
 
         assert!(error.to_string().contains("unknown MCP server `missing`"));
         assert!(!mcp_state_path(workspace.path()).exists());
+    }
+
+    #[test]
+    fn explicit_http_servers_reject_invalid_urls_and_duplicate_names() {
+        let mut names = std::collections::HashSet::new();
+        let valid = McpHttpServer {
+            name: "diffuin_github".to_string(),
+            url: "http://127.0.0.1:43120/mcp".to_string(),
+            bearer_token_env_var: None,
+        };
+        validate_explicit_http_server(&valid, &mut names).expect("valid server");
+        assert!(validate_explicit_http_server(&valid, &mut names).is_err());
+
+        let invalid = McpHttpServer {
+            name: "diffuin_assetripper".to_string(),
+            url: "file:///private/export".to_string(),
+            bearer_token_env_var: None,
+        };
+        assert!(
+            validate_explicit_http_server(&invalid, &mut std::collections::HashSet::new()).is_err()
+        );
+    }
+
+    #[test]
+    fn mcp_json_accepts_bearer_token_environment_variable_without_a_token_value() {
+        let config: McpServerConfig = serde_json::from_value(json!({
+            "url": "http://127.0.0.1:43120/mcp",
+            "bearerTokenEnvVar": "DIFFUIN_GITHUB_READ_TOKEN"
+        }))
+        .expect("parse MCP config");
+
+        assert_eq!(
+            config.bearer_token_env_var.as_deref(),
+            Some("DIFFUIN_GITHUB_READ_TOKEN")
+        );
+        assert!(config.http_headers.is_empty());
     }
 }

@@ -41,7 +41,7 @@ pub(crate) fn expected_scenario_artifacts(
         ProfileScenarioKind::MergeConflictResolution => &["src/featureFlags.ts"],
         ProfileScenarioKind::GithubIssueTriage => &["triage.md"],
         ProfileScenarioKind::CiFailureTriage => &["ci-triage.md"],
-        ProfileScenarioKind::PullRequestReview => &["review.md"],
+        ProfileScenarioKind::PullRequestReview => &["review.json", "review.md"],
         ProfileScenarioKind::DependencyUpgradeTriage => &["upgrade-triage.md"],
         ProfileScenarioKind::TechnicalEssay => &["essay.md"],
         ProfileScenarioKind::ConfigMigration => {

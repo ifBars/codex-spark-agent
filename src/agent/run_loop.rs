@@ -827,6 +827,33 @@ mod tests {
     }
 
     #[test]
+    fn trusted_host_policy_can_allow_workspace_edits_without_shell_or_network_tools() {
+        let (_dir, mut runner) = runner();
+        runner.set_mode(AgentMode::Work);
+        runner.set_tool_access(crate::tools::ToolAccessPolicy {
+            workspace_writes: true,
+            command_execution: false,
+            github_cli: false,
+            hosted_web_search: false,
+            browser: false,
+            subagents: false,
+            mcp: false,
+        });
+        let names = runner
+            .tools_for_current_loop()
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+
+        assert!(names.contains(&"fs.read".to_string()));
+        assert!(names.contains(&"fs.write".to_string()));
+        assert!(!names.contains(&"cmd.exec".to_string()));
+        assert!(!names.contains(&"tool.search".to_string()));
+        assert!(!names.contains(&"web.search".to_string()));
+        assert!(!names.contains(&"subagent.run".to_string()));
+    }
+
+    #[test]
     fn tool_search_activates_one_matching_specialist_for_the_current_goal() {
         let (_dir, mut runner) = runner();
         runner.disable_mcp();

@@ -38,6 +38,8 @@ Run `spark --help` for the complete CLI. See the [development guide](docs/develo
 
 Git and GitHub requests automatically load the built-in GitHub workflow; it can also be selected with `--skill github`, `/skill github`, or an `@github` mention. The read-only `gh.read` tool uses the local GitHub CLI in both Ask and Work modes, while authorized mutations use `gh` through Work-mode command execution. The workflow preserves dirty worktrees, resolves the exact repository, and covers issues, pull requests, Actions, reviews, merges, and releases. A repo-local `.agents/skills/github/SKILL.md` can override the built-in policy.
 
+Code-review requests automatically load the focused `code-review` workflow. It uses a per-file evidence ledger and boundary, failure, concurrency, retry, isolation, and lifecycle sweeps; reviews over supplied local patch artifacts skip the broader GitHub operations workflow. Select it explicitly with `--skill code-review`, `/skill code-review`, or an `@code-review` mention.
+
 ## Spark Bench
 
 [Spark Bench](https://ifbars.github.io/codex-spark-agent/) compares the Spark harness and native Codex CLI across one paired task matrix. The current sweep contains 144 attempts across 12 tasks, three reasoning levels, and two repeats.

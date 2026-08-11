@@ -431,14 +431,26 @@ fn prepare_profile_scenario_at(dir: &Path, scenario: ProfileScenarioKind) -> Res
                 .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
             std::fs::write(
                 dir.join("pr.md"),
-                "# PR #184: Add admin comp discount\n\nReview this checkout discount PR. Product rules: only users with role exactly `admin` may receive a full internal comp discount. `read-only-admin` users can inspect orders but must never create discounts. Do not edit source files; write `review.md` with any blocking finding, evidence, and a minimal test/fix recommendation.\n",
+                "# PR #184: Checkout reliability hardening\n\nReview this change before merge. It adds internal helpers across checkout, order processing, caching, delivery, configuration, and UI lifecycle paths. Production behavior must remain safe under normal boundary, failure, and concurrent execution conditions.\n\nDo not edit source files. Report every actionable regression introduced by the diff, ordered by severity. Avoid style-only observations and do not invent defects in correct changes.\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture pr.md: {error}"))?;
             std::fs::write(
                 dir.join("diff.patch"),
-                "diff --git a/src/checkout.ts b/src/checkout.ts\nindex 2db51a1..8d7ef22 100644\n--- a/src/checkout.ts\n+++ b/src/checkout.ts\n@@\n export function discountFor(user: User, cart: Cart): number {\n+  const normalizedRole = user.role.trim().toLowerCase();\n+  if (normalizedRole.includes('admin')) {\n+    return cart.subtotalCents;\n+  }\n   if (cart.couponCode === 'SAVE10') {\n     return Math.round(cart.subtotalCents * 0.1);\n   }\ndiff --git a/tests/checkout.test.ts b/tests/checkout.test.ts\nindex aa0b21c..f12ca39 100644\n--- a/tests/checkout.test.ts\n+++ b/tests/checkout.test.ts\n@@\n test('admin users can comp internal carts', () => {\n   expect(discountFor({ id: 'u-1', role: 'admin' }, { subtotalCents: 5000 })).toBe(5000);\n });\n",
+                "diff --git a/src/checkout.ts b/src/checkout.ts\nindex 2db51a1..8d7ef22 100644\n--- a/src/checkout.ts\n+++ b/src/checkout.ts\n@@\n export function discountFor(user: User, cart: Cart): number {\n+  const normalizedRole = user.role.trim().toLowerCase();\n+  if (normalizedRole.includes('admin')) {\n+    return cart.subtotalCents;\n+  }\n   if (cart.couponCode === 'SAVE10') {\n     return Math.round(cart.subtotalCents * 0.1);\n   }\ndiff --git a/src/orders.ts b/src/orders.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/orders.ts\n@@\n+export function pageOrders(orders: Order[], cursor: string | undefined, limit: number): OrderPage {\n+  const sorted = [...orders].sort((left, right) => right.createdAt.localeCompare(left.createdAt));\n+  const eligible = cursor\n+    ? sorted.filter((order) => order.createdAt < cursor)\n+    : sorted;\n+  const items = eligible.slice(0, limit);\n+  return { items, nextCursor: items.at(-1)?.createdAt };\n+}\ndiff --git a/src/payments.ts b/src/payments.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/payments.ts\n@@\n+export function capturePayment(gateway: PaymentGateway, request: CaptureRequest): Promise<Capture> {\n+  const idempotencyKey = `${request.orderId}:${Date.now()}`;\n+  return gateway.capture(request.amountCents, { idempotencyKey });\n+}\ndiff --git a/src/useSocketMessages.ts b/src/useSocketMessages.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/useSocketMessages.ts\n@@\n+export function useSocketMessages(socket: SocketLike, onMessage: (message: string) => void): void {\n+  useEffect(() => {\n+    const handleMessage = (event: MessageEvent<string>) => onMessage(event.data);\n+    socket.addEventListener('message', handleMessage);\n+    return () => socket.removeEventListener('message', (event) => handleMessage(event));\n+  }, [socket, onMessage]);\n+}\ndiff --git a/tests/checkout.test.ts b/tests/checkout.test.ts\nindex aa0b21c..f12ca39 100644\n--- a/tests/checkout.test.ts\n+++ b/tests/checkout.test.ts\n@@\n+test('admin users can comp internal carts', () => {\n+  expect(discountFor({ id: 'u-2', role: 'admin' }, { subtotalCents: 5000 })).toBe(5000);\n+});\ndiff --git a/tests/orders.test.ts b/tests/orders.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/orders.test.ts\n@@\n+test('continues after the prior page timestamp', () => {\n+  const first = pageOrders(uniqueTimestampOrders, undefined, 2);\n+  const second = pageOrders(uniqueTimestampOrders, first.nextCursor, 2);\n+  expect([...first.items, ...second.items]).toHaveLength(4);\n+});\ndiff --git a/tests/payments.test.ts b/tests/payments.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/payments.test.ts\n@@\n+test('captures the requested amount', async () => {\n+  await capturePayment(gateway, request);\n+  expect(gateway.capture).toHaveBeenCalledWith(5000, { idempotencyKey: expect.any(String) });\n+});\ndiff --git a/tests/useSocketMessages.test.ts b/tests/useSocketMessages.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/useSocketMessages.test.ts\n@@\n+test('subscribes to socket messages', () => {\n+  renderHook(() => useSocketMessages(socket, onMessage));\n+  expect(socket.addEventListener).toHaveBeenCalledWith('message', expect.any(Function));\n+});\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture diff.patch: {error}"))?;
+            std::fs::write(
+                dir.join("diff-extra.patch"),
+                "diff --git a/src/audit.ts b/src/audit.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/audit.ts\n@@\n+export function logRejectedAuth(logger: Logger, accountId: string, accessToken: string): void {\n+  logger.warn('auth rejected', { accountId, accessToken });\n+}\ndiff --git a/src/batchOrders.ts b/src/batchOrders.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/batchOrders.ts\n@@\n+export async function saveOrders(repository: OrderRepository, orders: Order[]): Promise<number> {\n+  orders.forEach(async (order) => {\n+    await repository.save(order);\n+  });\n+  return orders.length;\n+}\ndiff --git a/src/reportCache.ts b/src/reportCache.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/reportCache.ts\n@@\n+export async function getReport(cache: ReportCache, source: ReportSource, request: ReportRequest): Promise<string> {\n+  const key = `${request.reportId}:${request.range}`;\n+  const cached = cache.get(key);\n+  if (cached !== undefined) return cached;\n+  const report = await source.load(request);\n+  cache.set(key, report);\n+  return report;\n+}\ndiff --git a/src/rollout.ts b/src/rollout.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/rollout.ts\n@@\n+export function isEnabled(identity: string, percentage: number): boolean {\n+  return bucketFor(identity) <= percentage;\n+}\ndiff --git a/tests/audit.test.ts b/tests/audit.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/audit.test.ts\n@@\n+test('logs rejected authentication', () => {\n+  logRejectedAuth(logger, 'acct-1', 'secret-token');\n+  expect(logger.warn).toHaveBeenCalledWith('auth rejected', expect.any(Object));\n+});\ndiff --git a/tests/batchOrders.test.ts b/tests/batchOrders.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/batchOrders.test.ts\n@@\n+test('reports the submitted order count', async () => {\n+  expect(await saveOrders(repository, orders)).toBe(orders.length);\n+});\ndiff --git a/tests/reportCache.test.ts b/tests/reportCache.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/reportCache.test.ts\n@@\n+test('reuses a cached report', async () => {\n+  await getReport(cache, source, request);\n+  await getReport(cache, source, request);\n+  expect(source.load).toHaveBeenCalledTimes(1);\n+});\ndiff --git a/tests/rollout.test.ts b/tests/rollout.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/rollout.test.ts\n@@\n+test('enables a full rollout', () => {\n+  expect(isEnabled('user-1', 100)).toBe(true);\n+});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture diff-extra.patch: {error}"))?;
+            std::fs::write(
+                dir.join("diff-concurrency.patch"),
+                "diff --git a/src/webhookDelivery.ts b/src/webhookDelivery.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/webhookDelivery.ts\n@@\n+export async function deliverWebhook(event: WebhookEvent, handler: WebhookHandler): Promise<void> {\n+  if (processedEvents.has(event.id)) return;\n+  processedEvents.add(event.id);\n+  await handler(event);\n+}\ndiff --git a/tests/webhookDelivery.test.ts b/tests/webhookDelivery.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/webhookDelivery.test.ts\n@@\n+test('deduplicates successful deliveries', async () => {\n+  await deliverWebhook(event, handler);\n+  await deliverWebhook(event, handler);\n+  expect(handler).toHaveBeenCalledTimes(1);\n+});\ndiff --git a/src/invites.ts b/src/invites.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/invites.ts\n@@\n+export async function consumeInvite(store: InviteStore, members: MemberStore, token: string, userId: string): Promise<boolean> {\n+  if (await store.isUsed(token)) return false;\n+  await members.add(userId);\n+  await store.markUsed(token);\n+  return true;\n+}\ndiff --git a/tests/invites.test.ts b/tests/invites.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/invites.test.ts\n@@\n+test('rejects a sequential second use', async () => {\n+  expect(await consumeInvite(store, members, 'invite-1', 'u-1')).toBe(true);\n+  expect(await consumeInvite(store, members, 'invite-1', 'u-2')).toBe(false);\n+});\ndiff --git a/src/runtimeSettings.ts b/src/runtimeSettings.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/runtimeSettings.ts\n@@\n+export function mergeSettings(current: RuntimeSettings, patch: Partial<RuntimeSettings>): RuntimeSettings {\n+  return { requestTimeoutMs: patch.requestTimeoutMs || current.requestTimeoutMs };\n+}\ndiff --git a/tests/runtimeSettings.test.ts b/tests/runtimeSettings.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/runtimeSettings.test.ts\n@@\n+test('updates the request timeout', () => {\n+  expect(mergeSettings({ requestTimeoutMs: 5000 }, { requestTimeoutMs: 1000 })).toEqual({ requestTimeoutMs: 1000 });\n+});\ndiff --git a/src/reportQuery.ts b/src/reportQuery.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/reportQuery.ts\n@@\n+export function reportQuery(tenantId: string, reportId: string): Query {\n+  return { text: 'select body from reports where tenant_id = $1 and report_id = $2', values: [tenantId, reportId] };\n+}\ndiff --git a/tests/reportQuery.test.ts b/tests/reportQuery.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/reportQuery.test.ts\n@@\n+test('scopes reports to the tenant', () => {\n+  expect(reportQuery('acme', 'weekly').values).toEqual(['acme', 'weekly']);\n+});\ndiff --git a/src/sessionExpiry.ts b/src/sessionExpiry.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/sessionExpiry.ts\n@@\n+export function sessionExpiry(nowMs: number, requestedTtlMs: number, maxTtlMs: number): number {\n+  const boundedTtlMs = Math.max(0, Math.min(requestedTtlMs, maxTtlMs));\n+  return nowMs + boundedTtlMs;\n+}\ndiff --git a/tests/sessionExpiry.test.ts b/tests/sessionExpiry.test.ts\nnew file mode 100644\n--- /dev/null\n+++ b/tests/sessionExpiry.test.ts\n@@\n+test('caps requested session duration', () => {\n+  expect(sessionExpiry(1000, 2000, 500)).toBe(1500);\n+});\n",
+            )
+            .map_err(|error| {
+                anyhow::anyhow!("failed to write fixture diff-concurrency.patch: {error}")
+            })?;
             std::fs::write(
                 dir.join("src").join("checkout.ts"),
                 "export type UserRole = 'customer' | 'support' | 'admin' | 'read-only-admin';\n\nexport type User = {\n  id: string;\n  role: UserRole;\n};\n\nexport type Cart = {\n  subtotalCents: number;\n  couponCode?: string;\n};\n\nexport function discountFor(user: User, cart: Cart): number {\n  const normalizedRole = user.role.trim().toLowerCase();\n  if (normalizedRole.includes('admin')) {\n    return cart.subtotalCents;\n  }\n  if (cart.couponCode === 'SAVE10') {\n    return Math.round(cart.subtotalCents * 0.1);\n  }\n  return 0;\n}\n",
@@ -449,6 +461,126 @@ fn prepare_profile_scenario_at(dir: &Path, scenario: ProfileScenarioKind) -> Res
                 "import { expect, test } from 'bun:test';\nimport { discountFor } from '../src/checkout';\n\ntest('SAVE10 applies a ten percent discount', () => {\n  expect(discountFor({ id: 'u-1', role: 'customer' }, { subtotalCents: 5000, couponCode: 'SAVE10' })).toBe(500);\n});\n\ntest('admin users can comp internal carts', () => {\n  expect(discountFor({ id: 'u-2', role: 'admin' }, { subtotalCents: 5000 })).toBe(5000);\n});\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture checkout.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("orders.ts"),
+                "export type Order = { id: string; createdAt: string };\nexport type OrderPage = { items: Order[]; nextCursor?: string };\n\nexport function pageOrders(orders: Order[], cursor: string | undefined, limit: number): OrderPage {\n  const sorted = [...orders].sort((left, right) => right.createdAt.localeCompare(left.createdAt));\n  const eligible = cursor\n    ? sorted.filter((order) => order.createdAt < cursor)\n    : sorted;\n  const items = eligible.slice(0, limit);\n  return { items, nextCursor: items.at(-1)?.createdAt };\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture orders.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("orders.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { pageOrders, type Order } from '../src/orders';\n\nconst uniqueTimestampOrders: Order[] = [\n  { id: 'o-4', createdAt: '2026-08-10T10:04:00Z' },\n  { id: 'o-3', createdAt: '2026-08-10T10:03:00Z' },\n  { id: 'o-2', createdAt: '2026-08-10T10:02:00Z' },\n  { id: 'o-1', createdAt: '2026-08-10T10:01:00Z' },\n];\n\ntest('continues after the prior page timestamp', () => {\n  const first = pageOrders(uniqueTimestampOrders, undefined, 2);\n  const second = pageOrders(uniqueTimestampOrders, first.nextCursor, 2);\n  expect([...first.items, ...second.items]).toHaveLength(4);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture orders.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("payments.ts"),
+                "export type CaptureRequest = { orderId: string; attemptId: string; amountCents: number };\nexport type Capture = { id: string; status: 'captured' };\nexport type PaymentGateway = {\n  capture(amountCents: number, options: { idempotencyKey: string }): Promise<Capture>;\n};\n\nexport function capturePayment(gateway: PaymentGateway, request: CaptureRequest): Promise<Capture> {\n  const idempotencyKey = `${request.orderId}:${Date.now()}`;\n  return gateway.capture(request.amountCents, { idempotencyKey });\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture payments.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("payments.test.ts"),
+                "import { expect, mock, test } from 'bun:test';\nimport { capturePayment } from '../src/payments';\n\ntest('captures the requested amount', async () => {\n  const gateway = { capture: mock(async () => ({ id: 'cap-1', status: 'captured' as const })) };\n  const request = { orderId: 'o-1', attemptId: 'attempt-7', amountCents: 5000 };\n  await capturePayment(gateway, request);\n  expect(gateway.capture).toHaveBeenCalledWith(5000, { idempotencyKey: expect.any(String) });\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture payments.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("audit.ts"),
+                "export type Logger = { warn(message: string, fields: Record<string, string>): void };\n\nexport function logRejectedAuth(logger: Logger, accountId: string, accessToken: string): void {\n  logger.warn('auth rejected', { accountId, accessToken });\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture audit.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("audit.test.ts"),
+                "import { expect, mock, test } from 'bun:test';\nimport { logRejectedAuth } from '../src/audit';\n\ntest('logs rejected authentication', () => {\n  const logger = { warn: mock() };\n  logRejectedAuth(logger, 'acct-1', 'secret-token');\n  expect(logger.warn).toHaveBeenCalledWith('auth rejected', expect.any(Object));\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture audit.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("batchOrders.ts"),
+                "export type Order = { id: string };\nexport type OrderRepository = { save(order: Order): Promise<void> };\n\nexport async function saveOrders(repository: OrderRepository, orders: Order[]): Promise<number> {\n  orders.forEach(async (order) => {\n    await repository.save(order);\n  });\n  return orders.length;\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture batchOrders.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("batchOrders.test.ts"),
+                "import { expect, mock, test } from 'bun:test';\nimport { saveOrders } from '../src/batchOrders';\n\ntest('reports the submitted order count', async () => {\n  const repository = { save: mock(async () => undefined) };\n  const orders = [{ id: 'o-1' }, { id: 'o-2' }];\n  expect(await saveOrders(repository, orders)).toBe(orders.length);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture batchOrders.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("reportCache.ts"),
+                "export type ReportRequest = { tenantId: string; reportId: string; range: string };\nexport type ReportCache = { get(key: string): string | undefined; set(key: string, value: string): void };\nexport type ReportSource = { load(request: ReportRequest): Promise<string> };\n\nexport async function getReport(cache: ReportCache, source: ReportSource, request: ReportRequest): Promise<string> {\n  const key = `${request.reportId}:${request.range}`;\n  const cached = cache.get(key);\n  if (cached !== undefined) return cached;\n  const report = await source.load(request);\n  cache.set(key, report);\n  return report;\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture reportCache.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("reportCache.test.ts"),
+                "import { expect, mock, test } from 'bun:test';\nimport { getReport } from '../src/reportCache';\n\ntest('reuses a cached report', async () => {\n  const values = new Map<string, string>();\n  const cache = { get: (key: string) => values.get(key), set: (key: string, value: string) => values.set(key, value) };\n  const source = { load: mock(async () => 'report') };\n  const request = { tenantId: 'acme', reportId: 'weekly', range: '2026-W32' };\n  await getReport(cache, source, request);\n  await getReport(cache, source, request);\n  expect(source.load).toHaveBeenCalledTimes(1);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture reportCache.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("rollout.ts"),
+                "export function bucketFor(identity: string): number {\n  return [...identity].reduce((total, char) => total + char.charCodeAt(0), 0) % 100;\n}\n\nexport function isEnabled(identity: string, percentage: number): boolean {\n  return bucketFor(identity) <= percentage;\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture rollout.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("rollout.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { isEnabled } from '../src/rollout';\n\ntest('enables a full rollout', () => {\n  expect(isEnabled('user-1', 100)).toBe(true);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture rollout.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("useSocketMessages.ts"),
+                "import { useEffect } from 'react';\n\ntype SocketLike = {\n  addEventListener(type: 'message', listener: (event: MessageEvent<string>) => void): void;\n  removeEventListener(type: 'message', listener: (event: MessageEvent<string>) => void): void;\n};\n\nexport function useSocketMessages(socket: SocketLike, onMessage: (message: string) => void): void {\n  useEffect(() => {\n    const handleMessage = (event: MessageEvent<string>) => onMessage(event.data);\n    socket.addEventListener('message', handleMessage);\n    return () => socket.removeEventListener('message', (event) => handleMessage(event));\n  }, [socket, onMessage]);\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture useSocketMessages.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("useSocketMessages.test.ts"),
+                "import { expect, mock, test } from 'bun:test';\nimport { renderHook } from './renderHook';\nimport { useSocketMessages } from '../src/useSocketMessages';\n\ntest('subscribes to socket messages', () => {\n  const socket = { addEventListener: mock(), removeEventListener: mock() };\n  const onMessage = mock();\n  renderHook(() => useSocketMessages(socket, onMessage));\n  expect(socket.addEventListener).toHaveBeenCalledWith('message', expect.any(Function));\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture useSocketMessages.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("webhookDelivery.ts"),
+                "export type WebhookEvent = { id: string; payload: unknown };\nexport type WebhookHandler = (event: WebhookEvent) => Promise<void>;\n\nconst processedEvents = new Set<string>();\n\nexport async function deliverWebhook(event: WebhookEvent, handler: WebhookHandler): Promise<void> {\n  if (processedEvents.has(event.id)) return;\n  processedEvents.add(event.id);\n  await handler(event);\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture webhookDelivery.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("webhookDelivery.test.ts"),
+                "import { expect, mock, test } from 'bun:test';\nimport { deliverWebhook } from '../src/webhookDelivery';\n\ntest('deduplicates successful deliveries', async () => {\n  const handler = mock(async () => undefined);\n  const event = { id: 'evt-1', payload: {} };\n  await deliverWebhook(event, handler);\n  await deliverWebhook(event, handler);\n  expect(handler).toHaveBeenCalledTimes(1);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture webhookDelivery.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("invites.ts"),
+                "export type InviteStore = { isUsed(token: string): Promise<boolean>; markUsed(token: string): Promise<void> };\nexport type MemberStore = { add(userId: string): Promise<void> };\n\nexport async function consumeInvite(store: InviteStore, members: MemberStore, token: string, userId: string): Promise<boolean> {\n  if (await store.isUsed(token)) return false;\n  await members.add(userId);\n  await store.markUsed(token);\n  return true;\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture invites.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("invites.test.ts"),
+                "import { expect, mock, test } from 'bun:test';\nimport { consumeInvite } from '../src/invites';\n\ntest('rejects a sequential second use', async () => {\n  let used = false;\n  const store = { isUsed: mock(async () => used), markUsed: mock(async () => { used = true; }) };\n  const members = { add: mock(async () => undefined) };\n  expect(await consumeInvite(store, members, 'invite-1', 'u-1')).toBe(true);\n  expect(await consumeInvite(store, members, 'invite-1', 'u-2')).toBe(false);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture invites.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("runtimeSettings.ts"),
+                "export type RuntimeSettings = {\n  // Zero disables the request timeout.\n  requestTimeoutMs: number;\n};\n\nexport function mergeSettings(current: RuntimeSettings, patch: Partial<RuntimeSettings>): RuntimeSettings {\n  return { requestTimeoutMs: patch.requestTimeoutMs || current.requestTimeoutMs };\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture runtimeSettings.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("runtimeSettings.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { mergeSettings } from '../src/runtimeSettings';\n\ntest('updates the request timeout', () => {\n  expect(mergeSettings({ requestTimeoutMs: 5000 }, { requestTimeoutMs: 1000 })).toEqual({ requestTimeoutMs: 1000 });\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture runtimeSettings.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("reportQuery.ts"),
+                "export type Query = { text: string; values: string[] };\n\nexport function reportQuery(tenantId: string, reportId: string): Query {\n  return {\n    text: 'select body from reports where tenant_id = $1 and report_id = $2',\n    values: [tenantId, reportId],\n  };\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture reportQuery.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("reportQuery.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { reportQuery } from '../src/reportQuery';\n\ntest('scopes reports to the tenant', () => {\n  expect(reportQuery('acme', 'weekly').values).toEqual(['acme', 'weekly']);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture reportQuery.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("sessionExpiry.ts"),
+                "export function sessionExpiry(nowMs: number, requestedTtlMs: number, maxTtlMs: number): number {\n  const boundedTtlMs = Math.max(0, Math.min(requestedTtlMs, maxTtlMs));\n  return nowMs + boundedTtlMs;\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture sessionExpiry.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("sessionExpiry.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { sessionExpiry } from '../src/sessionExpiry';\n\ntest('caps requested session duration', () => {\n  expect(sessionExpiry(1000, 2000, 500)).toBe(1500);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture sessionExpiry.test.ts: {error}"))?;
         }
         ProfileScenarioKind::DependencyUpgradeTriage => {
             std::fs::create_dir_all(dir.join("docs"))
@@ -459,7 +591,7 @@ fn prepare_profile_scenario_at(dir: &Path, scenario: ProfileScenarioKind) -> Res
                 .map_err(|error| anyhow::anyhow!("failed to create tests fixture: {error}"))?;
             std::fs::write(
                 dir.join("upgrade.md"),
-                "# Renovate PR: @acme/time-utils 1.4.2 -> 2.0.0\n\nTriage this dependency upgrade before merge. Billing cutoffs must remain based on UTC dates, because local-time cutoffs can bill customers in the wrong month near midnight. Do not edit source files; write `upgrade-triage.md` with the changed package, migration risk, affected code, test gap, and minimal fix plan.\n",
+                "# Renovate PR: @acme/time-utils 1.4.2 -> 2.0.0\n\nTriage this dependency upgrade before merge. Billing cutoffs must remain based on UTC dates, because local-time cutoffs can bill customers in the wrong month near midnight. Billing weeks begin on Monday in every region and must not follow locale or library defaults. Do not edit source files; write `upgrade-triage.md` with each concrete migration risk, affected code, test gap, and minimal fix plan.\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture upgrade.md: {error}"))?;
             std::fs::write(
@@ -474,7 +606,7 @@ fn prepare_profile_scenario_at(dir: &Path, scenario: ProfileScenarioKind) -> Res
             .map_err(|error| anyhow::anyhow!("failed to write fixture bun.lock: {error}"))?;
             std::fs::write(
                 dir.join("docs").join("time-utils-2.0.md"),
-                "# @acme/time-utils 2.0 Migration\n\n`parseBusinessDate(input)` now interprets date-only strings in the process local timezone by default. Version 1.x interpreted date-only strings as UTC. To preserve UTC behavior, call `parseBusinessDate(input, { zone: 'utc' })`.\n",
+                "# @acme/time-utils 2.0 Migration\n\n## Date parsing\n\n`parseBusinessDate(input)` now interprets date-only strings in the process local timezone by default. Version 1.x interpreted date-only strings as UTC. To preserve UTC behavior, call `parseBusinessDate(input, { zone: 'utc' })`.\n\n## Business weeks\n\n`startOfBusinessWeek(input)` now defaults to Sunday (`weekStartsOn: 0`) to match the package's locale-neutral calendar helpers. Version 1.x defaulted to Monday. Applications that require Monday boundaries must call `startOfBusinessWeek(input, { weekStartsOn: 1 })`.\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture time-utils-2.0.md: {error}"))?;
             std::fs::write(
@@ -487,6 +619,16 @@ fn prepare_profile_scenario_at(dir: &Path, scenario: ProfileScenarioKind) -> Res
                 "import { expect, test } from 'bun:test';\nimport { billingCutoffIso } from '../src/billingWindow';\n\ntest('formats a billing cutoff date', () => {\n  expect(billingCutoffIso('2026-03-31')).toBe('2026-03-31');\n});\n",
             )
             .map_err(|error| anyhow::anyhow!("failed to write fixture billingWindow.test.ts: {error}"))?;
+            std::fs::write(
+                dir.join("src").join("billingWeek.ts"),
+                "import { startOfBusinessWeek } from '@acme/time-utils';\n\nexport function billingWeekStartIso(input: string): string {\n  return startOfBusinessWeek(input).toISOString().slice(0, 10);\n}\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture billingWeek.ts: {error}"))?;
+            std::fs::write(
+                dir.join("tests").join("billingWeek.test.ts"),
+                "import { expect, test } from 'bun:test';\nimport { billingWeekStartIso } from '../src/billingWeek';\n\ntest('returns an ISO week label', () => {\n  expect(billingWeekStartIso('2026-04-01')).toMatch(/^2026-/);\n});\n",
+            )
+            .map_err(|error| anyhow::anyhow!("failed to write fixture billingWeek.test.ts: {error}"))?;
         }
         ProfileScenarioKind::TechnicalEssay => {
             std::fs::create_dir_all(dir.join("sources"))

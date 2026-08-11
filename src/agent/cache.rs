@@ -27,6 +27,14 @@ pub(super) struct TimedToolResult {
 
 impl AgentRunner {
     pub(super) async fn invoke_with_cache(&mut self, tool_name: &str, args: Value) -> ToolResult {
+        if !self.tool_access.allows(tool_name) {
+            let message = format!("tool `{tool_name}` is blocked by the configured tool policy");
+            return ToolResult {
+                ok: false,
+                data: json!({"error_kind": "tool_blocked", "tool": tool_name, "message": message}),
+                error: Some(message),
+            };
+        }
         if self.local_filesystem_only && !is_local_filesystem_tool(tool_name) {
             let message =
                 format!("tool `{tool_name}` is blocked by the local-filesystem-only capability");

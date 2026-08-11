@@ -6,6 +6,220 @@ pub(crate) fn profile_scenario_validation_checks(
     scenario: ProfileScenarioKind,
 ) -> &'static [ProfileScenarioValidationCheck] {
     match scenario {
+        ProfileScenarioKind::PullRequestReview => &[
+            ProfileScenarioValidationCheck {
+                name: "structured finding schema",
+                weight: 5,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $raw = Get-Content -LiteralPath 'review.json' -Raw; if ($raw.TrimStart()[0] -ne '[') { throw 'review.json must be an array' }; $items = @($raw | ConvertFrom-Json | ForEach-Object { $_ }); foreach ($item in $items) { $keys = @($item.psobject.Properties.Name | Sort-Object); if (($keys -join ',') -ne 'evidence,fix,impact,severity,source,test') { throw 'finding schema mismatch' }; foreach ($key in $keys) { if ([string]::IsNullOrWhiteSpace([string]$item.$key)) { throw \"empty finding field $key\" } } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "authorization boundary regression",
+                weight: 9,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/checkout.ts'); if ($f.Count -ne 1) { throw 'missing checkout finding' }; $t = $f[0] | ConvertTo-Json -Compress; foreach ($term in @('includes','read-only-admin','tests/checkout.test.ts')) { if ($t -notlike \"*$term*\") { throw \"checkout finding missing $term\" } }; if ($t -notmatch '(?i)(exact|explicit|strict|===|equality)') { throw 'missing exact-role fix' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "stable pagination regression",
+                weight: 6,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/orders.ts'); if ($f.Count -ne 1) { throw 'missing orders finding' }; $t = $f[0] | ConvertTo-Json -Compress; foreach ($term in @('createdAt','tests/orders.test.ts')) { if ($t -notlike \"*$term*\") { throw \"orders finding missing $term\" } }; if ($t -notmatch '(?i)(tie|same|duplicate|equal).{0,80}(timestamp|createdAt)|(timestamp|createdAt).{0,80}(tie|same|duplicate|equal)' -or $t -notmatch '(?i)(composite|tie.?break|id)' -or $t -notmatch '(?i)(skip|miss|omit|drop|lose|lost)') { throw 'incomplete pagination finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "listener cleanup regression",
+                weight: 6,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/useSocketMessages.ts'); if ($f.Count -ne 1) { throw 'missing socket finding' }; $t = $f[0] | ConvertTo-Json -Compress; foreach ($term in @('removeEventListener','tests/useSocketMessages.test.ts')) { if ($t -notlike \"*$term*\") { throw \"socket finding missing $term\" } }; if ($t -notmatch '(?i)(identity|same|different|new).{0,80}(callback|handler|function)|(callback|handler|function).{0,80}(identity|same|different|new)' -or $t -notmatch '(?i)(leak|duplicate|remain|detach|remove)') { throw 'incomplete listener finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "payment idempotency regression",
+                weight: 9,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/payments.ts'); if ($f.Count -ne 1) { throw 'missing payment finding' }; $t = $f[0] | ConvertTo-Json -Compress; foreach ($term in @('Date.now','tests/payments.test.ts')) { if ($t -notlike \"*$term*\") { throw \"payment finding missing $term\" } }; if ($t -notmatch '(?i)attempt.?id' -or $t -notmatch '(?i)(retry|idempoten)' -or $t -notmatch '(?i)(duplicate|double).{0,50}(charge|capture|payment)') { throw 'incomplete payment finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "awaited batch persistence regression",
+                weight: 8,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/batchOrders.ts'); if ($f.Count -ne 1) { throw 'missing batch finding' }; $t = $f[0] | ConvertTo-Json -Compress; foreach ($term in @('forEach','tests/batchOrders.test.ts')) { if ($t -notlike \"*$term*\") { throw \"batch finding missing $term\" } }; if ($t -notmatch '(?i)(before|early|pending|in.?flight|not await)' -or $t -notmatch '(?i)(Promise\\.all|for.{0,20}of|await all)') { throw 'incomplete batch finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "tenant cache isolation regression",
+                weight: 9,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/reportCache.ts'); if ($f.Count -ne 1) { throw 'missing cache finding' }; $t = $f[0] | ConvertTo-Json -Compress; foreach ($term in @('tenantId','reportId','tests/reportCache.test.ts')) { if ($t -notlike \"*$term*\") { throw \"cache finding missing $term\" } }; if ($t -notmatch '(?i)(cross.?tenant|wrong report|leak|expos)' -or $t -notmatch '(?i)(key|cache)') { throw 'incomplete tenant cache finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "rollout zero-boundary regression",
+                weight: 5,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/rollout.ts'); if ($f.Count -ne 1) { throw 'missing rollout finding' }; $t = $f[0] | ConvertTo-Json -Compress; if ($t -notlike '*tests/rollout.test.ts*' -or $t -notmatch '(?i)(inclusive|less than or equal|<=)' -or $t -notmatch '(?i)(0%|zero|bucket 0)' -or $t -notmatch '(?i)(strict|exclusive|[^=]<[^=])') { throw 'incomplete rollout finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "credential logging regression",
+                weight: 7,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/audit.ts'); if ($f.Count -ne 1) { throw 'missing audit finding' }; $t = $f[0] | ConvertTo-Json -Compress; foreach ($term in @('accessToken','tests/audit.test.ts')) { if ($t -notlike \"*$term*\") { throw \"audit finding missing $term\" } }; if ($t -notmatch '(?i)(log|expos|leak)' -or $t -notmatch '(?i)(omit|remove|redact|mask)') { throw 'incomplete credential finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "webhook retry regression",
+                weight: 9,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/webhookDelivery.ts'); if ($f.Count -ne 1) { throw 'missing webhook finding' }; $t = $f[0] | ConvertTo-Json -Compress; foreach ($term in @('processedEvents','tests/webhookDelivery.test.ts')) { if ($t -notlike \"*$term*\") { throw \"webhook finding missing $term\" } }; if ($t -notmatch '(?i)(fail|reject|throw|error)' -or $t -notmatch '(?i)(retry|redeliver)' -or $t -notmatch '(?i)(after|success|remove|delete)') { throw 'incomplete webhook retry finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "single-use invite race regression",
+                weight: 9,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/invites.ts'); if ($f.Count -ne 1) { throw 'missing invite finding' }; $t = $f[0] | ConvertTo-Json -Compress; foreach ($term in @('isUsed','markUsed','tests/invites.test.ts')) { if ($t -notlike \"*$term*\") { throw \"invite finding missing $term\" } }; if ($t -notmatch '(?i)(concurr|race|simult|two)' -or $t -notmatch '(?i)(atomic|transaction|compare|consume|claim)') { throw 'incomplete invite race finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "zero-valued settings regression",
+                weight: 6,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $f = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ } | Where-Object source -eq 'src/runtimeSettings.ts'); if ($f.Count -ne 1) { throw 'missing runtime settings finding' }; $t = $f[0] | ConvertTo-Json -Compress; if ($t -notlike '*tests/runtimeSettings.test.ts*' -or $t -notmatch '(?i)(zero|0|falsy)' -or $t -notmatch '(?i)(nullish|\\?\\?|undefined)') { throw 'incomplete zero-value finding' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "review precision",
+                weight: 6,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $items = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ }); if ($items.Count -ne 11) { throw \"expected 11 actionable findings, got $($items.Count)\" }; foreach ($safe in @('src/reportQuery.ts','src/sessionExpiry.ts')) { if (@($items | Where-Object source -eq $safe).Count -ne 0) { throw \"false positive for $safe\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "markdown and structured review agree",
+                weight: 6,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $items = @(Get-Content 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ }); $markdown = Get-Content 'review.md' -Raw; foreach ($item in $items) { if ($markdown -notlike \"*$($item.source)*\") { throw \"review.md missing $($item.source)\" } }; if ($markdown.Length -lt 800) { throw 'review.md is too shallow' }",
+                ],
+            },
+        ],
+        ProfileScenarioKind::DependencyUpgradeTriage => &[
+            ProfileScenarioValidationCheck {
+                name: "upgrade evidence",
+                weight: 10,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; foreach ($term in @('@acme/time-utils','2.0.0')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "documented timezone behavior change",
+                weight: 30,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; foreach ($term in @('parseBusinessDate','UTC','local')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }; if ($content -notmatch '(?i)date.?only') { throw 'missing affected input shape' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "billing impact",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; if ($content -notlike '*src/billingWindow.ts*') { throw 'missing affected source' }; if ($content -notmatch '(?i)(billing|cutoff|month|day)') { throw 'missing user impact' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "utc mitigation",
+                weight: 10,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; if ($content -notmatch \"zone\\s*:\\s*[''`\"]utc[''`\"]\") { throw 'missing explicit UTC option' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "timezone regression coverage",
+                weight: 10,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; if ($content -notlike '*tests/billingWindow.test.ts*') { throw 'missing affected test path' }; if ($content -notmatch '(?i)(non.?UTC|timezone|time zone|TZ)') { throw 'missing timezone test condition' }; if ($content -notmatch '(?i)(test gap|missing test|add.{0,30}test|regression test)') { throw 'missing test recommendation' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "documented week-start behavior change",
+                weight: 15,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; foreach ($term in @('startOfBusinessWeek','src/billingWeek.ts','Monday','Sunday')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }; if ($content -notmatch '(?i)(default|defaults|changed|change)') { throw 'missing changed-default explanation' }",
+                ],
+            },
+            ProfileScenarioValidationCheck {
+                name: "week-start mitigation and coverage",
+                weight: 10,
+                program: "powershell",
+                args: &[
+                    "-NoProfile",
+                    "-Command",
+                    "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; if ($content -notmatch 'weekStartsOn\\s*:\\s*1') { throw 'missing Monday option' }; if ($content -notlike '*tests/billingWeek.test.ts*') { throw 'missing week test path' }; if ($content -notmatch '(?i)(test gap|missing test|add.{0,30}test|regression test)') { throw 'missing week regression coverage' }",
+                ],
+            },
+        ],
         ProfileScenarioKind::StatefulReconciliationBugfix => &[
             ProfileScenarioValidationCheck {
                 name: "latest duplicate by timestamp",
@@ -692,7 +906,7 @@ pub(crate) fn profile_scenario_validation_command(
             args: &[
                 "-NoProfile",
                 "-Command",
-                "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'review.md' -Raw; foreach ($term in @('read-only-admin','discountFor','src/checkout.ts','tests/checkout.test.ts')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }; if ($content -notmatch \"includes\\s*\\(\\s*[''`\"]admin[''`\"]\\s*\\)\") { throw 'missing includes admin evidence' }; if ($content -notmatch '(?i)(blocking|must fix|p1|p0)') { throw 'missing blocking severity' }; if ($content -notmatch '(?i)(exactly\\s+admin|role\\s+exactly\\s+admin|===\\s*[''`\"]admin[''`\"]|==\\s*[''`\"]admin[''`\"]|strict equality)') { throw 'missing exact admin fix recommendation' }",
+                "$ErrorActionPreference='Stop'; foreach ($path in @('review.json','review.md')) { if (-not (Test-Path -LiteralPath $path)) { throw \"missing $path\" } }; $items = @(Get-Content -LiteralPath 'review.json' -Raw | ConvertFrom-Json | ForEach-Object { $_ }); if ($items.Count -eq 0) { throw 'review.json has no findings' }; $content = Get-Content -LiteralPath 'review.md' -Raw; if ($content.Length -lt 120) { throw 'review.md is too short to contain grounded findings' }",
             ],
         }),
         ProfileScenarioKind::DependencyUpgradeTriage => Some(ProfileScenarioValidationCommand {
@@ -701,7 +915,7 @@ pub(crate) fn profile_scenario_validation_command(
             args: &[
                 "-NoProfile",
                 "-Command",
-                "$ErrorActionPreference='Stop'; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; foreach ($term in @('@acme/time-utils','2.0.0','parseBusinessDate','src/billingWindow.ts','tests/billingWindow.test.ts')) { if ($content -notlike \"*$term*\") { throw \"missing $term\" } }; if ($content -notmatch '(?i)\\bUTC\\b') { throw 'missing UTC risk' }; if ($content -notmatch '(?i)\\blocal\\b') { throw 'missing local timezone change' }; if ($content -notmatch \"zone\\s*:\\s*[''`\"]utc[''`\"]\") { throw 'missing zone utc fix' }; if ($content -notmatch '(?i)(test gap|missing test|add.*test|regression test)') { throw 'missing test gap recommendation' }",
+                "$ErrorActionPreference='Stop'; if (-not (Test-Path -LiteralPath 'upgrade-triage.md')) { throw 'missing upgrade-triage.md' }; $content = Get-Content -LiteralPath 'upgrade-triage.md' -Raw; if ($content.Length -lt 120) { throw 'upgrade-triage.md is too short to contain grounded analysis' }",
             ],
         }),
         ProfileScenarioKind::TechnicalEssay => Some(ProfileScenarioValidationCommand {
@@ -886,6 +1100,8 @@ mod tests {
             ProfileScenarioKind::FrontierRuleTransfer,
             ProfileScenarioKind::InventoryRebalancePlan,
             ProfileScenarioKind::ExperimentRolloutAudit,
+            ProfileScenarioKind::PullRequestReview,
+            ProfileScenarioKind::DependencyUpgradeTriage,
         ];
 
         for scenario in scenarios {

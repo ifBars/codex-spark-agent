@@ -153,6 +153,12 @@ pub(crate) enum Command {
         #[arg(long, required = true)]
         stdio: bool,
     },
+    /// Run one trusted-host automation request from stdin and return one JSON response.
+    Automation {
+        /// Read the versioned automation request from stdin and write the response to stdout.
+        #[arg(long, required = true)]
+        stdio: bool,
+    },
     /// Produce a compact, read-only local repository brief.
     Brief {
         /// Concrete repository question to answer.

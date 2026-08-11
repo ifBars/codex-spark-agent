@@ -1491,24 +1491,39 @@ fn pull_request_review_declares_diff_source_and_validation_expectations() {
     let groups = profile_scenario_expected_tool_groups(ProfileScenarioKind::PullRequestReview);
     let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::PullRequestReview);
     let command = validation.args.join(" ");
+    let checks = profile_scenario_validation_checks(ProfileScenarioKind::PullRequestReview);
 
     assert!(prompt.contains("Profile scenario: pull-request-review"));
     assert!(prompt.contains("diff.patch"));
+    assert!(prompt.contains("diff-concurrency.patch"));
+    assert!(prompt.contains("review.json"));
     assert!(prompt.contains("do not modify source files"));
-    assert!(benchmark_prompt.contains("role.includes('admin')"));
-    assert!(benchmark_prompt.contains("read-only-admin users"));
+    assert!(benchmark_prompt.contains("one object per finding"));
+    assert!(!benchmark_prompt.contains("role.includes('admin')"));
+    assert!(!benchmark_prompt.contains("read-only-admin"));
+    assert!(!benchmark_prompt.contains("Date.now"));
+    assert!(!benchmark_prompt.contains("processedEvents"));
+    assert!(!benchmark_prompt.contains("requestTimeoutMs"));
     assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, expected_powershell_program());
-    assert!(command.contains("read-only-admin"));
-    assert!(command.contains("includes\\s*\\("));
-    assert!(command.contains("strict equality"));
+    assert!(command.contains("review.md is too short"));
+    assert!(!command.contains("read-only-admin"));
+    assert_eq!(checks.len(), 14);
+    assert_eq!(checks.iter().map(|check| check.weight).sum::<u32>(), 100);
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
-    assert_eq!(calls.len(), 5);
+    assert_eq!(calls.len(), 32);
     assert_eq!(calls[0]["path"], "pr.md");
     assert_eq!(calls[1]["path"], "diff.patch");
-    assert_eq!(calls[2]["path"], "src/checkout.ts");
-    assert_eq!(calls[3]["path"], "tests/checkout.test.ts");
-    assert_eq!(calls[4]["path"], "review.md");
+    assert_eq!(calls[2]["path"], "diff-extra.patch");
+    assert_eq!(calls[3]["path"], "diff-concurrency.patch");
+    assert_eq!(calls[4]["path"], "src/audit.ts");
+    assert_eq!(calls[6]["path"], "src/checkout.ts");
+    assert_eq!(calls[7]["path"], "src/invites.ts");
+    assert_eq!(calls[16]["path"], "src/webhookDelivery.ts");
+    assert_eq!(calls[17]["path"], "tests/audit.test.ts");
+    assert_eq!(calls[29]["path"], "tests/webhookDelivery.test.ts");
+    assert_eq!(calls[30]["path"], "review.json");
+    assert_eq!(calls[31]["path"], "review.md");
 }
 
 #[test]
@@ -1518,11 +1533,44 @@ fn pull_request_review_validation_accepts_blocking_finding() {
     prepare_profile_scenario(dir.path(), ProfileScenarioKind::PullRequestReview)
         .expect("prepare pr review");
     let root = dir.path().join(".spark-scenarios/pull-request-review");
+    let findings = json!([
+        {"source":"src/checkout.ts","severity":"critical","evidence":"includes admin also matches read-only-admin","impact":"unauthorized full discount","fix":"use an explicit role match for admin","test":"tests/checkout.test.ts"},
+        {"source":"src/payments.ts","severity":"critical","evidence":"Date.now changes the key on retry","impact":"duplicate charge or capture","fix":"build the idempotency key from the stable request attempt id","test":"tests/payments.test.ts"},
+        {"source":"src/reportCache.ts","severity":"critical","evidence":"cache key has reportId but omits tenantId","impact":"cross-tenant wrong report leak","fix":"include tenantId in the cache key","test":"tests/reportCache.test.ts"},
+        {"source":"src/audit.ts","severity":"high","evidence":"accessToken is sent to the log","impact":"credential exposure through logs","fix":"remove or redact the token","test":"tests/audit.test.ts"},
+        {"source":"src/batchOrders.ts","severity":"high","evidence":"async forEach is not awaited","impact":"returns early with writes still pending","fix":"await Promise.all for every save","test":"tests/batchOrders.test.ts"},
+        {"source":"src/orders.ts","severity":"high","evidence":"createdAt is the only cursor and tied timestamps compare equal","impact":"the next page can lose orders","fix":"use a composite createdAt and id tie-break cursor","test":"tests/orders.test.ts"},
+        {"source":"src/useSocketMessages.ts","severity":"high","evidence":"removeEventListener receives a different callback identity","impact":"listener remains and duplicate messages leak","fix":"remove the same handler function","test":"tests/useSocketMessages.test.ts"},
+        {"source":"src/rollout.ts","severity":"medium","evidence":"inclusive <= lets bucket 0 pass a zero 0% rollout","impact":"zero rollout still exposes users","fix":"use a strict < exclusive comparison","test":"tests/rollout.test.ts"},
+        {"source":"src/webhookDelivery.ts","severity":"high","evidence":"processedEvents is updated before handler success","impact":"a handler failure causes a redelivery retry to be skipped","fix":"add the id only after success or delete it on error","test":"tests/webhookDelivery.test.ts"},
+        {"source":"src/invites.ts","severity":"high","evidence":"isUsed and markUsed are separate operations","impact":"two concurrent callers race and consume one invite twice","fix":"atomically claim or consume the token in a transaction","test":"tests/invites.test.ts"},
+        {"source":"src/runtimeSettings.ts","severity":"medium","evidence":"logical || treats zero as a falsy missing value","impact":"request timeout cannot be disabled with 0","fix":"use nullish ?? so only undefined falls back","test":"tests/runtimeSettings.test.ts"}
+    ]);
     std::fs::write(
-        root.join("review.md"),
-        "# Review\n\n**Blocking**: `src/checkout.ts` changes `discountFor` to use `role.includes('admin')`, so a `read-only-admin` user receives the full cart comp even though the PR rule says only a role exactly admin can discount. The missing coverage is in `tests/checkout.test.ts`. Add a read-only-admin regression test and change the check to strict equality against 'admin'.\n",
+        root.join("review.json"),
+        serde_json::to_string_pretty(&findings).expect("serialize findings"),
     )
-    .expect("write review");
+    .expect("write structured review");
+    let markdown = findings
+        .as_array()
+        .expect("findings array")
+        .iter()
+        .enumerate()
+        .map(|(index, finding)| {
+            format!(
+                "## {}. {}\n\nEvidence: {}. Impact: {}. Fix: {}. Regression test: {}.\n",
+                index + 1,
+                finding["source"].as_str().expect("source"),
+                finding["evidence"].as_str().expect("evidence"),
+                finding["impact"].as_str().expect("impact"),
+                finding["fix"].as_str().expect("fix"),
+                finding["test"].as_str().expect("test"),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(root.join("review.md"), format!("# Review\n\n{markdown}"))
+        .expect("write review");
     let validation = profile_scenario_validation_command(ProfileScenarioKind::PullRequestReview)
         .expect("validation");
 
@@ -1536,18 +1584,55 @@ fn pull_request_review_validation_accepts_blocking_finding() {
         "expected grounded PR review to pass: {}",
         String::from_utf8_lossy(&good.stderr)
     );
+    for check in profile_scenario_validation_checks(ProfileScenarioKind::PullRequestReview) {
+        let output = std::process::Command::new(check.program)
+            .args(check.args)
+            .current_dir(&root)
+            .output()
+            .expect("run weighted review check");
+        assert!(
+            output.status.success(),
+            "expected '{}' to pass: {}",
+            check.name,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     std::fs::write(
+        root.join("review.json"),
+        "[{\"source\":\"src/checkout.ts\",\"severity\":\"low\",\"evidence\":\"more tests\",\"impact\":\"unclear\",\"fix\":\"add tests\",\"test\":\"tests/checkout.test.ts\"}]",
+    )
+    .expect("write incomplete structured review");
+    std::fs::write(
         root.join("review.md"),
-        "# Review\n\nThe PR needs more tests before merging.\n",
+        "# Review\n\nThe implementation is generally clear, but the PR should add more tests before merging. Consider expanding coverage around edge cases and documenting the intended behavior for future maintainers.\n",
     )
     .expect("write incomplete review");
-    let bad = std::process::Command::new(validation.program)
+    let artifact_only = std::process::Command::new(validation.program)
         .args(validation.args)
         .current_dir(&root)
         .output()
         .expect("run validation");
-    assert!(!bad.status.success(), "expected incomplete review to fail");
+    assert!(
+        artifact_only.status.success(),
+        "artifact contract should pass"
+    );
+    let earned_weight = profile_scenario_validation_checks(ProfileScenarioKind::PullRequestReview)
+        .iter()
+        .filter(|check| {
+            std::process::Command::new(check.program)
+                .args(check.args)
+                .current_dir(&root)
+                .status()
+                .expect("run incomplete weighted check")
+                .success()
+        })
+        .map(|check| check.weight)
+        .sum::<u32>();
+    assert_eq!(
+        earned_weight, 5,
+        "vague review should earn only schema credit"
+    );
 }
 
 #[test]
@@ -1563,24 +1648,30 @@ fn dependency_upgrade_triage_declares_migration_source_and_validation_expectatio
         profile_scenario_expected_tool_groups(ProfileScenarioKind::DependencyUpgradeTriage);
     let calls = profile_scenario_expected_tool_calls(ProfileScenarioKind::DependencyUpgradeTriage);
     let command = validation.args.join(" ");
+    let checks = profile_scenario_validation_checks(ProfileScenarioKind::DependencyUpgradeTriage);
 
     assert!(prompt.contains("Profile scenario: dependency-upgrade-triage"));
     assert!(prompt.contains("docs/time-utils-2.0.md"));
     assert!(prompt.contains("do not modify source files"));
-    assert!(benchmark_prompt.contains("@acme/time-utils 2.0.0"));
-    assert!(benchmark_prompt.contains("date-only defaults from UTC to local time"));
+    assert!(benchmark_prompt.contains("behavior-changing migration risk"));
+    assert!(!benchmark_prompt.contains("parseBusinessDate"));
+    assert!(!benchmark_prompt.contains("zone: 'utc'"));
     assert_eq!(validation.workdir, ".");
     assert_eq!(validation.program, expected_powershell_program());
-    assert!(command.contains("@acme/time-utils"));
-    assert!(command.contains("zone\\s*:\\s*"));
-    assert!(command.contains("missing test gap recommendation"));
+    assert!(command.contains("upgrade-triage.md is too short"));
+    assert!(!command.contains("parseBusinessDate"));
+    assert_eq!(checks.len(), 7);
+    assert_eq!(checks.iter().map(|check| check.weight).sum::<u32>(), 100);
     assert_eq!(groups, vec![vec!["fs.read"], vec!["fs.write"]]);
-    assert_eq!(calls.len(), 7);
+    assert_eq!(calls.len(), 9);
     assert_eq!(calls[0]["path"], "upgrade.md");
     assert_eq!(calls[1]["path"], "package.json");
     assert_eq!(calls[3]["path"], "docs/time-utils-2.0.md");
     assert_eq!(calls[4]["path"], "src/billingWindow.ts");
-    assert_eq!(calls[6]["path"], "upgrade-triage.md");
+    assert_eq!(calls[5]["path"], "src/billingWeek.ts");
+    assert_eq!(calls[6]["path"], "tests/billingWindow.test.ts");
+    assert_eq!(calls[7]["path"], "tests/billingWeek.test.ts");
+    assert_eq!(calls[8]["path"], "upgrade-triage.md");
 }
 
 #[test]
@@ -1594,7 +1685,7 @@ fn dependency_upgrade_triage_validation_accepts_grounded_report() {
         .join(".spark-scenarios/dependency-upgrade-triage");
     std::fs::write(
         root.join("upgrade-triage.md"),
-        "# Upgrade Triage\n\n`@acme/time-utils` is upgraded to **2.0.0**. Blocking risk: `parseBusinessDate` now parses date-only strings in the local timezone instead of UTC, while billing cutoffs must stay UTC. `src/billingWindow.ts` calls `parseBusinessDate(input)` without options, so use `parseBusinessDate(input, { zone: 'utc' })`. Test gap: `tests/billingWindow.test.ts` should add a regression test around a timezone boundary.\n",
+        "# Upgrade Triage\n\n`@acme/time-utils` is upgraded to **2.0.0**. Blocking risk: `parseBusinessDate` now parses date-only strings in the local timezone instead of UTC, while billing cutoffs must stay UTC. `src/billingWindow.ts` calls `parseBusinessDate(input)` without options, which can move a billing cutoff across a day or month boundary. Use `parseBusinessDate(input, { zone: 'utc' })`. Test gap: `tests/billingWindow.test.ts` should add a regression test under a non-UTC timezone around a boundary.\n\nA second changed default affects `startOfBusinessWeek`: v2 starts on Sunday instead of Monday. `src/billingWeek.ts` omits options, violating the Monday billing-week contract. Pass `{ weekStartsOn: 1 }` and add a Monday-boundary regression test in `tests/billingWeek.test.ts`.\n",
     )
     .expect("write triage");
     let validation =
@@ -1611,18 +1702,46 @@ fn dependency_upgrade_triage_validation_accepts_grounded_report() {
         "expected grounded upgrade triage to pass: {}",
         String::from_utf8_lossy(&good.stderr)
     );
+    for check in profile_scenario_validation_checks(ProfileScenarioKind::DependencyUpgradeTriage) {
+        let output = std::process::Command::new(check.program)
+            .args(check.args)
+            .current_dir(&root)
+            .output()
+            .expect("run weighted upgrade check");
+        assert!(
+            output.status.success(),
+            "expected '{}' to pass: {}",
+            check.name,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     std::fs::write(
         root.join("upgrade-triage.md"),
-        "# Upgrade Triage\n\nThe package update looks safe after reading package.json.\n",
+        "# Upgrade Triage\n\nThe package update looks safe after reading package.json and the lockfile. The tests should be expanded before merge, and maintainers should monitor the rollout for unexpected behavior in production.\n",
     )
     .expect("write incomplete triage");
-    let bad = std::process::Command::new(validation.program)
+    let artifact_only = std::process::Command::new(validation.program)
         .args(validation.args)
         .current_dir(&root)
         .output()
         .expect("run validation");
-    assert!(!bad.status.success(), "expected incomplete triage to fail");
+    assert!(
+        artifact_only.status.success(),
+        "artifact contract should pass"
+    );
+    let passed = profile_scenario_validation_checks(ProfileScenarioKind::DependencyUpgradeTriage)
+        .iter()
+        .filter(|check| {
+            std::process::Command::new(check.program)
+                .args(check.args)
+                .current_dir(&root)
+                .status()
+                .expect("run incomplete weighted check")
+                .success()
+        })
+        .count();
+    assert_eq!(passed, 0, "vague triage should earn no finding credit");
 }
 
 #[test]

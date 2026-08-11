@@ -13,7 +13,7 @@ use crate::config;
 use crate::mcp::McpRegistry;
 use crate::profiler::AgentProfiler;
 use crate::session::store::SessionStore;
-use crate::tools::AgentMode;
+use crate::tools::{AgentMode, ToolAccessPolicy};
 
 pub(in crate::agent) mod cache;
 pub(in crate::agent) mod compaction;
@@ -162,9 +162,11 @@ pub struct AgentRunner {
     /// shell/browser/MCP execution for that worker.
     pub(in crate::agent) delegated_write_ownership: Option<Vec<String>>,
     pub(in crate::agent) mcp_registry: Option<McpRegistry>,
+    pub(in crate::agent) eager_mcp_tools: bool,
     pub(in crate::agent) active_deferred_tools: HashSet<String>,
     pub(in crate::agent) local_filesystem_only: bool,
     pub(in crate::agent) local_filesystem_tool_budget: Option<LocalFilesystemToolBudget>,
+    pub(in crate::agent) tool_access: ToolAccessPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -288,9 +290,11 @@ impl AgentRunner {
             subagent_team: SubagentTeam::from_environment(),
             delegated_write_ownership: None,
             mcp_registry: None,
+            eager_mcp_tools: false,
             active_deferred_tools: HashSet::new(),
             local_filesystem_only: false,
             local_filesystem_tool_budget: None,
+            tool_access: ToolAccessPolicy::unrestricted(),
         })
     }
 
@@ -721,6 +725,18 @@ impl AgentRunner {
         self.subagent_depth = 1;
     }
 
+    pub(crate) fn set_tool_access(&mut self, tool_access: ToolAccessPolicy) {
+        self.tool_access = tool_access;
+        self.active_deferred_tools.clear();
+        self.readonly_tool_cache.clear();
+    }
+
+    pub(crate) fn set_explicit_mcp_registry(&mut self, registry: McpRegistry) {
+        self.mcp_registry = Some(registry);
+        self.eager_mcp_tools = true;
+        self.active_deferred_tools.clear();
+    }
+
     /// Restrict advertised and executable native tools to read-only local filesystem access.
     pub(crate) fn enforce_local_filesystem_only(&mut self) {
         self.local_filesystem_only = true;
@@ -771,6 +787,10 @@ impl AgentRunner {
 
     pub fn set_system_prompt(&mut self, system_prompt: impl Into<Option<String>>) {
         self.client.set_system_prompt(system_prompt);
+    }
+
+    pub(crate) fn set_output_schema(&mut self, name: impl Into<String>, schema: Value) {
+        self.client.set_output_schema(name, schema);
     }
 
     pub fn memory_enabled(&self) -> bool {

@@ -348,10 +348,10 @@ fn benchmark_quality_context(scenario: ProfileScenarioKind) -> &'static str {
             "Comparison evidence: CI triage quality depends on source/log linkage, not edits. Spend extra effort here: read the issue, workflow, frontend-tests.log, source, and tests; leave source files unchanged; write the requested CI triage artifact; cite the failing command, Expected: 80, Received: 100, and tie the likely root cause to SAVE20/applyDiscount."
         }
         ProfileScenarioKind::PullRequestReview => {
-            "Comparison evidence: review tasks lose quality when they become broad summaries or speculative fixes. Spend extra effort here: read the PR, diff, source, and tests; do not edit source files; write a blocking review that cites read-only-admin and role.includes('admin'); recommend exact admin equality plus a regression test."
+            "This scenario measures defect discovery and review precision. Read the PR, diff, and every changed source and test file; trace changed behavior through relevant boundary, failure, and lifecycle cases; do not edit source files. Report only actionable regressions introduced by the diff, using the requested structured finding schema and matching human-readable review."
         }
         ProfileScenarioKind::DependencyUpgradeTriage => {
-            "Comparison evidence: dependency triage quality comes from linking the upgrade note, lockfile, docs, source, and test gap. Spend extra effort here: read upgrade.md, package.json, bun.lock, docs, source, and tests; do not edit source files; identify the parseBusinessDate UTC/local date-only change; recommend { zone: 'utc' } and a regression test."
+            "This scenario measures evidence-grounded dependency review. Read the upgrade request, package metadata, lockfile, migration documentation, affected source, and tests; do not edit source files. Compare documented behavior changes with actual call sites and coverage, then report only concrete merge risks with impact, mitigation, and a regression test."
         }
         ProfileScenarioKind::RepoSurvey
         | ProfileScenarioKind::RepoArchitectureSurvey
@@ -619,16 +619,17 @@ mod tests {
         assert!(ci.contains("leave source files unchanged"));
 
         let review = benchmark_quality_context(ProfileScenarioKind::PullRequestReview);
-        assert!(review.contains("read-only-admin"));
-        assert!(review.contains("role.includes('admin')"));
-        assert!(review.contains("blocking review"));
+        assert!(review.contains("defect discovery"));
+        assert!(review.contains("every changed source and test file"));
+        assert!(!review.contains("read-only-admin"));
+        assert!(!review.contains("includes('admin')"));
         assert!(review.contains("do not edit source files"));
 
         let dependency = benchmark_quality_context(ProfileScenarioKind::DependencyUpgradeTriage);
-        assert!(dependency.contains("@acme/time-utils") || dependency.contains("upgrade.md"));
-        assert!(dependency.contains("parseBusinessDate"));
-        assert!(dependency.contains("{ zone: 'utc' }"));
-        assert!(dependency.contains("regression test"));
+        assert!(dependency.contains("evidence-grounded dependency review"));
+        assert!(dependency.contains("migration documentation"));
+        assert!(!dependency.contains("parseBusinessDate"));
+        assert!(!dependency.contains("zone: 'utc'"));
 
         let survey = benchmark_quality_context(ProfileScenarioKind::RepoSurvey);
         assert!(survey.contains("do not recursively list src"));

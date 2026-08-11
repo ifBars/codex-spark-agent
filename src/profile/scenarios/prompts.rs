@@ -371,10 +371,11 @@ pub(crate) fn profile_scenario_prompts(
              Review the PR like a code reviewer; do not modify source files.\n\
              Required actions:\n\
              1. Read pr.md.\n\
-             2. Read diff.patch.\n\
-             3. Read src/checkout.ts and tests/checkout.test.ts.\n\
-             4. Write review.md with severity, blocking finding, evidence, and a minimal test/fix recommendation.\n\
-             5. Read review.md to verify it names read-only-admin, includes('admin'), discountFor, src/checkout.ts, and tests/checkout.test.ts.\n\
+             2. Read diff.patch, diff-extra.patch, and diff-concurrency.patch.\n\
+             3. Read every changed source and test file named in the diff.\n\
+             4. Write review.json as a JSON array with one object per finding. Each object must contain exactly source, severity, evidence, impact, fix, and test as non-empty strings. Use the changed source path in source and the existing test path in test.\n\
+             5. Write review.md as the human-readable version of the same findings, ordered by severity.\n\
+             6. Read both outputs once to verify that every finding is grounded in a changed line and that the JSON is valid.\n\
              Finish with the review path and whether source files were left unchanged."
                 .to_string(),
         ]),
@@ -385,9 +386,9 @@ pub(crate) fn profile_scenario_prompts(
              1. Read upgrade.md.\n\
              2. Read package.json and bun.lock.\n\
              3. Read docs/time-utils-2.0.md.\n\
-             4. Read src/billingWindow.ts and tests/billingWindow.test.ts.\n\
-             5. Write upgrade-triage.md with the changed package, migration risk, affected code, test gap, and minimal fix plan.\n\
-             6. Read upgrade-triage.md to verify it names @acme/time-utils, 2.0.0, parseBusinessDate, zone: 'utc', src/billingWindow.ts, and tests/billingWindow.test.ts.\n\
+             4. Read src/billingWindow.ts, src/billingWeek.ts, tests/billingWindow.test.ts, and tests/billingWeek.test.ts.\n\
+             5. Write upgrade-triage.md with the changed package, any behavior-changing migration risk, affected code, test gap, and minimal fix plan.\n\
+             6. Read upgrade-triage.md once to verify every conclusion is grounded in the supplied package, migration, source, or test evidence.\n\
              Finish with the triage path and whether source files were left unchanged."
                 .to_string(),
         ]),
@@ -769,10 +770,11 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
             "Benchmark scenario: pull-request-review.\n\
              Review the PR like a code reviewer; do not modify source files or inspect unrelated repository files unless a concrete blocker requires it.\n\
              Required actions:\n\
-             1. Read pr.md, diff.patch, src/checkout.ts, and tests/checkout.test.ts.\n\
-             2. Write review.md with severity, blocking finding, evidence, and a minimal test/fix recommendation.\n\
-             3. Identify that role.includes('admin') lets read-only-admin users receive a full comp discount even though the product rule allows only role exactly admin.\n\
-             4. Verify review.md names read-only-admin, includes('admin'), discountFor, src/checkout.ts, and tests/checkout.test.ts.\n\
+             1. Read pr.md, diff.patch, diff-extra.patch, and diff-concurrency.patch, then read every changed source and test file named by those diffs.\n\
+             2. Write review.json as a JSON array with one object per finding. Each object must contain exactly source, severity, evidence, impact, fix, and test as non-empty strings. Use the changed source path in source and the existing test path in test.\n\
+             3. Write review.md as the human-readable version of the same findings, ordered by severity.\n\
+             4. Do not add style-only observations or restate the PR; prioritize defects that can change production behavior.\n\
+             5. Re-read both outputs once to confirm the JSON is valid and each finding is tied to a changed line.\n\
              Finish with the review path and whether source files were left unchanged."
                 .to_string()
         }
@@ -780,10 +782,10 @@ pub(crate) fn benchmark_task_prompt(scenario: ProfileScenarioKind) -> String {
             "Benchmark scenario: dependency-upgrade-triage.\n\
              Triage the dependency upgrade like a maintainer; do not modify source files or inspect unrelated repository files unless a concrete blocker requires it.\n\
              Required actions:\n\
-             1. Read upgrade.md, package.json, bun.lock, docs/time-utils-2.0.md, src/billingWindow.ts, and tests/billingWindow.test.ts.\n\
-             2. Write upgrade-triage.md with the changed package, migration risk, affected code, test gap, and minimal fix plan.\n\
-             3. Identify that @acme/time-utils 2.0.0 changed parseBusinessDate date-only defaults from UTC to local time, so src/billingWindow.ts should pass { zone: 'utc' } to preserve billing cutoff behavior.\n\
-             4. Verify upgrade-triage.md names @acme/time-utils, 2.0.0, parseBusinessDate, zone: 'utc', src/billingWindow.ts, and tests/billingWindow.test.ts.\n\
+             1. Read upgrade.md, package.json, bun.lock, docs/time-utils-2.0.md, src/billingWindow.ts, src/billingWeek.ts, tests/billingWindow.test.ts, and tests/billingWeek.test.ts.\n\
+             2. Write upgrade-triage.md with the changed package, any behavior-changing migration risk, affected code, test gap, and minimal fix plan.\n\
+             3. Ground every conclusion in the supplied upgrade request, lockfile, migration documentation, source, or tests.\n\
+             4. Re-read upgrade-triage.md once to confirm the identified risk, mitigation, and regression coverage are evidence-backed.\n\
              Finish with the triage path and whether source files were left unchanged."
                 .to_string()
         }

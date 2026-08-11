@@ -44,11 +44,10 @@ impl AgentRunner {
 
         if !deferred.is_empty() && self.delegated_write_ownership.is_none() {
             core.push(tool_search_descriptor());
-            core.extend(
-                deferred
-                    .into_iter()
-                    .filter(|tool| self.active_deferred_tools.contains(&tool.name)),
-            );
+            core.extend(deferred.into_iter().filter(|tool| {
+                self.active_deferred_tools.contains(&tool.name)
+                    || (self.eager_mcp_tools && tool.name.starts_with("mcp__"))
+            }));
         }
         core
     }
@@ -123,12 +122,19 @@ impl AgentRunner {
     fn eligible_tools(&self) -> Vec<ToolDescriptor> {
         let mut tools = tools_for_mode(builtin_tools(), self.mode)
             .into_iter()
+            .filter(|tool| self.tool_access.allows(&tool.name))
             .filter(|tool| self.subagent_depth == 0 || !tool.name.starts_with("subagent."))
             .collect::<Vec<_>>();
         if self.mode == crate::tools::AgentMode::Work
+            && self.tool_access.mcp
             && let Some(registry) = &self.mcp_registry
         {
-            tools.extend(registry.tools());
+            tools.extend(
+                registry
+                    .tools()
+                    .into_iter()
+                    .filter(|tool| self.tool_access.allows(&tool.name)),
+            );
         }
         tools
     }

@@ -39,6 +39,13 @@ pub struct SparkClient {
     reasoning_effort: String,
     system_prompt: Option<String>,
     memory_context: Option<String>,
+    structured_output: Option<StructuredOutput>,
+}
+
+#[derive(Debug, Clone)]
+struct StructuredOutput {
+    name: String,
+    schema: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,6 +131,7 @@ impl SparkClient {
             reasoning_effort: reasoning_effort.into(),
             system_prompt: None,
             memory_context: None,
+            structured_output: None,
         }
     }
 
@@ -149,6 +157,7 @@ impl SparkClient {
             reasoning_effort: reasoning_effort.into(),
             system_prompt: None,
             memory_context: self.memory_context.clone(),
+            structured_output: None,
         }
     }
 
@@ -162,6 +171,13 @@ impl SparkClient {
 
     pub(crate) fn set_memory_context(&mut self, memory_context: impl Into<Option<String>>) {
         self.memory_context = memory_context.into();
+    }
+
+    pub(crate) fn set_output_schema(&mut self, name: impl Into<String>, schema: Value) {
+        self.structured_output = Some(StructuredOutput {
+            name: name.into(),
+            schema,
+        });
     }
 
     fn instructions(&self) -> String {
@@ -226,7 +242,20 @@ impl SparkClient {
         continuation_input_start: usize,
         on_event: impl FnMut(&Value),
     ) -> Result<(Response, Value)> {
-        let body = json!({
+        let body = self.responses_request_body(input, tools);
+
+        self.send_streaming_body_with_continuation(
+            body,
+            "Spark request",
+            previous_response_id,
+            continuation_input_start,
+            on_event,
+        )
+        .await
+    }
+
+    fn responses_request_body(&self, input: &[Value], tools: &[ToolDescriptor]) -> Value {
+        let mut body = json!({
             "model": self.model,
             "instructions": self.instructions(),
             "input": input,
@@ -239,15 +268,17 @@ impl SparkClient {
             "store": false,
             "stream": true,
         });
-
-        self.send_streaming_body_with_continuation(
-            body,
-            "Spark request",
-            previous_response_id,
-            continuation_input_start,
-            on_event,
-        )
-        .await
+        if let Some(output) = &self.structured_output {
+            body["text"] = json!({
+                "format": {
+                    "type": "json_schema",
+                    "name": output.name,
+                    "strict": true,
+                    "schema": output.schema,
+                }
+            });
+        }
+        body
     }
 
     pub async fn compile_skill_summary(&self, name: &str, raw_skill: &str) -> Result<String> {
@@ -1455,6 +1486,30 @@ mod tests {
         assert!(memory_index < custom_index);
         assert!(prompt.contains("Prefer bun for JavaScript tooling."));
         assert!(prompt.contains("Use terse final answers."));
+    }
+
+    #[test]
+    fn structured_output_is_sent_as_strict_responses_text_format() {
+        let mut client = SparkClient::new(test_auth_tokens(), "gpt-5.3-codex-spark".to_string());
+        client.set_output_schema(
+            "diffuin_artifact",
+            json!({
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": false
+            }),
+        );
+
+        let body = client.responses_request_body(&[], &[]);
+
+        assert_eq!(body["text"]["format"]["type"], "json_schema");
+        assert_eq!(body["text"]["format"]["name"], "diffuin_artifact");
+        assert_eq!(body["text"]["format"]["strict"], true);
+        assert_eq!(
+            body["text"]["format"]["schema"]["required"],
+            json!(["summary"])
+        );
     }
 
     #[test]
