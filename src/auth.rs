@@ -14,6 +14,9 @@ const ISSUER: &str = "https://auth.openai.com";
 const REDIRECT_HOST: &str = "127.0.0.1";
 const REDIRECT_PUBLIC_HOST: &str = "localhost";
 const REDIRECT_PATH: &str = "/auth/callback";
+// Keep these in sync with the Codex CLI OAuth redirect URI allow-list.
+const DEFAULT_CALLBACK_PORT: u16 = 1455;
+const FALLBACK_CALLBACK_PORT: u16 = 1457;
 const ORIGINATOR: &str = "codex_cli_rs";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,9 +72,7 @@ struct OpenAiAuth {
 }
 
 pub async fn login(open_browser: bool) -> Result<AuthTokens> {
-    let listener = TcpListener::bind((REDIRECT_HOST, 0))
-        .await
-        .context("failed to bind OAuth callback listener")?;
+    let listener = bind_callback_listener().await?;
     let port = listener.local_addr()?.port();
     let redirect_uri = format!("http://{REDIRECT_PUBLIC_HOST}:{port}{REDIRECT_PATH}");
     let verifier = random_urlsafe(64);
@@ -87,6 +88,31 @@ pub async fn login(open_browser: bool) -> Result<AuthTokens> {
     let code = wait_for_callback(listener, &state).await?;
     let response = exchange_code(&code, &redirect_uri, &verifier).await?;
     Ok(tokens_from_response(response))
+}
+
+async fn bind_callback_listener() -> Result<TcpListener> {
+    bind_callback_listener_on_ports(DEFAULT_CALLBACK_PORT, FALLBACK_CALLBACK_PORT).await
+}
+
+async fn bind_callback_listener_on_ports(
+    preferred_port: u16,
+    fallback_port: u16,
+) -> Result<TcpListener> {
+    match TcpListener::bind((REDIRECT_HOST, preferred_port)).await {
+        Ok(listener) => Ok(listener),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            TcpListener::bind((REDIRECT_HOST, fallback_port))
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to bind OAuth callback listener on registered ports {preferred_port} or {fallback_port}"
+                    )
+                })
+        }
+        Err(error) => Err(error).with_context(|| {
+            format!("failed to bind OAuth callback listener on registered port {preferred_port}")
+        }),
+    }
 }
 
 pub async fn login_device_code() -> Result<AuthTokens> {
@@ -363,4 +389,41 @@ fn now_unix() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browser_login_uses_registered_codex_callback_port() {
+        let redirect_uri =
+            format!("http://{REDIRECT_PUBLIC_HOST}:{DEFAULT_CALLBACK_PORT}{REDIRECT_PATH}");
+        let url = authorize_url(&redirect_uri, "challenge", "state");
+
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback"));
+    }
+
+    #[tokio::test]
+    async fn callback_listener_falls_back_when_preferred_port_is_busy() {
+        let occupied = TcpListener::bind((REDIRECT_HOST, 0))
+            .await
+            .expect("test listener should bind");
+        let occupied_port = occupied
+            .local_addr()
+            .expect("test listener should have an address")
+            .port();
+
+        let listener = bind_callback_listener_on_ports(occupied_port, 0)
+            .await
+            .expect("fallback listener should bind");
+
+        assert_ne!(
+            listener
+                .local_addr()
+                .expect("fallback listener should have an address")
+                .port(),
+            occupied_port
+        );
+    }
 }
