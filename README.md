@@ -53,7 +53,7 @@ then returns one JSON response for the host to validate and publish.
 
 Outcome quality comes from weighted task validators. Failed attempts remain in quality and pass-rate totals, while provider failures block publication. Failure recovery, repeated calls, tool-only streaks, and post-completion activity are reported separately as execution hygiene. Paired reports compute resource efficiency from duration, total input tokens, and tool calls, then quality-gate that result into the Benchmark Index.
 
-[Review the current CSV](docs/benchmarks/reasoning-sweep-current-2026-08-09.csv) · [Read the benchmark summary](docs/benchmarks/reasoning-sweep-current-2026-08-09.md)
+[Review the current CSV](docs/benchmarks/reasoning-sweep-current-2026-08-12.csv) · [Read the benchmark summary](docs/benchmarks/reasoning-sweep-current-2026-08-12.md)
 
 <details>
 <summary>Benchmark reproducibility</summary>

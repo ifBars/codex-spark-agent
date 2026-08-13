@@ -189,11 +189,11 @@ Publish the reviewed reasoning sweep with Bun:
 bun scripts/publish_reasoning_sweep.mjs `
   --input .spark-profile/benchmarks/real-world-comparison-<stamp>.json `
   --output-json web/src/data/reasoning-sweep.json `
-  --output-csv docs/benchmarks/reasoning-sweep-current-2026-08-09.csv `
-  --output-summary docs/benchmarks/reasoning-sweep-current-2026-08-09.md `
-  --expected-repeats 2 `
+  --output-csv docs/benchmarks/reasoning-sweep-current-2026-08-12.csv `
+  --output-summary docs/benchmarks/reasoning-sweep-current-2026-08-12.md `
+  --expected-repeats 3 `
   --expected-scenarios 12 `
-  --date "August 9, 2026"
+  --date "August 12, 2026"
 ```
 
 Generate the input with `benchmark-compare --group-by-reasoning` and do not pass
